@@ -1,0 +1,79 @@
+.positions {
+  width: 100%;
+}
+
+.positions h2 {
+  font-size: 1.5rem;
+  margin-bottom: 1.5rem;
+  color: #f1f5f9;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 3rem;
+  font-size: 1.125rem;
+  color: #64748b;
+  background: #1e293b;
+  border-radius: 12px;
+  border: 1px dashed #334155;
+}
+
+.positions-table {
+  background: #1e293b;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #334155;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+thead {
+  background: #0f172a;
+}
+
+th {
+  padding: 1rem;
+  text-align: left;
+  font-size: 0.875rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+td {
+  padding: 1rem;
+  border-top: 1px solid #334155;
+  color: #e2e8f0;
+}
+
+td.symbol {
+  font-weight: 700;
+  color: #3b82f6;
+}
+
+.side-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.side-badge.long {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+}
+
+.side-badge.short {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+tbody tr:hover {
+  background: rgba(59, 130, 246, 0.05);
+}

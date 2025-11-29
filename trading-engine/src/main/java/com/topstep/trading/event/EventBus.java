@@ -1,0 +1,176 @@
+package com.topstep.trading.event;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * Central event bus for the trading system.
+ * Supports publish/subscribe pattern with async event processing.
+ */
+public class EventBus {
+    private static final Logger logger = LoggerFactory.getLogger(EventBus.class);
+
+    private final Map<EventType, List<EventHandler<? extends Event>>> handlers;
+    private final ExecutorService executorService;
+    private final BlockingQueue<Event> eventQueue;
+    private final Thread processingThread;
+    private volatile boolean running;
+    private final AtomicLong eventsProcessed;
+
+    public EventBus(int workerThreads) {
+        this.handlers = new ConcurrentHashMap<>();
+        this.executorService = Executors.newFixedThreadPool(workerThreads,
+                new ThreadFactory() {
+                    private final AtomicLong counter = new AtomicLong(0);
+                    @Override
+                    public Thread newThread(Runnable r) {
+                        Thread t = new Thread(r, "EventBus-Worker-" + counter.incrementAndGet());
+                        t.setDaemon(true);
+                        return t;
+                    }
+                });
+        this.eventQueue = new LinkedBlockingQueue<>();
+        this.eventsProcessed = new AtomicLong(0);
+        this.running = false;
+
+        // Main event processing thread
+        this.processingThread = new Thread(this::processEvents, "EventBus-Processor");
+        this.processingThread.setDaemon(true);
+    }
+
+    /**
+     * Subscribe to a specific event type.
+     */
+    public <T extends Event> void subscribe(EventType type, EventHandler<T> handler) {
+        handlers.computeIfAbsent(type, k -> new CopyOnWriteArrayList<>()).add(handler);
+        logger.debug("Subscribed handler for event type: {}", type);
+    }
+
+    /**
+     * Publish an event to the bus.
+     */
+    public void publish(Event event) {
+        if (!running) {
+            logger.warn("EventBus not running, ignoring event: {}", event);
+            return;
+        }
+
+        try {
+            eventQueue.offer(event, 100, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.error("Interrupted while publishing event", e);
+        }
+    }
+
+    /**
+     * Start the event bus.
+     */
+    public void start() {
+        if (running) {
+            logger.warn("EventBus already running");
+            return;
+        }
+
+        running = true;
+        processingThread.start();
+        logger.info("EventBus started");
+    }
+
+    /**
+     * Stop the event bus.
+     */
+    public void stop() {
+        if (!running) {
+            return;
+        }
+
+        running = false;
+        processingThread.interrupt();
+        executorService.shutdown();
+
+        try {
+            if (!executorService.awaitTermination(5, TimeUnit.SECONDS)) {
+                executorService.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executorService.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+
+        logger.info("EventBus stopped. Total events processed: {}", eventsProcessed.get());
+    }
+
+    /**
+     * Main event processing loop.
+     */
+    private void processEvents() {
+        logger.info("EventBus processor thread started");
+
+        while (running) {
+            try {
+                Event event = eventQueue.poll(100, TimeUnit.MILLISECONDS);
+                if (event != null) {
+                    dispatchEvent(event);
+                    eventsProcessed.incrementAndGet();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                logger.error("Error processing event", e);
+            }
+        }
+
+        logger.info("EventBus processor thread stopped");
+    }
+
+    /**
+     * Dispatch event to all registered handlers.
+     */
+    @SuppressWarnings("unchecked")
+    private void dispatchEvent(Event event) {
+        List<EventHandler<? extends Event>> eventHandlers = handlers.get(event.getType());
+
+        if (eventHandlers == null || eventHandlers.isEmpty()) {
+            logger.trace("No handlers registered for event type: {}", event.getType());
+            return;
+        }
+
+        for (EventHandler handler : eventHandlers) {
+            executorService.submit(() -> {
+                try {
+                    handler.handle(event);
+                } catch (Exception e) {
+                    logger.error("Error in event handler for event: {}", event, e);
+                }
+            });
+        }
+    }
+
+    /**
+     * Get the number of events processed.
+     */
+    public long getEventsProcessed() {
+        return eventsProcessed.get();
+    }
+
+    /**
+     * Get the current queue size.
+     */
+    public int getQueueSize() {
+        return eventQueue.size();
+    }
+
+    /**
+     * Check if the bus is running.
+     */
+    public boolean isRunning() {
+        return running;
+    }
+}

@@ -1,0 +1,81 @@
+.risk {
+  width: 100%;
+}
+
+.risk h2 {
+  font-size: 1.5rem;
+  margin-bottom: 1.5rem;
+  color: #f1f5f9;
+}
+
+.risk-grid {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.risk-card {
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 2rem;
+}
+
+.risk-label {
+  font-size: 1rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 1rem;
+  font-weight: 600;
+}
+
+.risk-bar-container {
+  margin-bottom: 0.75rem;
+}
+
+.risk-bar {
+  width: 100%;
+  height: 24px;
+  background: #0f172a;
+  border-radius: 12px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+  border: 1px solid #334155;
+}
+
+.risk-bar-fill {
+  height: 100%;
+  transition: width 0.3s ease, background 0.3s ease;
+  border-radius: 12px;
+}
+
+.risk-values {
+  display: flex;
+  justify-content: space-between;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #f1f5f9;
+}
+
+.risk-values .limit {
+  color: #64748b;
+}
+
+.risk-remaining {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  color: #10b981;
+  font-weight: 600;
+}
+
+.risk-value-large {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: #3b82f6;
+  margin-bottom: 0.5rem;
+}
+
+.risk-description {
+  font-size: 0.875rem;
+  color: #94a3b8;
+}

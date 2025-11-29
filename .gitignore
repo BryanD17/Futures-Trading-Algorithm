@@ -1,0 +1,79 @@
+# Operating System
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.classpath
+.project
+.settings/
+
+# Java / Gradle
+.gradle/
+build/
+out/
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.log
+hs_err_pid*
+
+# Node / npm
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dist/
+dist-ssr/
+*.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Logs
+logs/
+*.log
+
+# Environment variables and secrets
+.env
+.env.local
+.env.production
+.env.test
+*.key
+*.pem
+credentials.json
+secrets.json
+
+# Topstep specific
+topstep-config.json
+api-keys.json
+
+# Temp files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Backtest data
+backtest-data/
+historical-data/
+
+# User specific
+config/local/
+.user-config
