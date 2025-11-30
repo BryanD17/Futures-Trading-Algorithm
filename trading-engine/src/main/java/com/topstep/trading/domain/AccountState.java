@@ -76,8 +76,17 @@ public class AccountState {
      * Get today's realized PnL.
      */
     public double getTodayPnL() {
-        LocalDate today = LocalDate.now();
-        return dailyPnL.getOrDefault(today, 0.0);
+        return dailyPnL.getOrDefault(currentTradingDay, 0.0);
+    }
+
+    /**
+     * Get PnL for a specific trading day.
+     *
+     * @param tradingDay Trading day to query
+     * @return Realized PnL for that day
+     */
+    public double getPnLForDay(LocalDate tradingDay) {
+        return dailyPnL.getOrDefault(tradingDay, 0.0);
     }
 
     /**
@@ -100,14 +109,23 @@ public class AccountState {
      * Record realized PnL from closing a position.
      */
     public void recordRealizedPnL(double pnl) {
+        recordRealizedPnL(pnl, currentTradingDay);
+    }
+
+    /**
+     * Record realized PnL from closing a position with explicit trading day.
+     *
+     * @param pnl Realized profit/loss
+     * @param tradingDay Trading day for this PnL
+     */
+    public void recordRealizedPnL(double pnl, LocalDate tradingDay) {
         this.realizedPnL += pnl;
         this.currentBalance += pnl;
 
-        LocalDate today = LocalDate.now();
-        checkAndResetTradingDay(today);
+        checkAndResetTradingDay(tradingDay);
 
         this.realizedPnlToday += pnl;
-        dailyPnL.merge(today, pnl, Double::sum);
+        dailyPnL.merge(tradingDay, pnl, Double::sum);
 
         this.lastUpdated = Instant.now();
     }
@@ -116,8 +134,18 @@ public class AccountState {
      * Update unrealized PnL based on current market prices.
      */
     public void updateUnrealizedPnL(Map<String, Double> currentPrices, Map<String, Double> tickValues) {
-        LocalDate today = LocalDate.now();
-        checkAndResetTradingDay(today);
+        updateUnrealizedPnL(currentPrices, tickValues, currentTradingDay);
+    }
+
+    /**
+     * Update unrealized PnL based on current market prices with explicit trading day.
+     *
+     * @param currentPrices Current market prices by symbol
+     * @param tickValues Tick values by symbol
+     * @param tradingDay Current trading day
+     */
+    public void updateUnrealizedPnL(Map<String, Double> currentPrices, Map<String, Double> tickValues, LocalDate tradingDay) {
+        checkAndResetTradingDay(tradingDay);
 
         double totalUnrealized = 0.0;
 
@@ -139,8 +167,16 @@ public class AccountState {
      * Reset daily counters (call at start of new trading day).
      */
     public void resetDailyCounters() {
-        LocalDate today = LocalDate.now();
-        checkAndResetTradingDay(today);
+        resetDailyCounters(currentTradingDay);
+    }
+
+    /**
+     * Reset daily counters for a specific trading day.
+     *
+     * @param tradingDay Trading day to reset for
+     */
+    public void resetDailyCounters(LocalDate tradingDay) {
+        checkAndResetTradingDay(tradingDay);
     }
 
     /**
@@ -155,18 +191,47 @@ public class AccountState {
 
     /**
      * Check if we've moved to a new trading day and reset counters if needed.
+     *
+     * @param tradingDay The trading day to check against
      */
-    private void checkAndResetTradingDay(LocalDate today) {
-        if (!today.equals(currentTradingDay)) {
+    private void checkAndResetTradingDay(LocalDate tradingDay) {
+        if (currentTradingDay == null) {
+            // First initialization
+            currentTradingDay = tradingDay;
+            realizedPnlToday = 0.0;
+            unrealizedPnlToday = 0.0;
+            dailyPnL.put(tradingDay, 0.0);
+            return;
+        }
+
+        if (!tradingDay.equals(currentTradingDay)) {
             // New trading day - update highest end of day balance from previous day
             endOfDay();
 
             // Reset today's counters
             realizedPnlToday = 0.0;
             unrealizedPnlToday = 0.0;
-            currentTradingDay = today;
-            dailyPnL.put(today, 0.0);
+            currentTradingDay = tradingDay;
+            dailyPnL.put(tradingDay, 0.0);
         }
+    }
+
+    /**
+     * Force a new trading day (for backtest session boundaries).
+     *
+     * @param newTradingDay New trading day to start
+     */
+    public void startNewTradingDay(LocalDate newTradingDay) {
+        if (currentTradingDay != null && !newTradingDay.equals(currentTradingDay)) {
+            // Finalize previous day
+            endOfDay();
+        }
+
+        // Start new day
+        currentTradingDay = newTradingDay;
+        realizedPnlToday = 0.0;
+        unrealizedPnlToday = 0.0;
+        dailyPnL.put(newTradingDay, 0.0);
     }
 
     @Override
