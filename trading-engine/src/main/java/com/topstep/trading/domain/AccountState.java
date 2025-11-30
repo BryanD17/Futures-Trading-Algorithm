@@ -16,6 +16,12 @@ public class AccountState {
     private double realizedPnL;
     private double unrealizedPnL;
 
+    // Topstep-specific tracking
+    private double realizedPnlToday;
+    private double unrealizedPnlToday;
+    private double highestEndOfDayBalance;
+    private LocalDate currentTradingDay;
+
     private final Map<String, Position> positions;
     private final Map<LocalDate, Double> dailyPnL;
 
@@ -26,6 +32,10 @@ public class AccountState {
         this.currentBalance = startingBalance;
         this.realizedPnL = 0.0;
         this.unrealizedPnL = 0.0;
+        this.realizedPnlToday = 0.0;
+        this.unrealizedPnlToday = 0.0;
+        this.highestEndOfDayBalance = startingBalance;
+        this.currentTradingDay = LocalDate.now();
         this.positions = new ConcurrentHashMap<>();
         this.dailyPnL = new ConcurrentHashMap<>();
         this.lastUpdated = Instant.now();
@@ -39,6 +49,13 @@ public class AccountState {
     public double getEquity() { return currentBalance + unrealizedPnL; }
     public Map<String, Position> getPositions() { return new HashMap<>(positions); }
     public Instant getLastUpdated() { return lastUpdated; }
+
+    // Topstep-specific getters
+    public double getRealizedPnlToday() { return realizedPnlToday; }
+    public double getUnrealizedPnlToday() { return unrealizedPnlToday; }
+    public double getHighestEndOfDayBalance() { return highestEndOfDayBalance; }
+    public double getNetDailyPnl() { return realizedPnlToday + unrealizedPnlToday; }
+    public LocalDate getCurrentTradingDay() { return currentTradingDay; }
 
     public Position getPosition(String symbol) {
         return positions.get(symbol);
@@ -87,6 +104,9 @@ public class AccountState {
         this.currentBalance += pnl;
 
         LocalDate today = LocalDate.now();
+        checkAndResetTradingDay(today);
+
+        this.realizedPnlToday += pnl;
         dailyPnL.merge(today, pnl, Double::sum);
 
         this.lastUpdated = Instant.now();
@@ -96,6 +116,9 @@ public class AccountState {
      * Update unrealized PnL based on current market prices.
      */
     public void updateUnrealizedPnL(Map<String, Double> currentPrices, Map<String, Double> tickValues) {
+        LocalDate today = LocalDate.now();
+        checkAndResetTradingDay(today);
+
         double totalUnrealized = 0.0;
 
         for (Position position : positions.values()) {
@@ -108,6 +131,7 @@ public class AccountState {
         }
 
         this.unrealizedPnL = totalUnrealized;
+        this.unrealizedPnlToday = totalUnrealized;
         this.lastUpdated = Instant.now();
     }
 
@@ -116,7 +140,33 @@ public class AccountState {
      */
     public void resetDailyCounters() {
         LocalDate today = LocalDate.now();
-        dailyPnL.put(today, 0.0);
+        checkAndResetTradingDay(today);
+    }
+
+    /**
+     * End of day balance update (for Topstep Max Loss Limit calculation).
+     */
+    public void endOfDay() {
+        double endOfDayBalance = currentBalance;
+        if (endOfDayBalance > highestEndOfDayBalance) {
+            highestEndOfDayBalance = endOfDayBalance;
+        }
+    }
+
+    /**
+     * Check if we've moved to a new trading day and reset counters if needed.
+     */
+    private void checkAndResetTradingDay(LocalDate today) {
+        if (!today.equals(currentTradingDay)) {
+            // New trading day - update highest end of day balance from previous day
+            endOfDay();
+
+            // Reset today's counters
+            realizedPnlToday = 0.0;
+            unrealizedPnlToday = 0.0;
+            currentTradingDay = today;
+            dailyPnL.put(today, 0.0);
+        }
     }
 
     @Override
