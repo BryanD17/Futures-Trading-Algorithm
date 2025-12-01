@@ -67,7 +67,7 @@ public class SimEngineRunner {
         this.executionEngine = new ExecutionEngine(accountState);
         this.riskEngine = new PropFirmRiskEngine();
         this.eventBus = new EventBus();
-        this.strategy = new IctHighConfluenceStrategy(eventBus);
+        this.strategy = new IctHighConfluenceStrategy(DEFAULT_SYMBOL, "NQ", eventBus);
         this.strategyContext = new StrategyContext(accountState);
 
         // Subscribe to strategy signals

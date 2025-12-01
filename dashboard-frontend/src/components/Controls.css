@@ -1,0 +1,81 @@
+.controls {
+  background: #1f2937;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.controls h2 {
+  margin-top: 0;
+  color: #f3f4f6;
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.status-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.status-text {
+  font-size: 18px;
+  font-weight: 600;
+  color: #f3f4f6;
+}
+
+.control-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.control-buttons button {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 6px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.control-buttons button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-pause {
+  background: #f59e0b;
+  color: #000;
+}
+
+.btn-pause:hover:not(:disabled) {
+  background: #d97706;
+}
+
+.btn-resume {
+  background: #10b981;
+  color: #fff;
+}
+
+.btn-resume:hover:not(:disabled) {
+  background: #059669;
+}
+
+.control-message {
+  margin-top: 15px;
+  padding: 10px;
+  background: #374151;
+  border-radius: 4px;
+  color: #9ca3af;
+}
