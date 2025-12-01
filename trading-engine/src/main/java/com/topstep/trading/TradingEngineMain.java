@@ -34,8 +34,8 @@ public class TradingEngineMain {
                 break;
 
             case "SIM":
-                throw new UnsupportedOperationException(
-                    "SIM mode not yet implemented. Planned for Week 3.");
+                runSimMode();
+                break;
 
             case "LIVE":
                 throw new UnsupportedOperationException(
@@ -66,5 +66,22 @@ public class TradingEngineMain {
 
         System.out.println();
         System.out.println("Backtest completed successfully.");
+    }
+
+    /**
+     * Run SIM mode using SimEngineRunner.
+     */
+    private static void runSimMode() {
+        System.out.println("Starting SIM Mode...");
+        System.out.println("-".repeat(40));
+        System.out.println();
+
+        try {
+            SimEngineRunner.run();
+        } catch (Exception e) {
+            System.err.println("SIM mode failed with error: " + e.getMessage());
+            e.printStackTrace();
+            System.exit(1);
+        }
     }
 }

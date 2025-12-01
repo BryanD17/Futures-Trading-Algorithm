@@ -1,0 +1,12 @@
+// Root project configuration for Topstep Futures Trading Bot
+
+allprojects {
+    group = 'com.topstep'
+    version = '1.0.0-SNAPSHOT'
+}
+
+subprojects {
+    repositories {
+        mavenCentral()
+    }
+}
