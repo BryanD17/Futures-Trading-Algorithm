@@ -4,6 +4,7 @@ import Overview from './components/Overview'
 import Positions from './components/Positions'
 import Trades from './components/Trades'
 import Risk from './components/Risk'
+import Controls from './components/Controls'
 import { StatusService } from './services/api'
 
 function App() {
@@ -66,6 +67,7 @@ function App() {
       </nav>
 
       <main className="content">
+        <Controls />
         {activeTab === 'overview' && <Overview />}
         {activeTab === 'positions' && <Positions />}
         {activeTab === 'trades' && <Trades />}

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { MetricsService } from '../services/api'
+import { tradingWebSocket, AccountUpdate } from '../services/websocket'
 import type { DailyMetrics } from '../types'
 import './Overview.css'
 
@@ -8,6 +9,7 @@ export default function Overview() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    // Initial fetch
     const fetchMetrics = async () => {
       try {
         const data = await MetricsService.getDailyMetrics()
@@ -18,10 +20,26 @@ export default function Overview() {
         setLoading(false)
       }
     }
-
     fetchMetrics()
-    const interval = setInterval(fetchMetrics, 5000)
-    return () => clearInterval(interval)
+
+    // Subscribe to WebSocket updates
+    const unsubscribe = tradingWebSocket.subscribe((update: AccountUpdate) => {
+      setMetrics(prev => prev ? {
+        ...prev,
+        currentBalance: update.balance,
+        realizedPnL: update.realizedPnL,
+        unrealizedPnL: update.unrealizedPnL,
+        totalPnL: update.realizedPnL + update.unrealizedPnL,
+      } : prev)
+    })
+
+    // Fallback polling (every 10 seconds)
+    const interval = setInterval(fetchMetrics, 10000)
+
+    return () => {
+      unsubscribe()
+      clearInterval(interval)
+    }
   }, [])
 
   if (loading) {
