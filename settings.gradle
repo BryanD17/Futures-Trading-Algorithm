@@ -1,0 +1,11 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+rootProject.name = 'topstep-futures-bot'
+
+include 'trading-engine'
+include 'api-backend'
