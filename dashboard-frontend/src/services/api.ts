@@ -52,6 +52,11 @@ export const MetricsService = {
 }
 
 export const ControlService = {
+  async start(mode: string = 'SIM'): Promise<{ status: string; message: string; warning?: string }> {
+    const response = await api.post(`/control/start?mode=${mode}`)
+    return response.data
+  },
+
   async pause(): Promise<{ status: string; message: string }> {
     const response = await api.post('/control/pause')
     return response.data
@@ -59,6 +64,21 @@ export const ControlService = {
 
   async resume(): Promise<{ status: string; message: string }> {
     const response = await api.post('/control/resume')
+    return response.data
+  },
+
+  async stop(): Promise<{ status: string; message: string }> {
+    const response = await api.post('/control/stop')
+    return response.data
+  },
+
+  async killSwitch(reason: string): Promise<{ status: string; message: string }> {
+    const response = await api.post(`/control/killswitch?reason=${encodeURIComponent(reason)}`)
+    return response.data
+  },
+
+  async flatten(reason: string): Promise<{ status: string; message: string }> {
+    const response = await api.post(`/control/flatten?reason=${encodeURIComponent(reason)}`)
     return response.data
   }
 }
