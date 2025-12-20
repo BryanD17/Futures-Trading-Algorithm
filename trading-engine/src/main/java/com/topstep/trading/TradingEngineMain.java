@@ -38,8 +38,8 @@ public class TradingEngineMain {
                 break;
 
             case "LIVE":
-                throw new UnsupportedOperationException(
-                    "LIVE mode not yet implemented. Planned for Week 4.");
+                runLiveMode();
+                break;
 
             default:
                 System.err.println("Unknown mode: " + mode);
@@ -80,6 +80,59 @@ public class TradingEngineMain {
             SimEngineRunner.run();
         } catch (Exception e) {
             System.err.println("SIM mode failed with error: " + e.getMessage());
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    /**
+     * Run LIVE mode using LiveEngineRunner.
+     * WARNING: This connects to real markets and uses real money!
+     */
+    private static void runLiveMode() {
+        System.out.println();
+        System.out.println("!".repeat(60));
+        System.out.println("! WARNING: STARTING LIVE TRADING MODE !");
+        System.out.println("! REAL MONEY IS AT RISK !");
+        System.out.println("!".repeat(60));
+        System.out.println();
+        System.out.println("Pre-flight checks:");
+
+        // Check environment variables
+        String[] requiredEnvVars = {
+            "TOPSTEP_API_URL",
+            "TOPSTEP_USERNAME",
+            "TOPSTEP_PASSWORD",
+            "TOPSTEP_ACCOUNT_ID"
+        };
+
+        boolean allSet = true;
+        for (String envVar : requiredEnvVars) {
+            String value = System.getenv(envVar);
+            if (value == null || value.isEmpty()) {
+                System.out.println("  ❌ " + envVar + " - NOT SET");
+                allSet = false;
+            } else {
+                System.out.println("  ✓ " + envVar + " - Set");
+            }
+        }
+
+        if (!allSet) {
+            System.err.println();
+            System.err.println("❌ Missing required environment variables.");
+            System.err.println("Please set all Topstep credentials before starting LIVE mode.");
+            System.exit(1);
+        }
+
+        System.out.println();
+        System.out.println("Starting LIVE Mode...");
+        System.out.println("-".repeat(40));
+        System.out.println();
+
+        try {
+            LiveEngineRunner.run();
+        } catch (Exception e) {
+            System.err.println("LIVE mode failed with error: " + e.getMessage());
             e.printStackTrace();
             System.exit(1);
         }

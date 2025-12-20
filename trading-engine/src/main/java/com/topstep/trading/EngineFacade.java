@@ -43,6 +43,7 @@ public class EngineFacade {
     private TradingStrategy strategy;
     private PropFirmRiskEngine riskEngine;
     private SimEngineRunner simRunner;
+    private LiveEngineRunner liveRunner;
 
     /**
      * Private constructor for singleton.
@@ -87,6 +88,13 @@ public class EngineFacade {
         this.simRunner = simRunner;
     }
 
+    /**
+     * Register the LIVE runner for control operations.
+     */
+    public void setLiveRunner(LiveEngineRunner liveRunner) {
+        this.liveRunner = liveRunner;
+    }
+
     // ==================== Control Operations ====================
 
     /**
@@ -95,6 +103,9 @@ public class EngineFacade {
     public synchronized void startSim() {
         if (currentMode == Mode.SIM && simRunner != null && simRunner.isRunning()) {
             throw new IllegalStateException("SIM mode already running");
+        }
+        if (currentMode == Mode.LIVE && liveRunner != null && liveRunner.isRunning()) {
+            throw new IllegalStateException("Cannot start SIM while LIVE is running");
         }
 
         // Create and start new SIM runner in background thread
@@ -122,6 +133,42 @@ public class EngineFacade {
     }
 
     /**
+     * Start LIVE mode.
+     * WARNING: This connects to real markets and uses real money!
+     */
+    public synchronized void startLive() {
+        if (currentMode == Mode.LIVE && liveRunner != null && liveRunner.isRunning()) {
+            throw new IllegalStateException("LIVE mode already running");
+        }
+        if (currentMode == Mode.SIM && simRunner != null && simRunner.isRunning()) {
+            throw new IllegalStateException("Cannot start LIVE while SIM is running. Stop SIM first.");
+        }
+
+        // Create and start new LIVE runner in background thread
+        liveRunner = new LiveEngineRunner();
+        initialize(Mode.LIVE,
+                liveRunner.getAccountState(),
+                liveRunner.getExecutionEngine(),
+                liveRunner.getRiskLimits(),
+                null, // Strategy reference not needed by API
+                null  // RiskEngine reference not needed by API
+        );
+
+        Thread liveThread = new Thread(() -> {
+            liveRunner.start();
+        }, "LIVE-Engine-Thread");
+        liveThread.setDaemon(false);
+        liveThread.start();
+
+        // Give it a moment to start
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
      * Pause SIM mode.
      */
     public synchronized void pauseSim() {
@@ -133,6 +180,33 @@ public class EngineFacade {
         }
 
         simRunner.pause();
+    }
+
+    /**
+     * Pause LIVE mode.
+     */
+    public synchronized void pauseLive() {
+        if (currentMode != Mode.LIVE) {
+            throw new IllegalStateException("Not in LIVE mode");
+        }
+        if (liveRunner == null) {
+            throw new IllegalStateException("LIVE runner not initialized");
+        }
+
+        liveRunner.pause();
+    }
+
+    /**
+     * Pause current mode (SIM or LIVE).
+     */
+    public synchronized void pause() {
+        if (currentMode == Mode.SIM) {
+            pauseSim();
+        } else if (currentMode == Mode.LIVE) {
+            pauseLive();
+        } else {
+            throw new IllegalStateException("No engine running to pause");
+        }
     }
 
     /**
@@ -150,15 +224,81 @@ public class EngineFacade {
     }
 
     /**
+     * Resume LIVE mode.
+     */
+    public synchronized void resumeLive() {
+        if (currentMode != Mode.LIVE) {
+            throw new IllegalStateException("Not in LIVE mode");
+        }
+        if (liveRunner == null) {
+            throw new IllegalStateException("LIVE runner not initialized");
+        }
+
+        liveRunner.resume();
+    }
+
+    /**
+     * Resume current mode (SIM or LIVE).
+     */
+    public synchronized void resume() {
+        if (currentMode == Mode.SIM) {
+            resumeSim();
+        } else if (currentMode == Mode.LIVE) {
+            resumeLive();
+        } else {
+            throw new IllegalStateException("No engine running to resume");
+        }
+    }
+
+    /**
      * Stop the current engine.
      */
     public synchronized void stop() {
         if (currentMode == Mode.SIM && simRunner != null) {
             simRunner.stop();
         }
+        if (currentMode == Mode.LIVE && liveRunner != null) {
+            liveRunner.stop();
+        }
 
         currentMode = Mode.STOPPED;
         simRunner = null;
+        liveRunner = null;
+    }
+
+    /**
+     * Activate kill switch (LIVE mode only).
+     */
+    public synchronized void activateKillSwitch(String reason) {
+        if (currentMode != Mode.LIVE) {
+            throw new IllegalStateException("Kill switch only available in LIVE mode");
+        }
+        if (liveRunner == null) {
+            throw new IllegalStateException("LIVE runner not initialized");
+        }
+
+        liveRunner.activateKillSwitch(reason);
+    }
+
+    /**
+     * Flatten all positions (LIVE mode).
+     */
+    public synchronized void flattenAllPositions(String reason) {
+        if (currentMode != Mode.LIVE) {
+            throw new IllegalStateException("Flatten only available in LIVE mode");
+        }
+        if (liveRunner == null) {
+            throw new IllegalStateException("LIVE runner not initialized");
+        }
+
+        liveRunner.flattenAllPositions(reason);
+    }
+
+    /**
+     * Check if kill switch is active (LIVE mode).
+     */
+    public boolean isKillSwitchActive() {
+        return currentMode == Mode.LIVE && liveRunner != null && liveRunner.isKillSwitchActive();
     }
 
     // ==================== Query Operations ====================
@@ -215,17 +355,29 @@ public class EngineFacade {
      * Check if engine is running.
      */
     public boolean isRunning() {
-        return currentMode != Mode.STOPPED &&
-               (currentMode != Mode.SIM || (simRunner != null && simRunner.isRunning()));
+        if (currentMode == Mode.STOPPED) {
+            return false;
+        }
+        if (currentMode == Mode.SIM) {
+            return simRunner != null && simRunner.isRunning();
+        }
+        if (currentMode == Mode.LIVE) {
+            return liveRunner != null && liveRunner.isRunning();
+        }
+        return false;
     }
 
     /**
      * Check if engine is paused.
      */
     public boolean isPaused() {
-        return currentMode == Mode.SIM &&
-               simRunner != null &&
-               simRunner.isPaused();
+        if (currentMode == Mode.SIM && simRunner != null) {
+            return simRunner.isPaused();
+        }
+        if (currentMode == Mode.LIVE && liveRunner != null) {
+            return liveRunner.isPaused();
+        }
+        return false;
     }
 
     /**
@@ -310,6 +462,7 @@ public class EngineFacade {
         strategy = null;
         riskEngine = null;
         simRunner = null;
+        liveRunner = null;
     }
 
     /**

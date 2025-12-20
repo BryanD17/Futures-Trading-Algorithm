@@ -1,20 +1,27 @@
 .controls {
-  background: #1f2937;
+  background: #1a1a2e;
   border-radius: 8px;
   padding: 20px;
   margin-bottom: 20px;
 }
 
 .controls h2 {
-  margin-top: 0;
-  color: #f3f4f6;
+  margin: 0 0 16px 0;
+  color: #fff;
+  font-size: 18px;
+}
+
+.controls h3 {
+  margin: 16px 0 12px 0;
+  color: #ef4444;
+  font-size: 14px;
 }
 
 .status-indicator {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .status-dot {
@@ -30,33 +37,78 @@
 }
 
 .status-text {
-  font-size: 18px;
-  font-weight: 600;
-  color: #f3f4f6;
+  color: #e5e7eb;
+  font-weight: 500;
 }
 
+.live-badge {
+  background: #ef4444;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: bold;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.start-buttons,
 .control-buttons {
   display: flex;
   gap: 10px;
+  margin-bottom: 12px;
 }
 
-.control-buttons button {
-  padding: 12px 24px;
+.emergency-controls {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #374151;
+}
+
+.emergency-controls .control-buttons {
+  gap: 10px;
+}
+
+button {
+  padding: 10px 20px;
   border: none;
   border-radius: 6px;
-  font-size: 16px;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
+  font-size: 14px;
 }
 
-.control-buttons button:disabled {
+button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
+.btn-start-sim {
+  background: #10b981;
+  color: white;
+}
+
+.btn-start-sim:hover:not(:disabled) {
+  background: #059669;
+}
+
+.btn-start-live {
+  background: #ef4444;
+  color: white;
+}
+
+.btn-start-live:hover:not(:disabled) {
+  background: #dc2626;
+}
+
 .btn-pause {
   background: #f59e0b;
-  color: #000;
+  color: white;
 }
 
 .btn-pause:hover:not(:disabled) {
@@ -65,17 +117,121 @@
 
 .btn-resume {
   background: #10b981;
-  color: #fff;
+  color: white;
 }
 
 .btn-resume:hover:not(:disabled) {
   background: #059669;
 }
 
+.btn-stop {
+  background: #6b7280;
+  color: white;
+}
+
+.btn-stop:hover:not(:disabled) {
+  background: #4b5563;
+}
+
+.btn-flatten {
+  background: #f97316;
+  color: white;
+}
+
+.btn-flatten:hover:not(:disabled) {
+  background: #ea580c;
+}
+
+.btn-killswitch {
+  background: #dc2626;
+  color: white;
+  font-weight: bold;
+}
+
+.btn-killswitch:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
 .control-message {
-  margin-top: 15px;
+  margin-top: 12px;
   padding: 10px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.control-message.success {
+  background: #065f46;
+  color: #a7f3d0;
+}
+
+.control-message.error {
+  background: #7f1d1d;
+  color: #fecaca;
+}
+
+/* Modal styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: #1a1a2e;
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 400px;
+  width: 90%;
+  border: 1px solid #ef4444;
+}
+
+.modal-content h3 {
+  margin: 0 0 16px 0;
+  color: #f59e0b;
+}
+
+.modal-content p {
+  color: #e5e7eb;
+  margin: 8px 0;
+}
+
+.warning-text {
+  background: #7f1d1d;
+  padding: 12px;
+  border-radius: 6px;
+  color: #fecaca;
+  font-size: 14px;
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+  justify-content: flex-end;
+}
+
+.btn-cancel {
+  background: #4b5563;
+  color: white;
+}
+
+.btn-cancel:hover {
   background: #374151;
-  border-radius: 4px;
-  color: #9ca3af;
+}
+
+.btn-confirm-live {
+  background: #ef4444;
+  color: white;
+  font-weight: bold;
+}
+
+.btn-confirm-live:hover {
+  background: #dc2626;
 }
