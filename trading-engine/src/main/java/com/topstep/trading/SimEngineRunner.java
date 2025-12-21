@@ -11,8 +11,8 @@ import com.topstep.trading.event.StrategySignalEvent;
 import com.topstep.trading.execution.ExecutionEngine;
 import com.topstep.trading.risk.PropFirmRiskEngine;
 import com.topstep.trading.risk.RiskDecision;
+import com.topstep.trading.strategy.DefaultStrategyContext;
 import com.topstep.trading.strategy.IctHighConfluenceStrategy;
-import com.topstep.trading.strategy.StrategyContext;
 import com.topstep.trading.strategy.TradingStrategy;
 
 import java.util.concurrent.CountDownLatch;
@@ -41,7 +41,7 @@ public class SimEngineRunner {
     private final ExecutionEngine executionEngine;
     private final TradingStrategy strategy;
     private final EventBus eventBus;
-    private final StrategyContext strategyContext;
+    private final DefaultStrategyContext strategyContext;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
@@ -68,7 +68,7 @@ public class SimEngineRunner {
         this.riskEngine = new PropFirmRiskEngine();
         this.eventBus = new EventBus();
         this.strategy = new IctHighConfluenceStrategy(DEFAULT_SYMBOL, "NQ", eventBus);
-        this.strategyContext = new StrategyContext(accountState);
+        this.strategyContext = new DefaultStrategyContext(accountState);
 
         // Subscribe to strategy signals
         eventBus.subscribe(StrategySignalEvent.class, this::handleStrategySignal);

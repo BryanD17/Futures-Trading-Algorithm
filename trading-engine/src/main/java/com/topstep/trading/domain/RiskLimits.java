@@ -36,6 +36,7 @@ public final class RiskLimits {
 
     // Getters
     public double getMaxDailyLoss() { return maxDailyLoss; }
+    public double getDailyLossLimit() { return maxDailyLoss; } // Alias for backwards compatibility
     public double getMaxLossLimit() { return maxLossLimit; }
     public double getProfitTarget() { return profitTarget; }
     public double getTrailingDrawdown() { return trailingDrawdown; }

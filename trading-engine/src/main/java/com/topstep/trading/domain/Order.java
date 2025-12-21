@@ -9,7 +9,7 @@ import java.util.UUID;
  * Mutable to track status changes and fills.
  */
 public class Order {
-    private final String orderId;
+    private String orderId;  // Mutable to allow setting from server response
     private final String symbol;
     private final OrderSide side;
     private final OrderType type;
@@ -38,6 +38,23 @@ public class Order {
         this.updatedAt = this.createdAt;
     }
 
+    /**
+     * Convenience constructor for simple orders.
+     */
+    public Order(String symbol, OrderSide side, OrderType type, int quantity, double price) {
+        this.orderId = UUID.randomUUID().toString();
+        this.symbol = Objects.requireNonNull(symbol, "symbol cannot be null");
+        this.side = Objects.requireNonNull(side, "side cannot be null");
+        this.type = Objects.requireNonNull(type, "type cannot be null");
+        this.quantity = quantity;
+        this.limitPrice = price;
+        this.stopPrice = null;
+        this.createdAt = Instant.now();
+        this.status = OrderStatus.PENDING;
+        this.filledQuantity = 0;
+        this.updatedAt = this.createdAt;
+    }
+
     // Getters
     public String getOrderId() { return orderId; }
     public String getSymbol() { return symbol; }
@@ -52,6 +69,16 @@ public class Order {
     public Double getAvgFillPrice() { return avgFillPrice; }
     public Instant getUpdatedAt() { return updatedAt; }
     public String getRejectReason() { return rejectReason; }
+
+    /**
+     * Get the order price (limit price for limit orders, 0.0 for market orders).
+     */
+    public double getPrice() { return limitPrice != null ? limitPrice : 0.0; }
+
+    /**
+     * Set the order ID (used when server assigns a different ID).
+     */
+    public void setOrderId(String orderId) { this.orderId = orderId; }
 
     public boolean isFilled() {
         return status == OrderStatus.FILLED;

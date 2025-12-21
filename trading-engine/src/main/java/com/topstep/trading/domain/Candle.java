@@ -29,6 +29,14 @@ public final class Candle {
         this.session = session;
     }
 
+    /**
+     * Convenience constructor that defaults to REGULAR trading session.
+     */
+    public Candle(String symbol, Instant timestamp, double open, double high,
+                  double low, double close, long volume) {
+        this(symbol, timestamp, open, high, low, close, volume, TradingSession.REGULAR);
+    }
+
     public String getSymbol() { return symbol; }
     public Instant getTimestamp() { return timestamp; }
     public double getOpen() { return open; }
