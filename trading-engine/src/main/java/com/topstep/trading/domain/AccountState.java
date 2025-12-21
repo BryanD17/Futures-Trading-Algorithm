@@ -57,6 +57,24 @@ public class AccountState {
     public double getNetDailyPnl() { return realizedPnlToday + unrealizedPnlToday; }
     public LocalDate getCurrentTradingDay() { return currentTradingDay; }
 
+    /**
+     * Set the current balance (used when syncing with live account).
+     */
+    public void setCurrentBalance(double balance) {
+        this.currentBalance = balance;
+        this.lastUpdated = Instant.now();
+    }
+
+    /**
+     * Add a position to the account.
+     */
+    public void addPosition(Position position) {
+        if (position != null) {
+            positions.put(position.getSymbol(), position);
+            this.lastUpdated = Instant.now();
+        }
+    }
+
     public Position getPosition(String symbol) {
         return positions.get(symbol);
     }

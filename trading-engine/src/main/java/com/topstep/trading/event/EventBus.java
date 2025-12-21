@@ -22,6 +22,13 @@ public class EventBus {
     private volatile boolean running;
     private final AtomicLong eventsProcessed;
 
+    /**
+     * Default constructor with 4 worker threads.
+     */
+    public EventBus() {
+        this(4);
+    }
+
     public EventBus(int workerThreads) {
         this.handlers = new ConcurrentHashMap<>();
         this.executorService = Executors.newFixedThreadPool(workerThreads,
@@ -49,6 +56,34 @@ public class EventBus {
     public <T extends Event> void subscribe(EventType type, EventHandler<T> handler) {
         handlers.computeIfAbsent(type, k -> new CopyOnWriteArrayList<>()).add(handler);
         logger.debug("Subscribed handler for event type: {}", type);
+    }
+
+    /**
+     * Subscribe to a specific event class.
+     * Convenience method that maps event classes to their EventTypes.
+     */
+    public <T extends Event> void subscribe(Class<T> eventClass, EventHandler<T> handler) {
+        EventType type = mapClassToEventType(eventClass);
+        subscribe(type, handler);
+    }
+
+    private EventType mapClassToEventType(Class<? extends Event> eventClass) {
+        String className = eventClass.getSimpleName();
+        return switch (className) {
+            case "StrategySignalEvent" -> EventType.STRATEGY_SIGNAL;
+            case "CandleEvent" -> EventType.CANDLE;
+            case "TickEvent" -> EventType.TICK;
+            case "OrderFilledEvent" -> EventType.ORDER_FILLED;
+            case "OrderCanceledEvent" -> EventType.ORDER_CANCELED;
+            case "OrderRejectedEvent" -> EventType.ORDER_REJECTED;
+            case "PositionOpenedEvent" -> EventType.POSITION_OPENED;
+            case "PositionClosedEvent" -> EventType.POSITION_CLOSED;
+            case "RiskBreachEvent" -> EventType.RISK_BREACH;
+            default -> {
+                logger.warn("Unknown event class: {}, defaulting to STRATEGY_SIGNAL", className);
+                yield EventType.STRATEGY_SIGNAL;
+            }
+        };
     }
 
     /**

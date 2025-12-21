@@ -21,6 +21,18 @@ public class Position {
         this.updatedAt = Instant.now();
     }
 
+    /**
+     * Convenience constructor for creating a new position from an order side.
+     * The position starts with zero quantity and will be updated with fills.
+     */
+    public Position(String symbol, OrderSide side) {
+        this.symbol = Objects.requireNonNull(symbol, "symbol cannot be null");
+        this.quantity = 0; // Will be updated with fills
+        this.avgEntryPrice = 0.0;
+        this.openedAt = Instant.now();
+        this.updatedAt = Instant.now();
+    }
+
     public String getSymbol() { return symbol; }
     public int getQuantity() { return quantity; }
     public double getAvgEntryPrice() { return avgEntryPrice; }
@@ -85,6 +97,16 @@ public class Position {
         }
 
         this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Add a fill to this position.
+     * Convenience method that wraps updateWithFill with price, quantity ordering.
+     */
+    public void addFill(Double fillPrice, Integer fillQty) {
+        if (fillPrice != null && fillQty != null) {
+            updateWithFill(fillQty, fillPrice);
+        }
     }
 
     @Override

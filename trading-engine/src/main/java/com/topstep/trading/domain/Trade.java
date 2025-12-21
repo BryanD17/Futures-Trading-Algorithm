@@ -47,6 +47,7 @@ public final class Trade {
     public Instant getEntryTime() { return entryTime; }
     public Instant getExitTime() { return exitTime; }
     public double getRealizedPnL() { return realizedPnL; }
+    public double getPnl() { return realizedPnL; } // Alias for backwards compatibility
     public double getRiskAmount() { return riskAmount; }
     public double getRMultiple() { return rMultiple; }
     public String getNotes() { return notes; }

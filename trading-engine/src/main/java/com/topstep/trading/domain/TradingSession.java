@@ -7,5 +7,6 @@ public enum TradingSession {
     ASIAN,
     LONDON,
     NEW_YORK,
+    REGULAR,
     UNKNOWN
 }
