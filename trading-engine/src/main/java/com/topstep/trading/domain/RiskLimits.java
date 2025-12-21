@@ -42,6 +42,11 @@ public final class RiskLimits {
     public double getTrailingDrawdown() { return trailingDrawdown; }
     public int getMaxContracts() { return maxContracts; }
     public int getMaxTotalContracts() { return maxTotalContracts; }
+    /**
+     * Get the maximum number of concurrent positions allowed.
+     * Derived from maxTotalContracts / maxContracts, minimum of 1.
+     */
+    public int getMaxPositions() { return Math.max(1, maxTotalContracts / maxContracts); }
     public double getRiskPerTrade() { return riskPerTrade; }
     public double getMinRiskRewardRatio() { return minRiskRewardRatio; }
     public double getMaxRiskRewardRatio() { return maxRiskRewardRatio; }
