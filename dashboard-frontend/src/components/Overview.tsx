@@ -50,7 +50,17 @@ export default function Overview() {
     return <div className="error">Failed to load metrics</div>
   }
 
-  const pnlColor = metrics.totalPnL >= 0 ? '#10b981' : '#ef4444'
+  // Safe access with defaults
+  const startingBalance = metrics.startingBalance ?? 50000
+  const currentBalance = metrics.currentBalance ?? 50000
+  const realizedPnL = metrics.realizedPnL ?? 0
+  const unrealizedPnL = metrics.unrealizedPnL ?? 0
+  const totalPnL = metrics.totalPnL ?? 0
+  const tradesCount = metrics.tradesCount ?? 0
+  const winRate = metrics.winRate ?? 0
+  const maxDrawdown = metrics.maxDrawdown ?? 0
+
+  const pnlColor = totalPnL >= 0 ? '#10b981' : '#ef4444'
 
   return (
     <div className="overview">
@@ -59,49 +69,49 @@ export default function Overview() {
       <div className="metrics-grid">
         <div className="metric-card">
           <div className="metric-label">Starting Balance</div>
-          <div className="metric-value">${metrics.startingBalance.toLocaleString()}</div>
+          <div className="metric-value">${startingBalance.toLocaleString()}</div>
         </div>
 
         <div className="metric-card">
           <div className="metric-label">Current Balance</div>
-          <div className="metric-value">${metrics.currentBalance.toLocaleString()}</div>
+          <div className="metric-value">${currentBalance.toLocaleString()}</div>
         </div>
 
         <div className="metric-card">
           <div className="metric-label">Realized P&L</div>
-          <div className="metric-value" style={{ color: metrics.realizedPnL >= 0 ? '#10b981' : '#ef4444' }}>
-            ${metrics.realizedPnL.toLocaleString()}
+          <div className="metric-value" style={{ color: realizedPnL >= 0 ? '#10b981' : '#ef4444' }}>
+            ${realizedPnL.toLocaleString()}
           </div>
         </div>
 
         <div className="metric-card">
           <div className="metric-label">Unrealized P&L</div>
-          <div className="metric-value" style={{ color: metrics.unrealizedPnL >= 0 ? '#10b981' : '#ef4444' }}>
-            ${metrics.unrealizedPnL.toLocaleString()}
+          <div className="metric-value" style={{ color: unrealizedPnL >= 0 ? '#10b981' : '#ef4444' }}>
+            ${unrealizedPnL.toLocaleString()}
           </div>
         </div>
 
         <div className="metric-card highlight">
           <div className="metric-label">Total P&L</div>
           <div className="metric-value large" style={{ color: pnlColor }}>
-            ${metrics.totalPnL.toLocaleString()}
+            ${totalPnL.toLocaleString()}
           </div>
         </div>
 
         <div className="metric-card">
           <div className="metric-label">Trades Today</div>
-          <div className="metric-value">{metrics.tradesCount}</div>
+          <div className="metric-value">{tradesCount}</div>
         </div>
 
         <div className="metric-card">
           <div className="metric-label">Win Rate</div>
-          <div className="metric-value">{(metrics.winRate * 100).toFixed(1)}%</div>
+          <div className="metric-value">{(winRate * 100).toFixed(1)}%</div>
         </div>
 
         <div className="metric-card">
           <div className="metric-label">Max Drawdown</div>
           <div className="metric-value" style={{ color: '#ef4444' }}>
-            ${metrics.maxDrawdown.toLocaleString()}
+            ${maxDrawdown.toLocaleString()}
           </div>
         </div>
       </div>

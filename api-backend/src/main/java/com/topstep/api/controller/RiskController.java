@@ -26,10 +26,13 @@ public class RiskController {
             RiskLimits limits = engine.getRiskLimits();
             AccountState account = engine.getAccountState();
 
-            // Daily loss metrics
+            // Daily loss metrics (both old and new field names for compatibility)
             risk.put("dailyLossLimit", limits.getDailyLossLimit());
+            risk.put("maxDailyLoss", limits.getDailyLossLimit()); // Frontend expects this name
             risk.put("currentDailyPnL", account.getNetDailyPnl());
+            risk.put("currentDailyLoss", Math.abs(Math.min(0, account.getNetDailyPnl()))); // Frontend expects positive loss
             risk.put("remainingDailyLoss", engine.getRemainingDailyLoss());
+            risk.put("remainingRiskBudget", engine.getRemainingDailyLoss()); // Frontend expects this name
 
             // Max loss metrics
             risk.put("maxLossLimit", limits.getMaxLossLimit());
@@ -46,14 +49,20 @@ public class RiskController {
             risk.put("maxPositions", limits.getMaxPositions());
             risk.put("currentPositions", account.getPositions().size());
 
+            // Risk per trade
+            risk.put("riskPerTrade", limits.getRiskPerTrade());
+
             // Account status
             risk.put("accountInGoodStanding", engine.isAccountInGoodStanding());
 
         } catch (IllegalStateException e) {
             // Engine not initialized - return default values
             risk.put("dailyLossLimit", 1000.0);
+            risk.put("maxDailyLoss", 1000.0);
             risk.put("currentDailyPnL", 0.0);
+            risk.put("currentDailyLoss", 0.0);
             risk.put("remainingDailyLoss", 1000.0);
+            risk.put("remainingRiskBudget", 1000.0);
             risk.put("maxLossLimit", 2000.0);
             risk.put("currentDrawdown", 0.0);
             risk.put("remainingDrawdown", 2000.0);
@@ -63,6 +72,7 @@ public class RiskController {
             risk.put("currentContracts", 0);
             risk.put("maxPositions", 3);
             risk.put("currentPositions", 0);
+            risk.put("riskPerTrade", 250.0);
             risk.put("accountInGoodStanding", true);
             risk.put("status", "Engine not initialized");
         } catch (Exception e) {
