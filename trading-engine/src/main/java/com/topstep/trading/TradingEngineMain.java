@@ -102,7 +102,7 @@ public class TradingEngineMain {
         String[] requiredEnvVars = {
             "TOPSTEP_API_URL",
             "TOPSTEP_USERNAME",
-            "TOPSTEP_PASSWORD",
+            "TOPSTEP_API_KEY",
             "TOPSTEP_ACCOUNT_ID"
         };
 
