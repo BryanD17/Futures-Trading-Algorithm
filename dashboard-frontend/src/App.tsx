@@ -31,7 +31,7 @@ function App() {
     <div className="app">
       <header className="header">
         <h1>Topstep Trading Dashboard</h1>
-        {status && (
+        {status && status.mode && (
           <div className="status-badge">
             <span className={`status-indicator ${status.mode.toLowerCase()}`}></span>
             {status.mode}
