@@ -103,20 +103,20 @@ public class LiveEngineRunner {
     private TradingConnector createConnector() {
         String apiUrl = System.getenv("TOPSTEP_API_URL");
         String username = System.getenv("TOPSTEP_USERNAME");
-        String password = System.getenv("TOPSTEP_PASSWORD");
+        String apiKey = System.getenv("TOPSTEP_API_KEY");
         String accountId = System.getenv("TOPSTEP_ACCOUNT_ID");
 
-        if (apiUrl == null || username == null || password == null || accountId == null) {
+        if (apiUrl == null || username == null || apiKey == null || accountId == null) {
             throw new IllegalStateException(
                 "Missing Topstep credentials. Set environment variables:\n" +
                 "  TOPSTEP_API_URL\n" +
                 "  TOPSTEP_USERNAME\n" +
-                "  TOPSTEP_PASSWORD\n" +
+                "  TOPSTEP_API_KEY\n" +
                 "  TOPSTEP_ACCOUNT_ID"
             );
         }
 
-        return new TopstepConnector(apiUrl, username, password, accountId);
+        return new TopstepConnector(apiUrl, username, apiKey, accountId);
     }
 
     /**

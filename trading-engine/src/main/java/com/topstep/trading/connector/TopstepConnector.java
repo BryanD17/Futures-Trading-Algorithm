@@ -36,7 +36,7 @@ public class TopstepConnector implements TradingConnector {
     // Configuration
     private final String apiUrl;
     private final String username;
-    private final String password;
+    private final String apiKey;  // API key for TopstepX authentication
     private final String accountId;
 
     // HTTP client
@@ -60,10 +60,11 @@ public class TopstepConnector implements TradingConnector {
     /**
      * Create a TopstepConnector with credentials.
      */
-    public TopstepConnector(String apiUrl, String username, String password, String accountId) {
-        this.apiUrl = apiUrl;
+    public TopstepConnector(String apiUrl, String username, String apiKey, String accountId) {
+        // Ensure API URL ends with /api for TopstepX
+        this.apiUrl = apiUrl.endsWith("/api") ? apiUrl : apiUrl + "/api";
         this.username = username;
-        this.password = password;
+        this.apiKey = apiKey;
         this.accountId = accountId;
 
         this.httpClient = new OkHttpClient.Builder()
@@ -84,7 +85,7 @@ public class TopstepConnector implements TradingConnector {
         this(
             getRequiredEnv("TOPSTEP_API_URL"),
             getRequiredEnv("TOPSTEP_USERNAME"),
-            getRequiredEnv("TOPSTEP_PASSWORD"),
+            getRequiredEnv("TOPSTEP_API_KEY"),
             getRequiredEnv("TOPSTEP_ACCOUNT_ID")
         );
     }
@@ -118,18 +119,19 @@ public class TopstepConnector implements TradingConnector {
     }
 
     /**
-     * Authenticate with Topstep API.
+     * Authenticate with TopstepX API using API key.
      */
     private void authenticate() throws Exception {
-        logger.info("Authenticating with Topstep...");
+        logger.info("Authenticating with TopstepX...");
 
-        // Build auth request
-        String authUrl = apiUrl + "/auth/login";
+        // TopstepX uses /Auth/loginKey endpoint for API key authentication
+        String authUrl = apiUrl + "/Auth/loginKey";
         String authBody = objectMapper.writeValueAsString(Map.of(
-            "username", username,
-            "password", password,
-            "accountId", accountId
+            "userName", username,
+            "apiKey", apiKey
         ));
+
+        logger.info("Auth URL: {}", authUrl);
 
         Request request = new Request.Builder()
             .url(authUrl)
@@ -143,15 +145,18 @@ public class TopstepConnector implements TradingConnector {
             }
 
             String responseBody = response.body().string();
+            logger.debug("Auth response: {}", responseBody);
             JsonNode json = objectMapper.readTree(responseBody);
 
-            // Extract token (adjust field name based on actual API)
+            // TopstepX returns token in different possible fields
             if (json.has("token")) {
                 authToken = json.get("token").asText();
             } else if (json.has("accessToken")) {
                 authToken = json.get("accessToken").asText();
+            } else if (json.has("Token")) {
+                authToken = json.get("Token").asText();
             } else {
-                throw new IOException("No auth token in response");
+                throw new IOException("No auth token in response: " + responseBody);
             }
 
             logger.info("Authentication successful");
