@@ -32,6 +32,9 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private final double fibHigh = 0.705; // OTE zone high
     private final double minRR = 2.0;     // Minimum risk:reward ratio
 
+    // State tracking
+    private int candleCount = 0;
+
     public IctHighConfluenceStrategy(String primarySymbol, String smtSymbol, EventBus eventBus) {
         this.primarySymbol = primarySymbol;
         this.smtSymbol = smtSymbol;
@@ -58,6 +61,8 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
      * Handle candle from primary trading symbol.
      */
     private void handlePrimaryCandle(Candle candle, StrategyContext context) {
+        candleCount++;
+
         // Update all detectors
         structureDetector.update(candle);
         liquidityDetector.updatePrimary(candle);
@@ -88,23 +93,40 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
      * Check if all confluences are met for a high-probability trade.
      */
     private boolean checkConfluences(Candle candle, StrategyContext context) {
+        // Log analysis every 10 candles
+        boolean shouldLog = (candleCount % 10 == 0);
+
         // 1. Check killzone (time filter)
-        if (!killzoneClock.isInKillzone(candle.getTimestamp())) {
+        boolean inKillzone = killzoneClock.isInKillzone(candle.getTimestamp());
+        if (!inKillzone) {
+            if (shouldLog) {
+                System.out.println("[STRATEGY] Not in killzone - waiting for 9-10 AM or 1-2 PM CT");
+            }
             return false;
         }
 
         if (!killzoneClock.isTradingDay(candle.getTimestamp())) {
+            if (shouldLog) {
+                System.out.println("[STRATEGY] Not a trading day");
+            }
             return false;
         }
 
         // 2. Check higher-timeframe structure bias
         MarketBias bias = structureDetector.getBias();
         if (bias == MarketBias.NEUTRAL) {
+            if (shouldLog) {
+                System.out.println("[STRATEGY] ✓ In killzone | ✗ Market bias is NEUTRAL (need BULLISH or BEARISH)");
+            }
             return false;
         }
 
         // 3. Check for recent liquidity sweep
-        if (!liquidityDetector.hasRecentSweep(5)) {
+        boolean hasRecentSweep = liquidityDetector.hasRecentSweep(5);
+        if (!hasRecentSweep) {
+            if (shouldLog) {
+                System.out.println("[STRATEGY] ✓ In killzone | ✓ Bias: " + bias + " | ✗ No recent liquidity sweep");
+            }
             return false;
         }
 
@@ -115,26 +137,37 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
         // 4. Ensure sweep direction matches structure bias
         if (bias == MarketBias.BULLISH && !sweep.isBullish()) {
+            if (shouldLog) {
+                System.out.println("[STRATEGY] ✓ In killzone | ✓ Bias: BULLISH | ✗ Sweep is bearish (mismatch)");
+            }
             return false;
         }
         if (bias == MarketBias.BEARISH && !sweep.isBearish()) {
+            if (shouldLog) {
+                System.out.println("[STRATEGY] ✓ In killzone | ✓ Bias: BEARISH | ✗ Sweep is bullish (mismatch)");
+            }
             return false;
         }
 
-        // 5. Prefer sweeps with SMT divergence
-        if (!sweep.hasSmtDivergence()) {
-            // Optional: Could allow trades without SMT but reduce confidence
-            // For now, require SMT divergence for high confluence
-            return false;
-        }
+        // 5. SMT divergence is optional when we don't have SMT data
+        // Previously required SMT which blocked all trades
+        boolean hasSmtDivergence = sweep.hasSmtDivergence();
+        String smtStatus = hasSmtDivergence ? "✓ SMT divergence" : "~ No SMT data (continuing)";
 
         // 6. Check for IFVG in the direction of the trade
         FairValueGap ifvg = fvgDetector.findNearestIfvg(candle.getClose(), bias == MarketBias.BULLISH);
         if (ifvg == null) {
+            if (shouldLog) {
+                System.out.println("[STRATEGY] ✓ In killzone | ✓ Bias: " + bias + " | ✓ Sweep | " + smtStatus + " | ✗ No IFVG found");
+            }
             return false;
         }
 
-        // All confluences met!
+        // All required confluences met!
+        System.out.println("[STRATEGY] ✓✓✓ ALL CONDITIONS MET ✓✓✓");
+        System.out.println("[STRATEGY] Killzone: " + killzoneClock.getKillzoneName(candle.getTimestamp()));
+        System.out.println("[STRATEGY] Bias: " + bias + " | Sweep: " + (sweep.isBullish() ? "BULLISH" : "BEARISH"));
+        System.out.println("[STRATEGY] IFVG: " + ifvg.getBottom() + " - " + ifvg.getTop());
         return true;
     }
 

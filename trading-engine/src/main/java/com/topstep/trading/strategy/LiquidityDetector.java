@@ -78,12 +78,18 @@ public class LiquidityDetector {
         // Bullish sweep: price wicks below recent low and then closes back above it
         if (latest.getLow() < recentLow && latest.getClose() > recentLow) {
             boolean hasSmtDiv = checkBullishSmtDivergence(recentLow);
+            System.out.println("[LIQUIDITY] BULLISH SWEEP detected at " + recentLow +
+                " (low: " + latest.getLow() + ", close: " + latest.getClose() +
+                ", SMT: " + hasSmtDiv + ")");
             lastSweep = new LiquiditySweep(true, recentLow, latest.getTimestamp(), hasSmtDiv);
             candleCountAtLastSweep = totalCandleCount;
         }
         // Bearish sweep: price wicks above recent high and then closes back below it
         else if (latest.getHigh() > recentHigh && latest.getClose() < recentHigh) {
             boolean hasSmtDiv = checkBearishSmtDivergence(recentHigh);
+            System.out.println("[LIQUIDITY] BEARISH SWEEP detected at " + recentHigh +
+                " (high: " + latest.getHigh() + ", close: " + latest.getClose() +
+                ", SMT: " + hasSmtDiv + ")");
             lastSweep = new LiquiditySweep(false, recentHigh, latest.getTimestamp(), hasSmtDiv);
             candleCountAtLastSweep = totalCandleCount;
         }
