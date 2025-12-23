@@ -100,7 +100,7 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         boolean inKillzone = killzoneClock.isInKillzone(candle.getTimestamp());
         if (!inKillzone) {
             if (shouldLog) {
-                System.out.println("[STRATEGY] Not in killzone - waiting for 8:45-11:30 AM or 12:45-2 PM CT");
+                System.out.println("[STRATEGY] Not in killzone - waiting for 8:45-11:30 AM or 12:45-3:00 PM CT");
             }
             return false;
         }
