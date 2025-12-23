@@ -92,14 +92,33 @@ public class IctStructureDetector {
         // Bullish BOS: price breaks above recent swing high
         if (latest.getClose() > lastSwingHigh) {
             if (currentBias != MarketBias.BULLISH) {
-                // Change of Character to bullish
+                System.out.println("[STRUCTURE] BOS BULLISH - Close " + latest.getClose() + " > SwingHigh " + lastSwingHigh);
                 currentBias = MarketBias.BULLISH;
             }
         }
         // Bearish BOS: price breaks below recent swing low
         else if (latest.getClose() < lastSwingLow) {
             if (currentBias != MarketBias.BEARISH) {
-                // Change of Character to bearish
+                System.out.println("[STRUCTURE] BOS BEARISH - Close " + latest.getClose() + " < SwingLow " + lastSwingLow);
+                currentBias = MarketBias.BEARISH;
+            }
+        }
+        // Intermediate bias detection based on trend
+        else if (currentBias == MarketBias.NEUTRAL && candles.size() >= 10) {
+            // Check recent price action to determine trend direction
+            double recentHigh = candles.stream().skip(candles.size() - 5).mapToDouble(Candle::getHigh).max().orElse(0);
+            double recentLow = candles.stream().skip(candles.size() - 5).mapToDouble(Candle::getLow).min().orElse(0);
+            double olderHigh = candles.stream().limit(5).mapToDouble(Candle::getHigh).max().orElse(0);
+            double olderLow = candles.stream().limit(5).mapToDouble(Candle::getLow).min().orElse(0);
+
+            // Higher highs and higher lows = bullish
+            if (recentHigh > olderHigh && recentLow > olderLow) {
+                System.out.println("[STRUCTURE] Trend BULLISH - Higher highs and higher lows detected");
+                currentBias = MarketBias.BULLISH;
+            }
+            // Lower highs and lower lows = bearish
+            else if (recentHigh < olderHigh && recentLow < olderLow) {
+                System.out.println("[STRUCTURE] Trend BEARISH - Lower highs and lower lows detected");
                 currentBias = MarketBias.BEARISH;
             }
         }

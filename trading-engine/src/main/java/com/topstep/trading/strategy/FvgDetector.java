@@ -61,6 +61,7 @@ public class FvgDetector {
         if (bullishGapTop > bullishGapBottom) {
             // Valid bullish FVG
             FairValueGap fvg = new FairValueGap(true, bullishGapTop, bullishGapBottom, candle2.getTimestamp());
+            System.out.println("[FVG] BULLISH FVG detected: " + bullishGapBottom + " - " + bullishGapTop);
             addFvg(fvg);
         }
 
@@ -71,6 +72,7 @@ public class FvgDetector {
         if (bearishGapTop > bearishGapBottom) {
             // Valid bearish FVG
             FairValueGap fvg = new FairValueGap(false, bearishGapTop, bearishGapBottom, candle2.getTimestamp());
+            System.out.println("[FVG] BEARISH FVG detected: " + bearishGapBottom + " - " + bearishGapTop);
             addFvg(fvg);
         }
     }
@@ -119,11 +121,13 @@ public class FvgDetector {
                     // Bullish IFVG: Price fills the gap and then bounces off it as support
                     if (candle.getLow() <= fvg.getTop() && candle.getClose() > fvg.getMidpoint()) {
                         fvg.setInverted(true);
+                        System.out.println("[FVG] BULLISH IFVG (inversion) at " + fvg.getBottom() + " - " + fvg.getTop());
                     }
                 } else {
                     // Bearish IFVG: Price fills the gap and then rejects it as resistance
                     if (candle.getHigh() >= fvg.getBottom() && candle.getClose() < fvg.getMidpoint()) {
                         fvg.setInverted(true);
+                        System.out.println("[FVG] BEARISH IFVG (inversion) at " + fvg.getBottom() + " - " + fvg.getTop());
                     }
                 }
             }
