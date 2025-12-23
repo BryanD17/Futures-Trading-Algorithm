@@ -152,6 +152,10 @@ public class LiveEngineRunner {
             strategy.initialize();
             System.out.println("✓ Strategy initialized");
 
+            // Start the EventBus to process trading signals
+            eventBus.start();
+            System.out.println("✓ EventBus started");
+
             // Register with facade
             EngineFacade.getInstance().initialize(
                 EngineFacade.Mode.LIVE,
@@ -503,6 +507,9 @@ public class LiveEngineRunner {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+
+        // Stop EventBus
+        eventBus.stop();
 
         // Shutdown strategy
         strategy.shutdown();
