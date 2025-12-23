@@ -535,13 +535,15 @@ public class TopstepConnector implements TradingConnector {
         orderMap.put("accountId", Integer.parseInt(numericAccountId));
         orderMap.put("contractId", contractId);
         orderMap.put("type", order.getType() == OrderType.MARKET ? 1 : 2); // 1=Market, 2=Limit
-        orderMap.put("side", order.getSide() == OrderSide.BUY ? 1 : 2); // 1=Buy, 2=Sell
+        // TopstepX uses string values for side: "Buy" or "Sell"
+        orderMap.put("side", order.getSide() == OrderSide.BUY ? "Buy" : "Sell");
         orderMap.put("size", order.getQuantity());
         if (order.getType() == OrderType.LIMIT && order.getLimitPrice() != null) {
             orderMap.put("limitPrice", order.getLimitPrice());
         }
 
         String orderBody = objectMapper.writeValueAsString(orderMap);
+        logger.info("Order request body: {}", orderBody);
 
         Request request = new Request.Builder()
             .url(orderUrl)
@@ -560,16 +562,25 @@ public class TopstepConnector implements TradingConnector {
             logger.info("Order response: {}", responseBody);
             JsonNode json = objectMapper.readTree(responseBody);
 
+            // Check if order was successful
+            boolean success = json.has("success") ? json.get("success").asBoolean() : true;
+            if (!success) {
+                String errorMsg = json.has("errorMessage") ? json.get("errorMessage").asText() : "Unknown error";
+                int errorCode = json.has("errorCode") ? json.get("errorCode").asInt() : -1;
+                orderListeners.remove(clientOrderId);
+                throw new IOException("Order rejected by TopstepX: " + errorMsg + " (code: " + errorCode + ")");
+            }
+
             // Get server order ID
             String serverId = clientOrderId;
-            if (json.has("orderId")) {
+            if (json.has("orderId") && !json.get("orderId").isNull()) {
                 serverId = json.get("orderId").asText();
                 if (!serverId.equals(clientOrderId)) {
                     orderListeners.remove(clientOrderId);
                     orderListeners.put(serverId, listener);
                     order.setOrderId(serverId);
                 }
-            } else if (json.has("id")) {
+            } else if (json.has("id") && !json.get("id").isNull()) {
                 serverId = json.get("id").asText();
                 orderListeners.remove(clientOrderId);
                 orderListeners.put(serverId, listener);

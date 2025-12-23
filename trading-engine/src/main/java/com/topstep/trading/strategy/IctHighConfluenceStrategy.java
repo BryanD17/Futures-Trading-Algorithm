@@ -34,6 +34,7 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
     // State tracking
     private int candleCount = 0;
+    private volatile boolean signalPending = false;  // Prevent multiple signals
 
     public IctHighConfluenceStrategy(String primarySymbol, String smtSymbol, EventBus eventBus) {
         this.primarySymbol = primarySymbol;
@@ -70,6 +71,12 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
         // Don't trade if we already have a position
         if (context.hasPosition(primarySymbol)) {
+            signalPending = false;  // Reset if position exists
+            return;
+        }
+
+        // Don't generate multiple signals while one is pending
+        if (signalPending) {
             return;
         }
 
@@ -78,7 +85,8 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
             return;
         }
 
-        // All confluences met - generate signal
+        // All confluences met - generate signal (only once)
+        signalPending = true;
         generateSignal(candle, context);
     }
 
