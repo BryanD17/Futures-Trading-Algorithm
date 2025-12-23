@@ -121,11 +121,11 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
             return false;
         }
 
-        // 3. Check for recent liquidity sweep
-        boolean hasRecentSweep = liquidityDetector.hasRecentSweep(5);
+        // 3. Check for recent liquidity sweep (within last 15 candles)
+        boolean hasRecentSweep = liquidityDetector.hasRecentSweep(15);
         if (!hasRecentSweep) {
             if (shouldLog) {
-                System.out.println("[STRATEGY] ✓ In killzone | ✓ Bias: " + bias + " | ✗ No recent liquidity sweep");
+                System.out.println("[STRATEGY] ✓ In killzone | ✓ Bias: " + bias + " | ✗ No recent liquidity sweep (last 15 candles)");
             }
             return false;
         }

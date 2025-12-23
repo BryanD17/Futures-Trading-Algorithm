@@ -75,8 +75,19 @@ public class LiquidityDetector {
                 .min()
                 .orElse(Double.MAX_VALUE);
 
+        // Log liquidity levels periodically (every 20 candles)
+        if (totalCandleCount % 20 == 0) {
+            System.out.println("[LIQUIDITY] Tracking levels - High: " + recentHigh + ", Low: " + recentLow +
+                " | Current: " + latest.getClose() + " | Candles: " + totalCandleCount);
+        }
+
         // Bullish sweep: price wicks below recent low and then closes back above it
-        if (latest.getLow() < recentLow && latest.getClose() > recentLow) {
+        // OR price touches within 0.5 points of recent low and bounces (less strict)
+        double sweepTolerance = 2.0; // Allow 2 points tolerance for NQ
+        boolean bullishSweep = (latest.getLow() < recentLow && latest.getClose() > recentLow) ||
+                               (latest.getLow() <= recentLow + sweepTolerance && latest.getClose() > recentLow + sweepTolerance * 2);
+
+        if (bullishSweep) {
             boolean hasSmtDiv = checkBullishSmtDivergence(recentLow);
             System.out.println("[LIQUIDITY] BULLISH SWEEP detected at " + recentLow +
                 " (low: " + latest.getLow() + ", close: " + latest.getClose() +
@@ -85,13 +96,19 @@ public class LiquidityDetector {
             candleCountAtLastSweep = totalCandleCount;
         }
         // Bearish sweep: price wicks above recent high and then closes back below it
-        else if (latest.getHigh() > recentHigh && latest.getClose() < recentHigh) {
-            boolean hasSmtDiv = checkBearishSmtDivergence(recentHigh);
-            System.out.println("[LIQUIDITY] BEARISH SWEEP detected at " + recentHigh +
-                " (high: " + latest.getHigh() + ", close: " + latest.getClose() +
-                ", SMT: " + hasSmtDiv + ")");
-            lastSweep = new LiquiditySweep(false, recentHigh, latest.getTimestamp(), hasSmtDiv);
-            candleCountAtLastSweep = totalCandleCount;
+        // OR price touches within tolerance of recent high and rejects
+        else {
+            boolean bearishSweep = (latest.getHigh() > recentHigh && latest.getClose() < recentHigh) ||
+                                   (latest.getHigh() >= recentHigh - sweepTolerance && latest.getClose() < recentHigh - sweepTolerance * 2);
+
+            if (bearishSweep) {
+                boolean hasSmtDiv = checkBearishSmtDivergence(recentHigh);
+                System.out.println("[LIQUIDITY] BEARISH SWEEP detected at " + recentHigh +
+                    " (high: " + latest.getHigh() + ", close: " + latest.getClose() +
+                    ", SMT: " + hasSmtDiv + ")");
+                lastSweep = new LiquiditySweep(false, recentHigh, latest.getTimestamp(), hasSmtDiv);
+                candleCountAtLastSweep = totalCandleCount;
+            }
         }
     }
 
