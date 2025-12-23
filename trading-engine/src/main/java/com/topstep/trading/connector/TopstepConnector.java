@@ -490,17 +490,19 @@ public class TopstepConnector implements TradingConnector {
             logger.debug("Account response: {}", responseBody);
             JsonNode json = objectMapper.readTree(responseBody);
 
-            // TopstepX returns an array of accounts, find the matching one
+            // TopstepX returns { "accounts": [...], "success": true }
             double balance = 0;
-            if (json.isArray()) {
-                for (JsonNode account : json) {
+            JsonNode accountsArray = json.has("accounts") ? json.get("accounts") : json;
+
+            if (accountsArray.isArray()) {
+                for (JsonNode account : accountsArray) {
                     // Try to match by account ID or just use first active account
                     String accId = account.has("id") ? account.get("id").asText() : "";
                     String accName = account.has("name") ? account.get("name").asText() : "";
 
                     // Check if this is our account (by ID or name containing our ID)
                     if (accId.equals(accountId) || accName.contains(accountId) ||
-                        accountId.contains(accId) || json.size() == 1) {
+                        accountId.contains(accId) || accountId.contains(accName) || accountsArray.size() == 1) {
 
                         // Try different field names for balance
                         if (account.has("balance")) {
@@ -514,7 +516,11 @@ public class TopstepConnector implements TradingConnector {
                         } else if (account.has("cash")) {
                             balance = account.get("cash").asDouble();
                         }
-                        break;
+
+                        if (balance > 0) {
+                            logger.info("Found account: {} with balance: ${}", accName, balance);
+                            break;
+                        }
                     }
                 }
             } else {
