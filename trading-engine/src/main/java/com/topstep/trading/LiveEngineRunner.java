@@ -163,9 +163,13 @@ public class LiveEngineRunner {
             );
             EngineFacade.getInstance().setLiveRunner(this);
 
-            // Subscribe to market data
+            // Subscribe to market data for primary symbol (ES)
             connector.subscribeMarketData(DEFAULT_SYMBOL, this::onMarketData);
             System.out.println("✓ Subscribed to market data for " + DEFAULT_SYMBOL);
+
+            // Subscribe to market data for SMT symbol (NQ) - used for divergence detection
+            connector.subscribeMarketData(SMT_SYMBOL, this::onMarketData);
+            System.out.println("✓ Subscribed to market data for " + SMT_SYMBOL + " (SMT)");
 
             // Schedule flatten-by-time check (every minute)
             scheduler.scheduleAtFixedRate(
