@@ -18,6 +18,8 @@ public class LiquidityDetector {
     private final int lookbackPeriod;
 
     private LiquiditySweep lastSweep;
+    private int candleCountAtLastSweep = 0;  // Track when sweep was detected
+    private int totalCandleCount = 0;        // Total candles processed
 
     public LiquidityDetector(int lookbackPeriod) {
         this.lookbackPeriod = lookbackPeriod;
@@ -30,6 +32,7 @@ public class LiquidityDetector {
      */
     public void updatePrimary(Candle candle) {
         primaryCandles.add(candle);
+        totalCandleCount++;
         if (primaryCandles.size() > lookbackPeriod) {
             primaryCandles.remove(0);
         }
@@ -76,11 +79,13 @@ public class LiquidityDetector {
         if (latest.getLow() < recentLow && latest.getClose() > recentLow) {
             boolean hasSmtDiv = checkBullishSmtDivergence(recentLow);
             lastSweep = new LiquiditySweep(true, recentLow, latest.getTimestamp(), hasSmtDiv);
+            candleCountAtLastSweep = totalCandleCount;
         }
         // Bearish sweep: price wicks above recent high and then closes back below it
         else if (latest.getHigh() > recentHigh && latest.getClose() < recentHigh) {
             boolean hasSmtDiv = checkBearishSmtDivergence(recentHigh);
             lastSweep = new LiquiditySweep(false, recentHigh, latest.getTimestamp(), hasSmtDiv);
+            candleCountAtLastSweep = totalCandleCount;
         }
     }
 
@@ -181,12 +186,13 @@ public class LiquidityDetector {
      * Check if there's a recent liquidity sweep (within last N candles).
      */
     public boolean hasRecentSweep(int withinCandles) {
-        if (lastSweep == null || primaryCandles.isEmpty()) {
+        if (lastSweep == null || candleCountAtLastSweep == 0) {
             return false;
         }
 
-        int size = primaryCandles.size();
-        return size <= withinCandles;
+        // Calculate how many candles have passed since the sweep
+        int candlesSinceSweep = totalCandleCount - candleCountAtLastSweep;
+        return candlesSinceSweep <= withinCandles;
     }
 
     /**
@@ -196,5 +202,7 @@ public class LiquidityDetector {
         primaryCandles.clear();
         smtCandles.clear();
         lastSweep = null;
+        candleCountAtLastSweep = 0;
+        totalCandleCount = 0;
     }
 }
