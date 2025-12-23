@@ -11,12 +11,12 @@ public class KillzoneClock {
 
     private final ZoneId newYorkZone = ZoneId.of("America/New_York");
 
-    // NY AM Killzone (10:00 AM - 11:00 AM EST)
-    private final LocalTime nyAmStart = LocalTime.of(10, 0);
-    private final LocalTime nyAmEnd = LocalTime.of(11, 0);
+    // NY AM Killzone (9:45 AM - 12:30 PM EST = 8:45 AM - 11:30 AM CT)
+    private final LocalTime nyAmStart = LocalTime.of(9, 45);
+    private final LocalTime nyAmEnd = LocalTime.of(12, 30);
 
-    // NY PM Killzone (2:00 PM - 3:00 PM EST)
-    private final LocalTime nyPmStart = LocalTime.of(14, 0);
+    // NY PM Killzone (1:45 PM - 3:00 PM EST = 12:45 PM - 2:00 PM CT)
+    private final LocalTime nyPmStart = LocalTime.of(13, 45);
     private final LocalTime nyPmEnd = LocalTime.of(15, 0);
 
     /**
@@ -30,14 +30,14 @@ public class KillzoneClock {
     }
 
     /**
-     * Check if time is in NY AM killzone (10:00 - 11:00 AM EST).
+     * Check if time is in NY AM killzone (9:45 AM - 12:30 PM EST = 8:45-11:30 AM CT).
      */
     public boolean isInNyAmKillzone(LocalTime time) {
         return !time.isBefore(nyAmStart) && time.isBefore(nyAmEnd);
     }
 
     /**
-     * Check if time is in NY PM killzone (2:00 - 3:00 PM EST).
+     * Check if time is in NY PM killzone (1:45 - 3:00 PM EST = 12:45-2:00 PM CT).
      */
     public boolean isInNyPmKillzone(LocalTime time) {
         return !time.isBefore(nyPmStart) && time.isBefore(nyPmEnd);
