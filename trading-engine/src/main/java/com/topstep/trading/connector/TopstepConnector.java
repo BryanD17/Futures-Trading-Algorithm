@@ -9,59 +9,62 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.*;
 
 /**
- * Topstep connector implementation for LIVE trading.
+ * Topstep connector implementation for LIVE trading via TopstepX API.
  *
- * This connector integrates with Topstep's trading platform through their
- * API gateway. Topstep uses different connectivity options:
- * - Rithmic (most common)
- * - CQG
- * - TopstepX/Project X
- *
- * This implementation uses a REST + WebSocket pattern that should be adapted
- * based on the specific API documentation from Topstep.
+ * This connector integrates with TopstepX's trading platform through their
+ * REST API with polling for market data (SignalR not implemented).
  *
  * IMPORTANT: Before using LIVE:
  * 1. Get API credentials from Topstep
- * 2. Set environment variables (see createConnector in LiveEngineRunner)
+ * 2. Set environment variables (TOPSTEP_API_URL, TOPSTEP_USERNAME, TOPSTEP_API_KEY, TOPSTEP_ACCOUNT_ID)
  * 3. Test thoroughly in SIM/paper mode first
  */
 public class TopstepConnector implements TradingConnector {
     private static final Logger logger = LoggerFactory.getLogger(TopstepConnector.class);
 
+    // Bar unit constants for TopstepX API
+    private static final int BAR_UNIT_MINUTE = 2;
+    private static final int BAR_UNIT_HOUR = 3;
+    private static final int BAR_UNIT_DAY = 4;
+
     // Configuration
     private final String apiUrl;
     private final String username;
-    private final String apiKey;  // API key for TopstepX authentication
+    private final String apiKey;
     private final String accountId;
 
     // HTTP client
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
 
-    // WebSocket for streaming
-    private WebSocket marketDataWebSocket;
-    private WebSocket orderWebSocket;
-
     // State
     private volatile boolean connected = false;
     private String authToken;
     private final Map<String, MarketDataListener> marketDataListeners = new ConcurrentHashMap<>();
     private final Map<String, OrderListener> orderListeners = new ConcurrentHashMap<>();
+    private final Map<String, String> symbolToContractId = new ConcurrentHashMap<>();
+    private final Map<String, Instant> lastBarTimestamp = new ConcurrentHashMap<>();
+
+    // Schedulers
+    private final ScheduledExecutorService marketDataPoller = Executors.newSingleThreadScheduledExecutor();
     private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor();
 
-    // Candle aggregation (for converting ticks to candles if needed)
-    private final Map<String, CandleAggregator> candleAggregators = new ConcurrentHashMap<>();
+    // Polling interval in seconds (30 seconds for near real-time data)
+    private static final int POLL_INTERVAL_SECONDS = 30;
 
     /**
      * Create a TopstepConnector with credentials.
      */
     public TopstepConnector(String apiUrl, String username, String apiKey, String accountId) {
-        // Ensure API URL ends with /api for TopstepX
         this.apiUrl = apiUrl.endsWith("/api") ? apiUrl : apiUrl + "/api";
         this.username = username;
         this.apiKey = apiKey;
@@ -105,13 +108,7 @@ public class TopstepConnector implements TradingConnector {
         // Step 1: Authenticate
         authenticate();
 
-        // Step 2: Connect WebSocket for market data
-        connectMarketDataWebSocket();
-
-        // Step 3: Connect WebSocket for orders
-        connectOrderWebSocket();
-
-        // Step 4: Start heartbeat
+        // Step 2: Start heartbeat to keep token fresh
         startHeartbeat();
 
         connected = true;
@@ -124,7 +121,6 @@ public class TopstepConnector implements TradingConnector {
     private void authenticate() throws Exception {
         logger.info("Authenticating with TopstepX...");
 
-        // TopstepX uses /Auth/loginKey endpoint for API key authentication
         String authUrl = apiUrl + "/Auth/loginKey";
         String authBody = objectMapper.writeValueAsString(Map.of(
             "userName", username,
@@ -148,7 +144,6 @@ public class TopstepConnector implements TradingConnector {
             logger.debug("Auth response: {}", responseBody);
             JsonNode json = objectMapper.readTree(responseBody);
 
-            // TopstepX returns token in different possible fields
             if (json.has("token")) {
                 authToken = json.get("token").asText();
             } else if (json.has("accessToken")) {
@@ -164,149 +159,292 @@ public class TopstepConnector implements TradingConnector {
     }
 
     /**
-     * Connect to market data WebSocket.
-     * Note: TopstepX uses SignalR hubs which require special handling.
-     * For now, we skip WebSocket and use REST polling for market data.
+     * Search for a contract by symbol and get its contract ID.
+     * ES -> CON.F.US.EP.H25 (current front month)
      */
-    private void connectMarketDataWebSocket() {
-        // TopstepX uses SignalR at rtc.topstepx.com/hubs/market
-        // SignalR requires a different protocol - for now we'll use REST polling
-        logger.info("Market data: Using REST polling (SignalR not implemented)");
+    private String searchContract(String symbol) throws Exception {
+        logger.info("Searching for contract: {}", symbol);
 
-        // Skip WebSocket connection - will use REST polling for market data
-        // Full SignalR implementation can be added later
-    }
+        String searchUrl = apiUrl + "/Contract/search";
+        String searchBody = objectMapper.writeValueAsString(Map.of(
+            "searchText", symbol,
+            "live", false
+        ));
 
-    /**
-     * Connect to order WebSocket.
-     * Note: TopstepX uses SignalR hubs which require special handling.
-     * For now, we skip WebSocket and poll order status via REST.
-     */
-    private void connectOrderWebSocket() {
-        // TopstepX uses SignalR at rtc.topstepx.com/hubs/user for order updates
-        // SignalR requires a different protocol - for now we'll poll order status
-        logger.info("Order updates: Using REST polling (SignalR not implemented)");
+        Request request = new Request.Builder()
+            .url(searchUrl)
+            .header("Authorization", "Bearer " + authToken)
+            .post(RequestBody.create(searchBody, MediaType.parse("application/json")))
+            .build();
 
-        // Skip WebSocket connection - will poll order status via REST
-        // Full SignalR implementation can be added later
-    }
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                String body = response.body() != null ? response.body().string() : "No body";
+                throw new IOException("Contract search failed: " + response.code() + " - " + body);
+            }
 
-    /**
-     * Handle incoming market data message.
-     */
-    private void handleMarketDataMessage(String message) {
-        try {
-            JsonNode json = objectMapper.readTree(message);
-            String type = json.has("type") ? json.get("type").asText() : "";
-            String symbol = json.has("symbol") ? json.get("symbol").asText() : "";
+            String responseBody = response.body().string();
+            logger.debug("Contract search response: {}", responseBody);
+            JsonNode json = objectMapper.readTree(responseBody);
 
-            MarketDataListener listener = marketDataListeners.get(symbol);
-            if (listener == null) return;
+            // TopstepX returns { "contracts": [...], "success": true }
+            JsonNode contracts = json.has("contracts") ? json.get("contracts") : json;
 
-            // Handle different message types
-            if ("tick".equals(type) || "quote".equals(type)) {
-                // Aggregate ticks into candles
-                CandleAggregator aggregator = candleAggregators.get(symbol);
-                if (aggregator != null) {
-                    double price = json.get("price").asDouble();
-                    int volume = json.has("volume") ? json.get("volume").asInt() : 1;
+            if (contracts.isArray() && contracts.size() > 0) {
+                // Find the best matching contract (front month futures)
+                for (JsonNode contract : contracts) {
+                    String contractId = contract.has("id") ? contract.get("id").asText() : "";
+                    String name = contract.has("name") ? contract.get("name").asText() : "";
+                    String description = contract.has("description") ? contract.get("description").asText() : "";
 
-                    Candle candle = aggregator.addTick(price, volume);
-                    if (candle != null) {
-                        listener.onCandle(candle);
+                    // Match based on symbol patterns
+                    // ES futures: CON.F.US.EP.xxx or similar
+                    // NQ futures: CON.F.US.ENQ.xxx or similar
+                    if (!contractId.isEmpty()) {
+                        logger.info("Found contract: {} - {} ({})", contractId, name, description);
+                        return contractId;
                     }
                 }
-            } else if ("candle".equals(type) || "bar".equals(type)) {
-                // Direct candle data
-                Candle candle = new Candle(
-                    symbol,
-                    Instant.ofEpochMilli(json.get("timestamp").asLong()),
-                    json.get("open").asDouble(),
-                    json.get("high").asDouble(),
-                    json.get("low").asDouble(),
-                    json.get("close").asDouble(),
-                    json.get("volume").asLong()
-                );
-                listener.onCandle(candle);
             }
 
-        } catch (Exception e) {
-            logger.error("Error processing market data: {}", e.getMessage());
+            // If no contracts found via search, try common contract ID patterns
+            String fallbackContractId = getFallbackContractId(symbol);
+            if (fallbackContractId != null) {
+                logger.info("Using fallback contract ID: {}", fallbackContractId);
+                return fallbackContractId;
+            }
+
+            throw new IOException("No contracts found for symbol: " + symbol);
         }
     }
 
     /**
-     * Handle incoming order message.
+     * Get a fallback contract ID based on common patterns.
+     * Contract IDs follow pattern: CON.F.US.{root}.{month}{year}
+     * Month codes: F=Jan, G=Feb, H=Mar, J=Apr, K=May, M=Jun, N=Jul, Q=Aug, U=Sep, V=Oct, X=Nov, Z=Dec
      */
-    private void handleOrderMessage(String message) {
-        try {
-            JsonNode json = objectMapper.readTree(message);
-            String orderId = json.has("orderId") ? json.get("orderId").asText() : "";
+    private String getFallbackContractId(String symbol) {
+        // Determine current front month
+        ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
+        int month = now.getMonthValue();
+        int year = now.getYear() % 100; // 2-digit year
 
-            OrderListener listener = orderListeners.get(orderId);
-            if (listener == null) return;
-
-            // Parse order status
-            String statusStr = json.has("status") ? json.get("status").asText() : "UNKNOWN";
-            OrderStatus status = parseOrderStatus(statusStr);
-
-            Double fillPrice = json.has("fillPrice") ? json.get("fillPrice").asDouble() : null;
-            Integer fillQty = json.has("fillQuantity") ? json.get("fillQuantity").asInt() : null;
-
-            listener.onOrderUpdate(orderId, status, fillPrice, fillQty);
-
-            // Clean up completed orders
-            if (status == OrderStatus.FILLED || status == OrderStatus.CANCELED || status == OrderStatus.REJECTED) {
-                orderListeners.remove(orderId);
-            }
-
-        } catch (Exception e) {
-            logger.error("Error processing order message: {}", e.getMessage());
+        // Futures typically roll to next quarter: Mar (H), Jun (M), Sep (U), Dec (Z)
+        String monthCode;
+        if (month <= 3) {
+            monthCode = "H"; // March
+        } else if (month <= 6) {
+            monthCode = "M"; // June
+        } else if (month <= 9) {
+            monthCode = "U"; // September
+        } else {
+            monthCode = "Z"; // December
         }
-    }
 
-    private OrderStatus parseOrderStatus(String status) {
-        return switch (status.toUpperCase()) {
-            case "PENDING", "NEW", "WORKING" -> OrderStatus.PENDING;
-            case "PARTIAL", "PARTIALLY_FILLED" -> OrderStatus.PARTIALLY_FILLED;
-            case "FILLED", "COMPLETE" -> OrderStatus.FILLED;
-            case "CANCELED", "CANCELLED" -> OrderStatus.CANCELED;
-            case "REJECTED" -> OrderStatus.REJECTED;
-            default -> OrderStatus.PENDING;
+        // If we're past the contract month, move to next quarter
+        if ((month == 3 && now.getDayOfMonth() > 15) ||
+            (month == 6 && now.getDayOfMonth() > 15) ||
+            (month == 9 && now.getDayOfMonth() > 15) ||
+            (month == 12 && now.getDayOfMonth() > 15)) {
+            if (monthCode.equals("H")) monthCode = "M";
+            else if (monthCode.equals("M")) monthCode = "U";
+            else if (monthCode.equals("U")) monthCode = "Z";
+            else {
+                monthCode = "H";
+                year++;
+            }
+        }
+
+        // Map common symbols to their root codes
+        String root = switch (symbol.toUpperCase()) {
+            case "ES" -> "EP";      // E-mini S&P 500
+            case "NQ" -> "ENQ";     // E-mini NASDAQ 100
+            case "MES" -> "MES";    // Micro E-mini S&P 500
+            case "MNQ" -> "MNQ";    // Micro E-mini NASDAQ 100
+            case "YM" -> "YM";      // E-mini Dow
+            case "RTY" -> "RTY";    // E-mini Russell 2000
+            case "CL" -> "CL";      // Crude Oil
+            case "GC" -> "GC";      // Gold
+            default -> null;
         };
+
+        if (root != null) {
+            return String.format("CON.F.US.%s.%s%02d", root, monthCode, year);
+        }
+
+        return null;
     }
 
     /**
-     * Start heartbeat to keep connections alive.
+     * Fetch historical bars from TopstepX API.
+     */
+    private void fetchBars(String symbol, String contractId) {
+        try {
+            // Calculate time range - last 10 minutes to get recent data
+            ZonedDateTime endTime = ZonedDateTime.now(ZoneOffset.UTC);
+            ZonedDateTime startTime = endTime.minusMinutes(10);
+
+            String barsUrl = apiUrl + "/History/retrieveBars";
+
+            Map<String, Object> requestMap = new HashMap<>();
+            requestMap.put("contractId", contractId);
+            requestMap.put("live", false);
+            requestMap.put("startTime", startTime.format(DateTimeFormatter.ISO_INSTANT));
+            requestMap.put("endTime", endTime.format(DateTimeFormatter.ISO_INSTANT));
+            requestMap.put("unit", BAR_UNIT_MINUTE);
+            requestMap.put("unitNumber", 1);
+            requestMap.put("limit", 10);
+            requestMap.put("includePartialBar", true);
+
+            String requestBody = objectMapper.writeValueAsString(requestMap);
+
+            Request request = new Request.Builder()
+                .url(barsUrl)
+                .header("Authorization", "Bearer " + authToken)
+                .post(RequestBody.create(requestBody, MediaType.parse("application/json")))
+                .build();
+
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    String body = response.body() != null ? response.body().string() : "No body";
+                    logger.error("Failed to fetch bars: {} - {}", response.code(), body);
+                    return;
+                }
+
+                String responseBody = response.body().string();
+                logger.debug("Bars response: {}", responseBody);
+                JsonNode json = objectMapper.readTree(responseBody);
+
+                // Extract bars array
+                JsonNode bars = json.has("bars") ? json.get("bars") : json;
+                if (!bars.isArray()) {
+                    logger.warn("No bars array in response");
+                    return;
+                }
+
+                MarketDataListener listener = marketDataListeners.get(symbol);
+                if (listener == null) {
+                    logger.warn("No listener registered for symbol: {}", symbol);
+                    return;
+                }
+
+                Instant lastTimestamp = lastBarTimestamp.get(symbol);
+                int newBarsCount = 0;
+
+                // Process each bar
+                for (JsonNode bar : bars) {
+                    try {
+                        // Parse timestamp - try different field names
+                        Instant timestamp;
+                        if (bar.has("t")) {
+                            timestamp = Instant.parse(bar.get("t").asText());
+                        } else if (bar.has("timestamp")) {
+                            timestamp = Instant.parse(bar.get("timestamp").asText());
+                        } else if (bar.has("time")) {
+                            timestamp = Instant.ofEpochMilli(bar.get("time").asLong());
+                        } else {
+                            logger.warn("No timestamp in bar: {}", bar);
+                            continue;
+                        }
+
+                        // Skip bars we've already processed
+                        if (lastTimestamp != null && !timestamp.isAfter(lastTimestamp)) {
+                            continue;
+                        }
+
+                        // Parse OHLCV - try different field names
+                        double open = getDoubleField(bar, "o", "open");
+                        double high = getDoubleField(bar, "h", "high");
+                        double low = getDoubleField(bar, "l", "low");
+                        double close = getDoubleField(bar, "c", "close");
+                        long volume = getLongField(bar, "v", "volume");
+
+                        // Create candle
+                        Candle candle = new Candle(
+                            symbol,
+                            timestamp,
+                            open,
+                            high,
+                            low,
+                            close,
+                            volume
+                        );
+
+                        // Deliver to listener
+                        listener.onCandle(candle);
+                        newBarsCount++;
+
+                        // Update last timestamp
+                        if (lastTimestamp == null || timestamp.isAfter(lastTimestamp)) {
+                            lastBarTimestamp.put(symbol, timestamp);
+                        }
+
+                    } catch (Exception e) {
+                        logger.error("Error parsing bar: {}", e.getMessage());
+                    }
+                }
+
+                if (newBarsCount > 0) {
+                    logger.info("Delivered {} new candles for {}", newBarsCount, symbol);
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Error fetching bars for {}: {}", symbol, e.getMessage());
+        }
+    }
+
+    private double getDoubleField(JsonNode node, String... fieldNames) {
+        for (String name : fieldNames) {
+            if (node.has(name)) {
+                return node.get(name).asDouble();
+            }
+        }
+        return 0.0;
+    }
+
+    private long getLongField(JsonNode node, String... fieldNames) {
+        for (String name : fieldNames) {
+            if (node.has(name)) {
+                return node.get(name).asLong();
+            }
+        }
+        return 0L;
+    }
+
+    /**
+     * Start heartbeat to periodically refresh token if needed.
      */
     private void startHeartbeat() {
         heartbeatScheduler.scheduleAtFixedRate(() -> {
-            if (connected && marketDataWebSocket != null) {
-                marketDataWebSocket.send("{\"type\":\"heartbeat\"}");
+            if (connected) {
+                // Re-authenticate periodically to keep token fresh (every 30 minutes)
+                try {
+                    authenticate();
+                    logger.debug("Token refreshed successfully");
+                } catch (Exception e) {
+                    logger.error("Failed to refresh token: {}", e.getMessage());
+                }
             }
-            if (connected && orderWebSocket != null) {
-                orderWebSocket.send("{\"type\":\"heartbeat\"}");
-            }
-        }, 30, 30, TimeUnit.SECONDS);
+        }, 30, 30, TimeUnit.MINUTES);
     }
 
     /**
-     * Schedule reconnection attempt.
+     * Start polling for market data.
      */
-    private void scheduleReconnect() {
-        heartbeatScheduler.schedule(() -> {
-            try {
-                logger.info("Attempting to reconnect...");
-                connectMarketDataWebSocket();
-                // Resubscribe to all symbols
-                for (String symbol : marketDataListeners.keySet()) {
-                    sendSubscription(symbol);
-                }
-            } catch (Exception e) {
-                logger.error("Reconnect failed: {}", e.getMessage());
-                scheduleReconnect();
-            }
-        }, 5, TimeUnit.SECONDS);
+    private void startMarketDataPolling(String symbol, String contractId) {
+        logger.info("Starting market data polling for {} (contract: {}), interval: {}s",
+            symbol, contractId, POLL_INTERVAL_SECONDS);
+
+        // Initial fetch immediately
+        fetchBars(symbol, contractId);
+
+        // Schedule periodic polling
+        marketDataPoller.scheduleAtFixedRate(
+            () -> fetchBars(symbol, contractId),
+            POLL_INTERVAL_SECONDS,
+            POLL_INTERVAL_SECONDS,
+            TimeUnit.SECONDS
+        );
     }
 
     @Override
@@ -315,21 +453,22 @@ public class TopstepConnector implements TradingConnector {
 
         connected = false;
 
-        // Close WebSockets
-        if (marketDataWebSocket != null) {
-            marketDataWebSocket.close(1000, "Disconnecting");
-        }
-        if (orderWebSocket != null) {
-            orderWebSocket.close(1000, "Disconnecting");
-        }
-
-        // Shutdown heartbeat
+        // Shutdown schedulers
+        marketDataPoller.shutdown();
         heartbeatScheduler.shutdown();
+
+        try {
+            marketDataPoller.awaitTermination(5, TimeUnit.SECONDS);
+            heartbeatScheduler.awaitTermination(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
 
         // Clear state
         marketDataListeners.clear();
         orderListeners.clear();
-        candleAggregators.clear();
+        symbolToContractId.clear();
+        lastBarTimestamp.clear();
 
         logger.info("Disconnected from Topstep");
     }
@@ -344,24 +483,15 @@ public class TopstepConnector implements TradingConnector {
         logger.info("Subscribing to market data for: {}", symbol);
 
         marketDataListeners.put(symbol, listener);
-        candleAggregators.put(symbol, new CandleAggregator(symbol, 60)); // 1-minute candles
 
-        sendSubscription(symbol);
-    }
-
-    private void sendSubscription(String symbol) {
-        if (marketDataWebSocket != null) {
-            try {
-                String subMessage = objectMapper.writeValueAsString(Map.of(
-                    "type", "subscribe",
-                    "symbol", symbol,
-                    "dataType", "candle",
-                    "interval", "1min"
-                ));
-                marketDataWebSocket.send(subMessage);
-            } catch (Exception e) {
-                logger.error("Failed to send subscription: {}", e.getMessage());
-            }
+        // Search for contract ID and start polling
+        try {
+            String contractId = searchContract(symbol);
+            symbolToContractId.put(symbol, contractId);
+            startMarketDataPolling(symbol, contractId);
+        } catch (Exception e) {
+            logger.error("Failed to subscribe to market data for {}: {}", symbol, e.getMessage());
+            listener.onError(symbol, e);
         }
     }
 
@@ -370,19 +500,10 @@ public class TopstepConnector implements TradingConnector {
         logger.info("Unsubscribing from market data for: {}", symbol);
 
         marketDataListeners.remove(symbol);
-        candleAggregators.remove(symbol);
+        symbolToContractId.remove(symbol);
+        lastBarTimestamp.remove(symbol);
 
-        if (marketDataWebSocket != null) {
-            try {
-                String unsubMessage = objectMapper.writeValueAsString(Map.of(
-                    "type", "unsubscribe",
-                    "symbol", symbol
-                ));
-                marketDataWebSocket.send(unsubMessage);
-            } catch (Exception e) {
-                logger.error("Failed to send unsubscription: {}", e.getMessage());
-            }
-        }
+        // Note: The poller will stop processing this symbol since listener is removed
     }
 
     @Override
@@ -390,25 +511,37 @@ public class TopstepConnector implements TradingConnector {
         logger.info("Submitting order: {} {} {} @ {}",
             order.getSide(), order.getQuantity(), order.getSymbol(), order.getPrice());
 
+        // Get contract ID for symbol
+        String contractId = symbolToContractId.get(order.getSymbol());
+        if (contractId == null) {
+            contractId = searchContract(order.getSymbol());
+            symbolToContractId.put(order.getSymbol(), contractId);
+        }
+
+        // Get account ID (numeric)
+        String numericAccountId = getNumericAccountId();
+
         // Generate order ID
-        String orderId = "ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-        order.setOrderId(orderId);
+        String clientOrderId = "ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        order.setOrderId(clientOrderId);
 
         // Register listener
-        orderListeners.put(orderId, listener);
+        orderListeners.put(clientOrderId, listener);
 
-        // Build order request
-        String orderUrl = apiUrl + "/orders";
-        String orderBody = objectMapper.writeValueAsString(Map.of(
-            "clientOrderId", orderId,
-            "accountId", accountId,
-            "symbol", order.getSymbol(),
-            "side", order.getSide().toString(),
-            "type", order.getType().toString(),
-            "quantity", order.getQuantity(),
-            "price", order.getPrice(),
-            "timeInForce", "DAY"
-        ));
+        // Build order request for TopstepX
+        String orderUrl = apiUrl + "/Order/place";
+
+        Map<String, Object> orderMap = new HashMap<>();
+        orderMap.put("accountId", Integer.parseInt(numericAccountId));
+        orderMap.put("contractId", contractId);
+        orderMap.put("type", order.getType() == OrderType.MARKET ? 1 : 2); // 1=Market, 2=Limit
+        orderMap.put("side", order.getSide() == OrderSide.BUY ? 1 : 2); // 1=Buy, 2=Sell
+        orderMap.put("size", order.getQuantity());
+        if (order.getType() == OrderType.LIMIT && order.getLimitPrice() != null) {
+            orderMap.put("limitPrice", order.getLimitPrice());
+        }
+
+        String orderBody = objectMapper.writeValueAsString(orderMap);
 
         Request request = new Request.Builder()
             .url(orderUrl)
@@ -419,26 +552,75 @@ public class TopstepConnector implements TradingConnector {
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 String body = response.body() != null ? response.body().string() : "No body";
-                orderListeners.remove(orderId);
+                orderListeners.remove(clientOrderId);
                 throw new IOException("Order submission failed: " + response.code() + " - " + body);
             }
 
             String responseBody = response.body().string();
+            logger.info("Order response: {}", responseBody);
             JsonNode json = objectMapper.readTree(responseBody);
 
-            // Get server-assigned order ID if different
+            // Get server order ID
+            String serverId = clientOrderId;
             if (json.has("orderId")) {
-                String serverOrderId = json.get("orderId").asText();
-                if (!serverOrderId.equals(orderId)) {
-                    orderListeners.remove(orderId);
-                    orderListeners.put(serverOrderId, listener);
-                    order.setOrderId(serverOrderId);
-                    orderId = serverOrderId;
+                serverId = json.get("orderId").asText();
+                if (!serverId.equals(clientOrderId)) {
+                    orderListeners.remove(clientOrderId);
+                    orderListeners.put(serverId, listener);
+                    order.setOrderId(serverId);
+                }
+            } else if (json.has("id")) {
+                serverId = json.get("id").asText();
+                orderListeners.remove(clientOrderId);
+                orderListeners.put(serverId, listener);
+                order.setOrderId(serverId);
+            }
+
+            logger.info("Order submitted successfully: {}", serverId);
+
+            // Notify listener of submission
+            listener.onOrderSubmitted(order);
+
+            return serverId;
+        }
+    }
+
+    /**
+     * Get the numeric account ID from the TopstepX account.
+     */
+    private String getNumericAccountId() throws Exception {
+        String accountUrl = apiUrl + "/Account/search";
+        String requestBody = objectMapper.writeValueAsString(Map.of(
+            "onlyActiveAccounts", true
+        ));
+
+        Request request = new Request.Builder()
+            .url(accountUrl)
+            .header("Authorization", "Bearer " + authToken)
+            .post(RequestBody.create(requestBody, MediaType.parse("application/json")))
+            .build();
+
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw new IOException("Failed to get account: " + response.code());
+            }
+
+            String responseBody = response.body().string();
+            JsonNode json = objectMapper.readTree(responseBody);
+            JsonNode accounts = json.has("accounts") ? json.get("accounts") : json;
+
+            if (accounts.isArray() && accounts.size() > 0) {
+                for (JsonNode account : accounts) {
+                    String accName = account.has("name") ? account.get("name").asText() : "";
+                    if (accName.contains(accountId) || accountId.contains(accName) || accounts.size() == 1) {
+                        if (account.has("id")) {
+                            return account.get("id").asText();
+                        }
+                    }
                 }
             }
 
-            logger.info("Order submitted successfully: {}", orderId);
-            return orderId;
+            throw new IOException("Could not find numeric account ID");
         }
     }
 
@@ -446,12 +628,15 @@ public class TopstepConnector implements TradingConnector {
     public void cancelOrder(String orderId) throws Exception {
         logger.info("Cancelling order: {}", orderId);
 
-        String cancelUrl = apiUrl + "/orders/" + orderId + "/cancel";
+        String cancelUrl = apiUrl + "/Order/cancel";
+        String cancelBody = objectMapper.writeValueAsString(Map.of(
+            "orderId", Long.parseLong(orderId)
+        ));
 
         Request request = new Request.Builder()
             .url(cancelUrl)
             .header("Authorization", "Bearer " + authToken)
-            .post(RequestBody.create("", MediaType.parse("application/json")))
+            .post(RequestBody.create(cancelBody, MediaType.parse("application/json")))
             .build();
 
         try (Response response = httpClient.newCall(request).execute()) {
@@ -461,6 +646,19 @@ public class TopstepConnector implements TradingConnector {
             }
 
             logger.info("Order cancelled successfully: {}", orderId);
+
+            // Notify listener
+            OrderListener listener = orderListeners.remove(orderId);
+            if (listener != null) {
+                Order dummyOrder = Order.builder()
+                    .orderId(orderId)
+                    .symbol("UNKNOWN")
+                    .side(OrderSide.BUY)
+                    .type(OrderType.MARKET)
+                    .quantity(0)
+                    .build();
+                listener.onOrderCanceled(dummyOrder);
+            }
         }
     }
 
@@ -468,7 +666,6 @@ public class TopstepConnector implements TradingConnector {
     public double getAccountBalance() throws Exception {
         logger.info("Fetching account balance...");
 
-        // TopstepX uses POST /api/Account/search to get account info
         String accountUrl = apiUrl + "/Account/search";
         String requestBody = objectMapper.writeValueAsString(Map.of(
             "onlyActiveAccounts", true
@@ -490,31 +687,23 @@ public class TopstepConnector implements TradingConnector {
             logger.debug("Account response: {}", responseBody);
             JsonNode json = objectMapper.readTree(responseBody);
 
-            // TopstepX returns { "accounts": [...], "success": true }
             double balance = 0;
             JsonNode accountsArray = json.has("accounts") ? json.get("accounts") : json;
 
             if (accountsArray.isArray()) {
                 for (JsonNode account : accountsArray) {
-                    // Try to match by account ID or just use first active account
                     String accId = account.has("id") ? account.get("id").asText() : "";
                     String accName = account.has("name") ? account.get("name").asText() : "";
 
-                    // Check if this is our account (by ID or name containing our ID)
                     if (accId.equals(accountId) || accName.contains(accountId) ||
                         accountId.contains(accId) || accountId.contains(accName) || accountsArray.size() == 1) {
 
-                        // Try different field names for balance
                         if (account.has("balance")) {
                             balance = account.get("balance").asDouble();
                         } else if (account.has("accountBalance")) {
                             balance = account.get("accountBalance").asDouble();
                         } else if (account.has("equity")) {
                             balance = account.get("equity").asDouble();
-                        } else if (account.has("availableCash")) {
-                            balance = account.get("availableCash").asDouble();
-                        } else if (account.has("cash")) {
-                            balance = account.get("cash").asDouble();
                         }
 
                         if (balance > 0) {
@@ -523,20 +712,11 @@ public class TopstepConnector implements TradingConnector {
                         }
                     }
                 }
-            } else {
-                // Single object response
-                if (json.has("balance")) {
-                    balance = json.get("balance").asDouble();
-                } else if (json.has("accountBalance")) {
-                    balance = json.get("accountBalance").asDouble();
-                } else if (json.has("equity")) {
-                    balance = json.get("equity").asDouble();
-                }
             }
 
             if (balance == 0) {
-                logger.warn("Could not find balance in response, using default: {}", responseBody);
-                balance = 50000; // Default for evaluation accounts
+                logger.warn("Could not find balance in response, using default");
+                balance = 50000;
             }
 
             logger.info("Account balance: ${}", String.format("%.2f", balance));
@@ -547,56 +727,5 @@ public class TopstepConnector implements TradingConnector {
     @Override
     public String getName() {
         return "TopstepConnector";
-    }
-
-    /**
-     * Helper class to aggregate ticks into candles.
-     */
-    private static class CandleAggregator {
-        private final String symbol;
-        private final int intervalSeconds;
-
-        private Instant currentBarStart;
-        private double open, high, low, close;
-        private long volume;
-
-        public CandleAggregator(String symbol, int intervalSeconds) {
-            this.symbol = symbol;
-            this.intervalSeconds = intervalSeconds;
-        }
-
-        public synchronized Candle addTick(double price, int tickVolume) {
-            Instant now = Instant.now();
-            long barStartEpoch = (now.getEpochSecond() / intervalSeconds) * intervalSeconds;
-            Instant barStart = Instant.ofEpochSecond(barStartEpoch);
-
-            // Check if we're in a new bar
-            if (currentBarStart == null || !barStart.equals(currentBarStart)) {
-                Candle completedCandle = null;
-
-                // Complete previous candle if exists
-                if (currentBarStart != null) {
-                    completedCandle = new Candle(symbol, currentBarStart, open, high, low, close, volume);
-                }
-
-                // Start new candle
-                currentBarStart = barStart;
-                open = price;
-                high = price;
-                low = price;
-                close = price;
-                volume = tickVolume;
-
-                return completedCandle;
-            } else {
-                // Update current candle
-                high = Math.max(high, price);
-                low = Math.min(low, price);
-                close = price;
-                volume += tickVolume;
-
-                return null;
-            }
-        }
     }
 }
