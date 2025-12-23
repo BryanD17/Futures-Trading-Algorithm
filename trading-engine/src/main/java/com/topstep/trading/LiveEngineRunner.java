@@ -37,8 +37,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public class LiveEngineRunner {
 
-    private static final String DEFAULT_SYMBOL = "ES";
-    private static final String SMT_SYMBOL = "NQ";
+    private static final String DEFAULT_SYMBOL = "NQ";
+    private static final String SMT_SYMBOL = "ES";
 
     // Flatten-by time (3:55 PM ET - 5 minutes before futures close)
     private static final LocalTime FLATTEN_BY_TIME = LocalTime.of(15, 55);
@@ -163,11 +163,11 @@ public class LiveEngineRunner {
             );
             EngineFacade.getInstance().setLiveRunner(this);
 
-            // Subscribe to market data for primary symbol (ES)
+            // Subscribe to market data for primary symbol (NQ) - this is what we trade
             connector.subscribeMarketData(DEFAULT_SYMBOL, this::onMarketData);
-            System.out.println("✓ Subscribed to market data for " + DEFAULT_SYMBOL);
+            System.out.println("✓ Subscribed to market data for " + DEFAULT_SYMBOL + " (TRADING)");
 
-            // Subscribe to market data for SMT symbol (NQ) - used for divergence detection
+            // Subscribe to market data for SMT symbol (ES) - used for divergence detection
             connector.subscribeMarketData(SMT_SYMBOL, this::onMarketData);
             System.out.println("✓ Subscribed to market data for " + SMT_SYMBOL + " (SMT)");
 
