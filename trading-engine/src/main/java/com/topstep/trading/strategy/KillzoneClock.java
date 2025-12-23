@@ -44,7 +44,7 @@ public class KillzoneClock {
     }
 
     /**
-     * Get the killzone session name, or null if not in a killzone.
+     * Get the killzone session name, or "REGULAR_SESSION" if not in a killzone.
      */
     public String getKillzoneName(Instant instant) {
         ZonedDateTime nyTime = instant.atZone(newYorkZone);
@@ -55,7 +55,7 @@ public class KillzoneClock {
         } else if (isInNyPmKillzone(time)) {
             return "NY_PM_KILLZONE";
         }
-        return null;
+        return "REGULAR_SESSION";
     }
 
     /**
