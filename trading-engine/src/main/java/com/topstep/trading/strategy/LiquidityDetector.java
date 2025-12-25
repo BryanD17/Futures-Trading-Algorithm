@@ -59,7 +59,6 @@ public class LiquidityDetector {
 
         int size = primaryCandles.size();
         Candle latest = primaryCandles.get(size - 1);
-        Candle prev = primaryCandles.get(size - 2);
 
         // Find recent swing high (liquidity pool)
         double recentHigh = primaryCandles.stream()

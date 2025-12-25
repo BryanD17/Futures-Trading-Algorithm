@@ -47,6 +47,7 @@ public class IctStructureDetector {
 
     /**
      * Detect swing highs and lows in the recent candles.
+     * Tracks the MOST RECENT swing points (not the extreme values).
      */
     private void detectSwingPoints() {
         if (candles.size() < 3) {
@@ -54,6 +55,7 @@ public class IctStructureDetector {
         }
 
         // Look at recent candles to find swing points
+        // Iterate forward so the most recent swing point is found last and stored
         int size = candles.size();
 
         // Check for swing high (middle candle higher than neighbors)
@@ -63,17 +65,15 @@ public class IctStructureDetector {
             Candle next = candles.get(i + 1);
 
             // Swing high: current high is higher than both neighbors
+            // Store the most recent swing (not requiring it to be higher than previous)
             if (curr.getHigh() > prev.getHigh() && curr.getHigh() > next.getHigh()) {
-                if (lastSwingHigh == null || curr.getHigh() > lastSwingHigh) {
-                    lastSwingHigh = curr.getHigh();
-                }
+                lastSwingHigh = curr.getHigh();
             }
 
             // Swing low: current low is lower than both neighbors
+            // Store the most recent swing (not requiring it to be lower than previous)
             if (curr.getLow() < prev.getLow() && curr.getLow() < next.getLow()) {
-                if (lastSwingLow == null || curr.getLow() < lastSwingLow) {
-                    lastSwingLow = curr.getLow();
-                }
+                lastSwingLow = curr.getLow();
             }
         }
     }
