@@ -41,6 +41,7 @@ public class TopstepConnector implements TradingConnector {
     private final String username;
     private final String apiKey;
     private final String accountId;
+    private final boolean useLiveData;  // true for LIVE trading, false for SIM data
 
     // HTTP client
     private final OkHttpClient httpClient;
@@ -65,10 +66,19 @@ public class TopstepConnector implements TradingConnector {
      * Create a TopstepConnector with credentials.
      */
     public TopstepConnector(String apiUrl, String username, String apiKey, String accountId) {
+        this(apiUrl, username, apiKey, accountId, true);  // Default to LIVE data
+    }
+
+    /**
+     * Create a TopstepConnector with credentials and data mode.
+     * @param useLiveData true for real market data (LIVE), false for simulated data
+     */
+    public TopstepConnector(String apiUrl, String username, String apiKey, String accountId, boolean useLiveData) {
         this.apiUrl = apiUrl.endsWith("/api") ? apiUrl : apiUrl + "/api";
         this.username = username;
         this.apiKey = apiKey;
         this.accountId = accountId;
+        this.useLiveData = useLiveData;
 
         this.httpClient = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -78,7 +88,7 @@ public class TopstepConnector implements TradingConnector {
 
         this.objectMapper = new ObjectMapper();
 
-        logger.info("TopstepConnector initialized for account: {}", accountId);
+        logger.info("TopstepConnector initialized for account: {} (live data: {})", accountId, useLiveData);
     }
 
     /**
@@ -168,7 +178,7 @@ public class TopstepConnector implements TradingConnector {
         String searchUrl = apiUrl + "/Contract/search";
         String searchBody = objectMapper.writeValueAsString(Map.of(
             "searchText", symbol,
-            "live", false
+            "live", useLiveData
         ));
 
         Request request = new Request.Builder()
@@ -288,7 +298,7 @@ public class TopstepConnector implements TradingConnector {
 
             Map<String, Object> requestMap = new HashMap<>();
             requestMap.put("contractId", contractId);
-            requestMap.put("live", false);
+            requestMap.put("live", useLiveData);
             requestMap.put("startTime", startTime.format(DateTimeFormatter.ISO_INSTANT));
             requestMap.put("endTime", endTime.format(DateTimeFormatter.ISO_INSTANT));
             requestMap.put("unit", BAR_UNIT_MINUTE);
@@ -534,9 +544,10 @@ public class TopstepConnector implements TradingConnector {
         Map<String, Object> orderMap = new HashMap<>();
         orderMap.put("accountId", Integer.parseInt(numericAccountId));
         orderMap.put("contractId", contractId);
-        orderMap.put("type", order.getType() == OrderType.MARKET ? 1 : 2); // 1=Market, 2=Limit
-        // TopstepX uses string values for side: "Buy" or "Sell"
-        orderMap.put("side", order.getSide() == OrderSide.BUY ? "Buy" : "Sell");
+        // ProjectX Gateway: type 1=Limit, 2=Market (per official docs)
+        orderMap.put("type", order.getType() == OrderType.MARKET ? 2 : 1);
+        // ProjectX Gateway: side 0=Buy/Bid, 1=Sell/Ask (per official docs)
+        orderMap.put("side", order.getSide() == OrderSide.BUY ? 0 : 1);
         orderMap.put("size", order.getQuantity());
         if (order.getType() == OrderType.LIMIT && order.getLimitPrice() != null) {
             orderMap.put("limitPrice", order.getLimitPrice());
@@ -639,9 +650,19 @@ public class TopstepConnector implements TradingConnector {
     public void cancelOrder(String orderId) throws Exception {
         logger.info("Cancelling order: {}", orderId);
 
+        // Parse order ID - must be numeric (server-assigned ID)
+        long numericOrderId;
+        try {
+            numericOrderId = Long.parseLong(orderId);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                "Cannot cancel order with non-numeric ID: " + orderId +
+                ". Use the server-assigned order ID from submitOrder response.");
+        }
+
         String cancelUrl = apiUrl + "/Order/cancel";
         String cancelBody = objectMapper.writeValueAsString(Map.of(
-            "orderId", Long.parseLong(orderId)
+            "orderId", numericOrderId
         ));
 
         Request request = new Request.Builder()
