@@ -279,6 +279,21 @@ public class ExecutionEngine {
     }
 
     /**
+     * Get all active (pending) orders.
+     * Used for cancellation during shutdown.
+     */
+    public Map<String, Order> getActiveOrders() {
+        return new HashMap<>(activeOrders);
+    }
+
+    /**
+     * Remove an order from active orders (e.g., after cancellation).
+     */
+    public void removeOrder(String symbol) {
+        activeOrders.remove(symbol);
+    }
+
+    /**
      * Helper class to store stop and target levels.
      */
     private static class OrderLevels {

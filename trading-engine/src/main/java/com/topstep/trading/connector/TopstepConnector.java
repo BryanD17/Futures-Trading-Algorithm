@@ -660,10 +660,15 @@ public class TopstepConnector implements TradingConnector {
                 ". Use the server-assigned order ID from submitOrder response.");
         }
 
+        // Get numeric account ID (required by ProjectX Gateway)
+        String numericAccountId = getNumericAccountId();
+
         String cancelUrl = apiUrl + "/Order/cancel";
-        String cancelBody = objectMapper.writeValueAsString(Map.of(
-            "orderId", numericOrderId
-        ));
+        // ProjectX Gateway requires both accountId and orderId for cancellation
+        Map<String, Object> cancelMap = new HashMap<>();
+        cancelMap.put("accountId", Integer.parseInt(numericAccountId));
+        cancelMap.put("orderId", numericOrderId);
+        String cancelBody = objectMapper.writeValueAsString(cancelMap);
 
         Request request = new Request.Builder()
             .url(cancelUrl)
