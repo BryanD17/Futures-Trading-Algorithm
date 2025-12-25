@@ -175,6 +175,45 @@ public class FvgDetector {
     }
 
     /**
+     * Find the nearest unfilled FVG to a given price within a max distance.
+     * This is less strict than IFVG but still provides an entry zone.
+     */
+    public FairValueGap findNearestUnfilledFvg(double price, boolean bullish, double maxDistance) {
+        return fvgs.stream()
+                .filter(fvg -> !fvg.isFilled())
+                .filter(fvg -> fvg.isBullish() == bullish)
+                .filter(fvg -> Math.abs(fvg.getMidpoint() - price) <= maxDistance)
+                .min((a, b) -> {
+                    double distA = Math.abs(a.getMidpoint() - price);
+                    double distB = Math.abs(b.getMidpoint() - price);
+                    return Double.compare(distA, distB);
+                })
+                .orElse(null);
+    }
+
+    /**
+     * Find any FVG (filled or unfilled) near price for entry zone reference.
+     */
+    public FairValueGap findNearestFvg(double price, boolean bullish, double maxDistance) {
+        return fvgs.stream()
+                .filter(fvg -> fvg.isBullish() == bullish)
+                .filter(fvg -> Math.abs(fvg.getMidpoint() - price) <= maxDistance)
+                .min((a, b) -> {
+                    double distA = Math.abs(a.getMidpoint() - price);
+                    double distB = Math.abs(b.getMidpoint() - price);
+                    return Double.compare(distA, distB);
+                })
+                .orElse(null);
+    }
+
+    /**
+     * Check if any FVG exists in the given direction.
+     */
+    public boolean hasFvgInDirection(boolean bullish) {
+        return fvgs.stream().anyMatch(fvg -> fvg.isBullish() == bullish);
+    }
+
+    /**
      * Reset the detector.
      */
     public void reset() {
