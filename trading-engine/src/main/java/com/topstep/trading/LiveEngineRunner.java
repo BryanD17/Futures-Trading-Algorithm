@@ -13,6 +13,7 @@ import com.topstep.trading.strategy.IctHighConfluenceStrategy;
 import com.topstep.trading.strategy.TradingStrategy;
 
 import java.time.*;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -426,6 +427,33 @@ public class LiveEngineRunner {
     }
 
     /**
+     * Cancel all pending orders.
+     */
+    private void cancelPendingOrders() {
+        Map<String, Order> activeOrders = executionEngine.getActiveOrders();
+
+        if (activeOrders.isEmpty()) {
+            System.out.println("  No pending orders to cancel");
+            return;
+        }
+
+        System.out.println("  Found " + activeOrders.size() + " pending order(s) to cancel");
+
+        for (Order order : activeOrders.values()) {
+            try {
+                String orderId = order.getOrderId();
+                if (orderId != null && !orderId.isEmpty()) {
+                    connector.cancelOrder(orderId);
+                    executionEngine.removeOrder(order.getSymbol());
+                    System.out.println("  ✓ Cancelled order: " + orderId + " (" + order.getSymbol() + ")");
+                }
+            } catch (Exception e) {
+                System.err.println("  ❌ Failed to cancel order " + order.getOrderId() + ": " + e.getMessage());
+            }
+        }
+    }
+
+    /**
      * Pause the LIVE engine.
      */
     public void pause() {
@@ -492,7 +520,7 @@ public class LiveEngineRunner {
 
         // Cancel pending orders
         System.out.println("Cancelling pending orders...");
-        // TODO: Implement order cancellation
+        cancelPendingOrders();
 
         // Flatten positions if any remain
         if (!accountState.getPositions().isEmpty()) {
