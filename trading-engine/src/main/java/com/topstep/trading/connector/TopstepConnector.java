@@ -327,8 +327,9 @@ public class TopstepConnector implements TradingConnector {
 
                 // Extract bars array
                 JsonNode bars = json.has("bars") ? json.get("bars") : json;
-                if (!bars.isArray()) {
-                    logger.warn("No bars array in response");
+                if (!bars.isArray() || bars.isEmpty()) {
+                    // This is normal during market closures (weekends, holidays, pre-market)
+                    logger.debug("No market data available for {} - market may be closed", symbol);
                     return;
                 }
 
