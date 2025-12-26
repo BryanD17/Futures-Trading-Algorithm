@@ -41,9 +41,9 @@ public class LiveEngineRunner {
     private static final String DEFAULT_SYMBOL = "NQ";
     private static final String SMT_SYMBOL = "ES";
 
-    // Flatten-by time (3:55 PM ET - 5 minutes before futures close)
-    private static final LocalTime FLATTEN_BY_TIME = LocalTime.of(15, 55);
-    private static final ZoneId ET_ZONE = ZoneId.of("America/New_York");
+    // Timezone for Topstep (Chicago - Central Time)
+    // Note: Topstep requires being flat by 3:10 PM CT
+    private static final ZoneId CT_ZONE = ZoneId.of("America/Chicago");
 
     private final TradingConnector connector;
     private final AccountState accountState;
@@ -95,7 +95,7 @@ public class LiveEngineRunner {
         System.out.println("  Daily Loss Limit: $" + String.format("%.2f", riskLimits.getDailyLossLimit()));
         System.out.println("  Max Loss Limit: $" + String.format("%.2f", riskLimits.getMaxLossLimit()));
         System.out.println("  Profit Target: $" + String.format("%.2f", riskLimits.getProfitTarget()));
-        System.out.println("  Flatten-by Time: " + FLATTEN_BY_TIME + " ET");
+        System.out.println("  Flatten-by Time: " + riskLimits.getFlattenByTime() + " CT");
     }
 
     /**
@@ -296,25 +296,30 @@ public class LiveEngineRunner {
 
     /**
      * Check if it's time to flatten all positions.
+     * Uses Central Time (CT) since Topstep is Chicago-based.
      */
     private void checkFlattenByTime() {
         if (!running.get() || flatteningPositions.get()) {
             return;
         }
 
-        LocalTime now = LocalTime.now(ET_ZONE);
-        DayOfWeek day = LocalDate.now(ET_ZONE).getDayOfWeek();
+        LocalTime now = LocalTime.now(CT_ZONE);
+        DayOfWeek day = LocalDate.now(CT_ZONE).getDayOfWeek();
 
         // Only check on trading days
         if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) {
             return;
         }
 
-        // Check if we need to flatten
-        if (now.isAfter(FLATTEN_BY_TIME) && now.isBefore(LocalTime.of(16, 0))) {
+        // Get flatten-by time from risk limits (in CT)
+        LocalTime flattenByTime = riskLimits.getFlattenByTime();
+
+        // Check if we need to flatten (between flattenByTime and 4 PM CT)
+        if (now.isAfter(flattenByTime) && now.isBefore(LocalTime.of(16, 0))) {
             if (!accountState.getPositions().isEmpty()) {
                 System.out.println("\n⏰ FLATTEN-BY-TIME TRIGGERED!");
-                System.out.println("  Time: " + now + " ET");
+                System.out.println("  Time: " + now + " CT");
+                System.out.println("  Flatten Limit: " + flattenByTime + " CT");
                 System.out.println("  Flattening all positions...");
                 flattenAllPositions("Flatten-by-time");
             }
