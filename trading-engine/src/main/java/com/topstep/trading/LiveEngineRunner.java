@@ -3,6 +3,7 @@ package com.topstep.trading;
 import com.topstep.trading.connector.TradingConnector;
 import com.topstep.trading.connector.TopstepConnector;
 import com.topstep.trading.domain.*;
+import com.topstep.trading.engine.MultiInstrumentEngine;
 import com.topstep.trading.event.EventBus;
 import com.topstep.trading.event.StrategySignalEvent;
 import com.topstep.trading.execution.ExecutionEngine;
@@ -16,6 +17,8 @@ import com.topstep.trading.strategy.TradingStrategy;
 
 import java.time.*;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -32,6 +35,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * - Max loss limit monitoring
  * - Automatic position flattening on limit breach
  *
+ * MULTI-INSTRUMENT AUTO-SWITCHING:
+ * - Automatically switches between instruments based on optimal trading sessions
+ * - NQ/ES during NY session, Gold during London, Yen during Asian session
+ * - Instrument-specific ICT strategy parameters (OTE zones, reliability rates)
+ * - Shared correlation tracker for cross-instrument SMT divergence
+ *
  * IMPORTANT: Before running LIVE:
  * 1. Set environment variables for credentials
  * 2. Test extensively in SIM mode
@@ -43,6 +52,9 @@ public class LiveEngineRunner {
     private static final String DEFAULT_SYMBOL = "NQ";
     private static final String SMT_SYMBOL = "ES";
 
+    // Multi-instrument mode flag
+    private static final boolean MULTI_INSTRUMENT_MODE = true;
+
     // Timezone for Topstep (Chicago - Central Time)
     // Note: Topstep requires being flat by 3:10 PM CT
     private static final ZoneId CT_ZONE = ZoneId.of("America/Chicago");
@@ -52,10 +64,14 @@ public class LiveEngineRunner {
     private final RiskLimits riskLimits;
     private final PropFirmRiskEngine riskEngine;
     private final ExecutionEngine executionEngine;
-    private final TradingStrategy strategy;
+    private final TradingStrategy strategy;           // Fallback single-instrument strategy
+    private final MultiInstrumentEngine multiEngine;  // Multi-instrument auto-switching engine
     private final EventBus eventBus;
     private final DefaultStrategyContext strategyContext;
     private final ScheduledExecutorService scheduler;
+
+    // Track subscribed symbols for multi-instrument mode
+    private final Set<String> subscribedSymbols = ConcurrentHashMap.newKeySet();
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
@@ -83,9 +99,30 @@ public class LiveEngineRunner {
         this.executionEngine = new ExecutionEngine(accountState);
         this.riskEngine = new PropFirmRiskEngine();
         this.eventBus = new EventBus();
-        this.strategy = new IctHighConfluenceStrategy(DEFAULT_SYMBOL, SMT_SYMBOL, eventBus);
         this.strategyContext = new DefaultStrategyContext(accountState);
         this.scheduler = Executors.newScheduledThreadPool(2);
+
+        // Initialize single-instrument fallback strategy
+        this.strategy = new IctHighConfluenceStrategy(DEFAULT_SYMBOL, SMT_SYMBOL, eventBus);
+
+        // Initialize multi-instrument engine for auto-switching
+        if (MULTI_INSTRUMENT_MODE) {
+            this.multiEngine = new MultiInstrumentEngine(connector, eventBus, strategyContext);
+            // Set up subscription callback to manage connector subscriptions
+            this.multiEngine.setSubscriptionCallback(new MultiInstrumentEngine.SubscriptionCallback() {
+                @Override
+                public void onSubscribe(String symbol) {
+                    subscribeToMarketData(symbol);
+                }
+
+                @Override
+                public void onUnsubscribe(String symbol) {
+                    unsubscribeFromMarketData(symbol);
+                }
+            });
+        } else {
+            this.multiEngine = null;
+        }
 
         // Subscribe to strategy signals
         eventBus.subscribe(StrategySignalEvent.class, this::handleStrategySignal);
@@ -103,6 +140,44 @@ public class LiveEngineRunner {
         System.out.println("  - Partial Profit Taking: 50% at 1R, trail remaining");
         System.out.println("  - ICT Concepts: Breaker Blocks, Mitigation, Power of 3");
         System.out.println("  - Volatility Sizing: ATR-based position adjustment");
+        if (MULTI_INSTRUMENT_MODE) {
+            System.out.println("  - MULTI-INSTRUMENT MODE: Auto-switching based on session");
+            System.out.println("    • NY Session: NQ, ES");
+            System.out.println("    • London Session: GC (Gold), 6E (Euro), CL (Oil)");
+            System.out.println("    • Asian Session: 6J (Yen)");
+        }
+    }
+
+    /**
+     * Subscribe to market data for a symbol via the connector.
+     */
+    private void subscribeToMarketData(String symbol) {
+        if (subscribedSymbols.contains(symbol)) {
+            return;
+        }
+        try {
+            connector.subscribeMarketData(symbol, this::onMarketData);
+            subscribedSymbols.add(symbol);
+            System.out.println("✓ Subscribed to market data for " + symbol);
+        } catch (Exception e) {
+            System.err.println("❌ Failed to subscribe to " + symbol + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Unsubscribe from market data for a symbol.
+     */
+    private void unsubscribeFromMarketData(String symbol) {
+        if (!subscribedSymbols.contains(symbol)) {
+            return;
+        }
+        try {
+            connector.unsubscribeMarketData(symbol);
+            subscribedSymbols.remove(symbol);
+            System.out.println("✓ Unsubscribed from market data for " + symbol);
+        } catch (Exception e) {
+            System.err.println("❌ Failed to unsubscribe from " + symbol + ": " + e.getMessage());
+        }
     }
 
     /**
@@ -156,10 +231,6 @@ public class LiveEngineRunner {
             accountState.setCurrentBalance(liveBalance);
             System.out.println("✓ Account balance synced: $" + String.format("%.2f", liveBalance));
 
-            // Initialize strategy
-            strategy.initialize();
-            System.out.println("✓ Strategy initialized");
-
             // Start the EventBus to process trading signals
             eventBus.start();
             System.out.println("✓ EventBus started");
@@ -175,13 +246,29 @@ public class LiveEngineRunner {
             );
             EngineFacade.getInstance().setLiveRunner(this);
 
-            // Subscribe to market data for primary symbol (NQ) - this is what we trade
-            connector.subscribeMarketData(DEFAULT_SYMBOL, this::onMarketData);
-            System.out.println("✓ Subscribed to market data for " + DEFAULT_SYMBOL + " (TRADING)");
+            // Start the appropriate engine mode
+            if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
+                // Multi-instrument mode: start the auto-switching engine
+                System.out.println("\n[MULTI-INSTRUMENT] Starting auto-switching engine...");
+                multiEngine.start();
+                System.out.println("✓ Multi-instrument engine started");
+                System.out.println("✓ Session-based auto-switching ACTIVE");
+                System.out.println("  Current: " + multiEngine.getSessionInfo());
+            } else {
+                // Single-instrument mode: initialize strategy and subscribe directly
+                strategy.initialize();
+                System.out.println("✓ Strategy initialized (single-instrument mode)");
 
-            // Subscribe to market data for SMT symbol (ES) - used for divergence detection
-            connector.subscribeMarketData(SMT_SYMBOL, this::onMarketData);
-            System.out.println("✓ Subscribed to market data for " + SMT_SYMBOL + " (SMT)");
+                // Subscribe to market data for primary symbol (NQ) - this is what we trade
+                connector.subscribeMarketData(DEFAULT_SYMBOL, this::onMarketData);
+                subscribedSymbols.add(DEFAULT_SYMBOL);
+                System.out.println("✓ Subscribed to market data for " + DEFAULT_SYMBOL + " (TRADING)");
+
+                // Subscribe to market data for SMT symbol (ES) - used for divergence detection
+                connector.subscribeMarketData(SMT_SYMBOL, this::onMarketData);
+                subscribedSymbols.add(SMT_SYMBOL);
+                System.out.println("✓ Subscribed to market data for " + SMT_SYMBOL + " (SMT)");
+            }
 
             // Schedule flatten-by-time check (every minute)
             scheduler.scheduleAtFixedRate(
@@ -213,6 +300,7 @@ public class LiveEngineRunner {
 
     /**
      * Handle incoming market data candle.
+     * Routes to either multi-instrument engine or single-instrument strategy.
      */
     private void onMarketData(Candle candle) {
         if (!running.get() || killSwitchActive.get()) {
@@ -226,13 +314,19 @@ public class LiveEngineRunner {
             // Process through execution engine first (fills, stops, targets)
             executionEngine.onNewCandle(candle);
 
-            // Feed to strategy (only if not paused and not flattening)
+            // Feed to appropriate engine (only if not paused and not flattening)
             if (!paused.get() && !flatteningPositions.get()) {
-                strategy.onCandle(candle, strategyContext);
+                if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
+                    // Multi-instrument mode: route to auto-switching engine
+                    multiEngine.onMarketData(candle);
+                } else {
+                    // Single-instrument mode: use fallback strategy
+                    strategy.onCandle(candle, strategyContext);
+                }
             }
 
         } catch (Exception e) {
-            System.err.println("Error processing candle: " + e.getMessage());
+            System.err.println("Error processing candle for " + candle.getSymbol() + ": " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -558,8 +652,12 @@ public class LiveEngineRunner {
         // Stop EventBus
         eventBus.stop();
 
-        // Shutdown strategy
-        strategy.shutdown();
+        // Shutdown multi-instrument engine or single strategy
+        if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
+            multiEngine.stop();
+        } else {
+            strategy.shutdown();
+        }
 
         // Disconnect from market
         connector.disconnect();
@@ -617,6 +715,40 @@ public class LiveEngineRunner {
     public boolean isRunning() { return running.get(); }
     public boolean isPaused() { return paused.get(); }
     public boolean isKillSwitchActive() { return killSwitchActive.get(); }
+    public MultiInstrumentEngine getMultiEngine() { return multiEngine; }
+    public boolean isMultiInstrumentMode() { return MULTI_INSTRUMENT_MODE && multiEngine != null; }
+
+    /**
+     * Get current multi-instrument status.
+     */
+    public String getMultiInstrumentStatus() {
+        if (!isMultiInstrumentMode()) {
+            return "Single-instrument mode (NQ/ES only)";
+        }
+        return multiEngine.getDetailedStatus();
+    }
+
+    /**
+     * Print current session and active instruments.
+     */
+    public void printSessionStatus() {
+        if (isMultiInstrumentMode()) {
+            System.out.println(multiEngine.getDetailedStatus());
+        } else {
+            System.out.println("Single-instrument mode: Trading " + DEFAULT_SYMBOL + " with " + SMT_SYMBOL + " for SMT");
+        }
+    }
+
+    /**
+     * Force switch to specific instruments (manual override).
+     */
+    public void forceInstruments(String... symbols) {
+        if (!isMultiInstrumentMode()) {
+            System.out.println("Cannot force instruments in single-instrument mode");
+            return;
+        }
+        multiEngine.forceActivateInstruments(symbols);
+    }
 
     /**
      * Main entry point for LIVE mode.
