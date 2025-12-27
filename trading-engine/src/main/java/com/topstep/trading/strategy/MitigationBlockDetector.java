@@ -76,7 +76,7 @@ public class MitigationBlockDetector {
                     ob.isBullish(),
                     ob.getHigh(),
                     ob.getLow(),
-                    ob.getCreatedAt(),
+                    ob.getTimestamp(),
                     "OB"
                 );
                 mitigationBlocks.add(mitBlock);
