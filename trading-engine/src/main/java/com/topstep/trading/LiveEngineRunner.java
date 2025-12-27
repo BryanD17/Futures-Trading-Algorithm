@@ -10,6 +10,8 @@ import com.topstep.trading.risk.PropFirmRiskEngine;
 import com.topstep.trading.risk.RiskDecision;
 import com.topstep.trading.strategy.DefaultStrategyContext;
 import com.topstep.trading.strategy.IctHighConfluenceStrategy;
+import com.topstep.trading.strategy.SessionManager;
+import com.topstep.trading.strategy.TradeTier;
 import com.topstep.trading.strategy.TradingStrategy;
 
 import java.time.*;
@@ -96,6 +98,11 @@ public class LiveEngineRunner {
         System.out.println("  Max Loss Limit: $" + String.format("%.2f", riskLimits.getMaxLossLimit()));
         System.out.println("  Profit Target: $" + String.format("%.2f", riskLimits.getProfitTarget()));
         System.out.println("  Flatten-by Time: " + riskLimits.getFlattenByTime() + " CT");
+        System.out.println("\n  ENHANCED FEATURES:");
+        System.out.println("  - Tiered R:R: Tier 3 (1:4) | Tier 2 (1:2) | Tier 1 (1:1)");
+        System.out.println("  - Partial Profit Taking: 50% at 1R, trail remaining");
+        System.out.println("  - ICT Concepts: Breaker Blocks, Mitigation, Power of 3");
+        System.out.println("  - Volatility Sizing: ATR-based position adjustment");
     }
 
     /**
@@ -244,7 +251,8 @@ public class LiveEngineRunner {
 
         if (decision.isAllowed()) {
             System.out.println("\n✓ LIVE Signal APPROVED: " + signal.getReason());
-            System.out.println("  " + decision.getReason());
+            System.out.println("  Tier: " + signal.getTier() + " | R:R: 1:" + signal.getRiskRewardRatio());
+            System.out.println("  Quantity: " + signal.getQuantity() + " | " + decision.getReason());
 
             try {
                 // Submit order to live market via connector
@@ -256,8 +264,14 @@ public class LiveEngineRunner {
                 order.setOrderId(orderId);
                 System.out.println("  Order submitted: " + orderId);
 
-                // Also track in execution engine for stop/target management
-                executionEngine.submitOrder(order, signal.getStopPrice(), signal.getTargetPrice());
+                // Use enhanced order submission with tier and partial profit targets
+                executionEngine.submitOrderEnhanced(
+                    order,
+                    signal.getStopPrice(),
+                    signal.getTargetPrice(),
+                    signal.getTier(),
+                    signal.getPartialProfitTargets()
+                );
 
                 printAccountStatus();
 

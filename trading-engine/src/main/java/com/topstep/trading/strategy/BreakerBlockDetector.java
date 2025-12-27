@@ -1,0 +1,198 @@
+package com.topstep.trading.strategy;
+
+import com.topstep.trading.domain.Candle;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
+
+/**
+ * Detects Breaker Blocks - failed Order Blocks that flip to the opposite S/R.
+ *
+ * A Breaker Block forms when:
+ * 1. An Order Block is established
+ * 2. Price returns to test the OB
+ * 3. Price breaks through the OB (the OB fails)
+ * 4. The broken OB now acts as the OPPOSITE type of S/R
+ *
+ * Bullish OB breaks down -> Bearish Breaker (now resistance)
+ * Bearish OB breaks up -> Bullish Breaker (now support)
+ *
+ * Breaker Blocks are HIGHER PROBABILITY because:
+ * - They represent trapped traders
+ * - Institutions use them for repositioning
+ * - Clear invalidation levels
+ */
+public class BreakerBlockDetector {
+
+    private final List<BreakerBlock> breakerBlocks;
+    private final OrderBlockDetector orderBlockDetector;
+    private final int maxBreakerBlocks;
+
+    public BreakerBlockDetector(OrderBlockDetector orderBlockDetector, int maxBreakerBlocks) {
+        this.orderBlockDetector = orderBlockDetector;
+        this.maxBreakerBlocks = maxBreakerBlocks;
+        this.breakerBlocks = new ArrayList<>();
+    }
+
+    /**
+     * Update with a new candle - check for OB failures and breaker formations.
+     */
+    public void update(Candle candle) {
+        // Check for Order Block failures (which become Breaker Blocks)
+        checkForBreakerFormation(candle);
+
+        // Update existing breaker blocks
+        updateBreakerBlocks(candle);
+    }
+
+    /**
+     * Check if any Order Blocks have failed and should become Breaker Blocks.
+     */
+    private void checkForBreakerFormation(Candle candle) {
+        List<OrderBlock> validObs = orderBlockDetector.getValidOrderBlocks();
+
+        for (OrderBlock ob : validObs) {
+            // A breaker forms when price closes THROUGH the order block
+            // (not just wicks into it)
+
+            if (ob.isBullish()) {
+                // Bullish OB fails when price closes below its low
+                if (candle.getClose() < ob.getLow() && ob.isMitigated()) {
+                    // This bullish OB has failed -> becomes BEARISH breaker
+                    createBreakerBlock(ob, false, candle);
+                }
+            } else {
+                // Bearish OB fails when price closes above its high
+                if (candle.getClose() > ob.getHigh() && ob.isMitigated()) {
+                    // This bearish OB has failed -> becomes BULLISH breaker
+                    createBreakerBlock(ob, true, candle);
+                }
+            }
+        }
+    }
+
+    /**
+     * Create a new Breaker Block from a failed Order Block.
+     */
+    private void createBreakerBlock(OrderBlock failedOb, boolean bullishBreaker, Candle candle) {
+        // Check if we already have a breaker at this level
+        if (breakerExistsAtLevel(failedOb.getLow(), failedOb.getHigh())) {
+            return;
+        }
+
+        BreakerBlock breaker = new BreakerBlock(
+            bullishBreaker,
+            failedOb.getHigh(),
+            failedOb.getLow(),
+            candle.getTimestamp(),
+            failedOb
+        );
+
+        breakerBlocks.add(breaker);
+        System.out.println("[BREAKER_BLOCK] " + (bullishBreaker ? "BULLISH" : "BEARISH") +
+                          " Breaker formed from failed " + (failedOb.isBullish() ? "BULLISH" : "BEARISH") +
+                          " OB: " + breaker);
+
+        // Keep list within max size
+        while (breakerBlocks.size() > maxBreakerBlocks) {
+            breakerBlocks.remove(0);
+        }
+    }
+
+    /**
+     * Update existing breaker blocks based on current price.
+     */
+    private void updateBreakerBlocks(Candle candle) {
+        for (BreakerBlock breaker : breakerBlocks) {
+            if (breaker.isInvalidated()) {
+                continue;
+            }
+
+            // Check for mitigation (price returns to breaker zone)
+            if (!breaker.isMitigated()) {
+                if (breaker.containsPrice(candle.getClose()) ||
+                    breaker.containsPrice(candle.getLow()) ||
+                    breaker.containsPrice(candle.getHigh())) {
+                    breaker.setMitigated(true);
+                    System.out.println("[BREAKER_BLOCK] Breaker mitigated: " + breaker);
+                }
+            }
+
+            // Check for invalidation (price breaks through the breaker in wrong direction)
+            if (breaker.isBullish()) {
+                // Bullish breaker invalidated if price closes below its low
+                if (candle.getClose() < breaker.getLow()) {
+                    breaker.setInvalidated(true);
+                    System.out.println("[BREAKER_BLOCK] BULLISH Breaker invalidated: " + breaker);
+                }
+            } else {
+                // Bearish breaker invalidated if price closes above its high
+                if (candle.getClose() > breaker.getHigh()) {
+                    breaker.setInvalidated(true);
+                    System.out.println("[BREAKER_BLOCK] BEARISH Breaker invalidated: " + breaker);
+                }
+            }
+        }
+    }
+
+    /**
+     * Check if a breaker already exists at this price level.
+     */
+    private boolean breakerExistsAtLevel(double low, double high) {
+        return breakerBlocks.stream()
+                .anyMatch(b -> Math.abs(b.getLow() - low) < 2.0 &&
+                              Math.abs(b.getHigh() - high) < 2.0);
+    }
+
+    /**
+     * Find the nearest valid breaker block to current price.
+     */
+    public BreakerBlock findNearestBreaker(double price, boolean bullish, double maxDistance) {
+        return breakerBlocks.stream()
+                .filter(b -> b.isBullish() == bullish)
+                .filter(BreakerBlock::isValid)
+                .filter(b -> Math.abs(b.getMidpoint() - price) <= maxDistance)
+                .min((a, b) -> {
+                    double distA = Math.abs(a.getMidpoint() - price);
+                    double distB = Math.abs(b.getMidpoint() - price);
+                    return Double.compare(distA, distB);
+                })
+                .orElse(null);
+    }
+
+    /**
+     * Find a breaker block that price is currently at.
+     */
+    public BreakerBlock findBreakerAtPrice(double price, boolean bullish) {
+        return breakerBlocks.stream()
+                .filter(b -> b.isBullish() == bullish)
+                .filter(BreakerBlock::isValid)
+                .filter(b -> b.containsPrice(price))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * Check if there are any valid breaker blocks.
+     */
+    public boolean hasValidBreaker(boolean bullish) {
+        return breakerBlocks.stream()
+                .anyMatch(b -> b.isBullish() == bullish && b.isValid());
+    }
+
+    /**
+     * Get all valid breaker blocks.
+     */
+    public List<BreakerBlock> getValidBreakerBlocks() {
+        return breakerBlocks.stream()
+                .filter(BreakerBlock::isValid)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Reset the detector.
+     */
+    public void reset() {
+        breakerBlocks.clear();
+    }
+}

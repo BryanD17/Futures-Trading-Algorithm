@@ -1,6 +1,7 @@
 package com.topstep.trading.execution;
 
 import com.topstep.trading.domain.*;
+import com.topstep.trading.strategy.TradeTier;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -11,16 +12,20 @@ import java.util.Map;
 /**
  * ExecutionEngine handles order execution and position management.
  *
+ * Enhanced features:
+ * - Partial profit taking at R-multiples
+ * - Trailing stops after hitting profit targets
+ * - Dynamic R:R based on trade tier
+ * - Position scaling
+ *
  * In backtest mode:
  * - Simulates fills based on candle prices
  * - Updates positions and PnL
  * - Tracks completed trades
  *
- * In live/sim mode (future):
- * - Will delegate to TradingConnector
- * - React to real fill notifications
- *
- * Week 2: Focuses on backtest mode with simulated fills.
+ * In live/sim mode:
+ * - Delegates to TradingConnector
+ * - Reacts to real fill notifications
  */
 public class ExecutionEngine {
 
@@ -29,8 +34,8 @@ public class ExecutionEngine {
     private final Map<String, Double> tickValues;
     private final List<Trade> completedTrades;
 
-    // Track stop/target levels for each position
-    private final Map<String, OrderLevels> orderLevels;
+    // Enhanced order management with partial profits and trailing stops
+    private final Map<String, EnhancedOrderLevels> orderLevels;
 
     public ExecutionEngine(AccountState accountState) {
         this.accountState = accountState;
@@ -53,12 +58,18 @@ public class ExecutionEngine {
         tickValues.put("MNQ", 0.50);   // Micro E-mini NASDAQ 100
         tickValues.put("YM", 5.00);    // E-mini Dow
         tickValues.put("RTY", 5.00);   // E-mini Russell 2000
+        tickValues.put("GC", 10.00);   // Gold
+        tickValues.put("SI", 5.00);    // Silver
+        tickValues.put("CL", 10.00);   // Crude Oil
+        tickValues.put("NG", 10.00);   // Natural Gas
+        tickValues.put("6E", 6.25);    // Euro FX
+        tickValues.put("6J", 6.25);    // Japanese Yen
+        tickValues.put("6B", 6.25);    // British Pound
+        tickValues.put("6C", 10.00);   // Canadian Dollar
     }
 
     /**
      * Accept a new approved order for execution.
-     *
-     * @param order Approved order from risk engine
      */
     public void submitOrder(Order order) {
         if (order == null) {
@@ -70,27 +81,53 @@ public class ExecutionEngine {
     }
 
     /**
-     * Submit order with stop and target levels.
-     *
-     * @param order Approved order
-     * @param stopPrice Stop loss price
-     * @param targetPrice Target profit price
+     * Submit order with stop and target levels (original method for compatibility).
      */
     public void submitOrder(Order order, double stopPrice, double targetPrice) {
         submitOrder(order);
 
-        OrderLevels levels = new OrderLevels(stopPrice, targetPrice);
+        EnhancedOrderLevels levels = new EnhancedOrderLevels(
+            order.getLimitPrice(),
+            stopPrice,
+            targetPrice,
+            order.getSide(),
+            order.getQuantity(),
+            TradeTier.TIER_2  // Default tier
+        );
+        orderLevels.put(order.getSymbol(), levels);
+    }
+
+    /**
+     * Submit order with enhanced levels including tier and partial profit targets.
+     */
+    public void submitOrderEnhanced(Order order, double stopPrice, double targetPrice,
+                                    TradeTier tier, double[][] partialProfitTargets) {
+        submitOrder(order);
+
+        EnhancedOrderLevels levels = new EnhancedOrderLevels(
+            order.getLimitPrice(),
+            stopPrice,
+            targetPrice,
+            order.getSide(),
+            order.getQuantity(),
+            tier,
+            partialProfitTargets
+        );
         orderLevels.put(order.getSymbol(), levels);
     }
 
     /**
      * Process a new candle - check for fills and update PnL.
-     *
-     * @param candle New market candle
      */
     public void onNewCandle(Candle candle) {
         // Check for entry fills
         checkOrderFills(candle);
+
+        // Check for partial profit targets
+        checkPartialProfitTargets(candle);
+
+        // Check for trailing stop updates
+        updateTrailingStops(candle);
 
         // Check for stop/target hits on existing positions
         checkStopTargetHits(candle);
@@ -108,7 +145,6 @@ public class ExecutionEngine {
             return;
         }
 
-        // Simple fill logic: if candle touches limit price, fill at limit price
         boolean filled = false;
         double fillPrice = 0;
 
@@ -133,6 +169,111 @@ public class ExecutionEngine {
     }
 
     /**
+     * Check and execute partial profit targets.
+     */
+    private void checkPartialProfitTargets(Candle candle) {
+        if (!accountState.hasPosition(candle.getSymbol())) {
+            return;
+        }
+
+        Position position = accountState.getPosition(candle.getSymbol());
+        EnhancedOrderLevels levels = orderLevels.get(candle.getSymbol());
+
+        if (position == null || levels == null) {
+            return;
+        }
+
+        // Check each partial target
+        for (PartialTarget target : levels.partialTargets) {
+            if (target.executed) {
+                continue;
+            }
+
+            boolean targetHit = false;
+            double exitPrice = target.price;
+
+            if (levels.isLong) {
+                if (candle.getHigh() >= target.price) {
+                    targetHit = true;
+                }
+            } else {
+                if (candle.getLow() <= target.price) {
+                    targetHit = true;
+                }
+            }
+
+            if (targetHit) {
+                // Calculate quantity to close
+                int closeQty = (int) Math.ceil(levels.originalQuantity * target.percentage);
+                closeQty = Math.min(closeQty, Math.abs(position.getQuantity()));
+
+                if (closeQty > 0) {
+                    executePartialClose(position, closeQty, exitPrice, candle.getTimestamp(),
+                            "Partial profit at " + target.rMultiple + "R");
+                    target.executed = true;
+
+                    // Move stop to breakeven after first partial
+                    if (target.rMultiple >= 1.0 && !levels.stopMovedToBreakeven) {
+                        moveStopToBreakeven(levels);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Update trailing stops based on price movement.
+     */
+    private void updateTrailingStops(Candle candle) {
+        if (!accountState.hasPosition(candle.getSymbol())) {
+            return;
+        }
+
+        EnhancedOrderLevels levels = orderLevels.get(candle.getSymbol());
+        if (levels == null || !levels.trailingStopActive) {
+            return;
+        }
+
+        // Trail stop at configured distance
+        if (levels.isLong) {
+            // For long positions, trail below price
+            double newStop = candle.getHigh() - levels.trailingDistance;
+            if (newStop > levels.currentStopPrice) {
+                levels.currentStopPrice = newStop;
+                System.out.println("TRAILING STOP: " + candle.getSymbol() +
+                        " stop moved to " + String.format("%.2f", newStop));
+            }
+        } else {
+            // For short positions, trail above price
+            double newStop = candle.getLow() + levels.trailingDistance;
+            if (newStop < levels.currentStopPrice) {
+                levels.currentStopPrice = newStop;
+                System.out.println("TRAILING STOP: " + candle.getSymbol() +
+                        " stop moved to " + String.format("%.2f", newStop));
+            }
+        }
+    }
+
+    /**
+     * Move stop to breakeven (+ small buffer for commissions).
+     */
+    private void moveStopToBreakeven(EnhancedOrderLevels levels) {
+        double buffer = levels.riskDistance * 0.1;  // 10% of risk as buffer
+
+        if (levels.isLong) {
+            levels.currentStopPrice = levels.entryPrice + buffer;
+        } else {
+            levels.currentStopPrice = levels.entryPrice - buffer;
+        }
+
+        levels.stopMovedToBreakeven = true;
+        levels.trailingStopActive = true;
+        levels.trailingDistance = levels.riskDistance;  // Trail at 1R distance initially
+
+        System.out.println("BREAKEVEN: Stop moved to " + String.format("%.2f", levels.currentStopPrice));
+    }
+
+    /**
      * Check if stop or target is hit for existing positions.
      */
     private void checkStopTargetHits(Candle candle) {
@@ -141,7 +282,7 @@ public class ExecutionEngine {
         }
 
         Position position = accountState.getPosition(candle.getSymbol());
-        OrderLevels levels = orderLevels.get(candle.getSymbol());
+        EnhancedOrderLevels levels = orderLevels.get(candle.getSymbol());
 
         if (position == null || levels == null) {
             return;
@@ -151,31 +292,31 @@ public class ExecutionEngine {
         double exitPrice = 0;
         String exitReason = "";
 
-        if (position.isLong()) {
+        if (levels.isLong) {
             // Check stop hit (below stop price)
-            if (candle.getLow() <= levels.stopPrice) {
+            if (candle.getLow() <= levels.currentStopPrice) {
                 exitTriggered = true;
-                exitPrice = levels.stopPrice;
-                exitReason = "Stop hit";
+                exitPrice = levels.currentStopPrice;
+                exitReason = levels.stopMovedToBreakeven ? "Breakeven stop hit" : "Stop hit";
             }
-            // Check target hit (above target price)
-            else if (candle.getHigh() >= levels.targetPrice) {
+            // Check final target hit (above target price)
+            else if (candle.getHigh() >= levels.finalTargetPrice) {
                 exitTriggered = true;
-                exitPrice = levels.targetPrice;
-                exitReason = "Target hit";
+                exitPrice = levels.finalTargetPrice;
+                exitReason = "Final target hit";
             }
-        } else if (position.isShort()) {
+        } else {
             // Check stop hit (above stop price)
-            if (candle.getHigh() >= levels.stopPrice) {
+            if (candle.getHigh() >= levels.currentStopPrice) {
                 exitTriggered = true;
-                exitPrice = levels.stopPrice;
-                exitReason = "Stop hit";
+                exitPrice = levels.currentStopPrice;
+                exitReason = levels.stopMovedToBreakeven ? "Breakeven stop hit" : "Stop hit";
             }
-            // Check target hit (below target price)
-            else if (candle.getLow() <= levels.targetPrice) {
+            // Check final target hit (below target price)
+            else if (candle.getLow() <= levels.finalTargetPrice) {
                 exitTriggered = true;
-                exitPrice = levels.targetPrice;
-                exitReason = "Target hit";
+                exitPrice = levels.finalTargetPrice;
+                exitReason = "Final target hit";
             }
         }
 
@@ -189,15 +330,58 @@ public class ExecutionEngine {
      * Execute a fill for an order.
      */
     private void executeFill(Order order, double fillPrice, Instant fillTime) {
-        // Record fill in order
         order.recordFill(order.getQuantity(), fillPrice);
 
         // Update position in account
         int positionDelta = order.getSide() == OrderSide.BUY ? order.getQuantity() : -order.getQuantity();
         accountState.updatePosition(order.getSymbol(), positionDelta, fillPrice);
 
+        // Update entry price in order levels
+        EnhancedOrderLevels levels = orderLevels.get(order.getSymbol());
+        if (levels != null) {
+            levels.entryPrice = fillPrice;
+            levels.riskDistance = Math.abs(fillPrice - levels.originalStopPrice);
+
+            // Calculate partial target prices based on R-multiples
+            if (levels.partialTargets != null) {
+                for (PartialTarget target : levels.partialTargets) {
+                    if (levels.isLong) {
+                        target.price = fillPrice + (levels.riskDistance * target.rMultiple);
+                    } else {
+                        target.price = fillPrice - (levels.riskDistance * target.rMultiple);
+                    }
+                }
+            }
+        }
+
         System.out.println("ENTRY FILLED: " + order.getSymbol() + " " + order.getSide() +
                           " " + order.getQuantity() + " @ " + String.format("%.2f", fillPrice));
+    }
+
+    /**
+     * Execute a partial close of position.
+     */
+    private void executePartialClose(Position position, int quantity, double exitPrice,
+                                     Instant exitTime, String reason) {
+        String symbol = position.getSymbol();
+        double entryPrice = position.getAvgEntryPrice();
+        OrderSide side = position.getSide();
+
+        // Calculate realized PnL for this partial
+        double tickValue = tickValues.getOrDefault(symbol, 12.50);
+        double priceDiff = position.isLong() ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
+        double realizedPnl = priceDiff * quantity * tickValue;
+
+        // Update account with realized PnL
+        accountState.recordRealizedPnL(realizedPnl);
+
+        // Update position quantity
+        int closeQty = position.isLong() ? -quantity : quantity;
+        accountState.updatePosition(symbol, closeQty, exitPrice);
+
+        System.out.println("PARTIAL EXIT: " + symbol + " " + quantity + " @ " +
+                          String.format("%.2f", exitPrice) + " | PnL: $" +
+                          String.format("%.2f", realizedPnl) + " | " + reason);
     }
 
     /**
@@ -280,7 +464,6 @@ public class ExecutionEngine {
 
     /**
      * Get all active (pending) orders.
-     * Used for cancellation during shutdown.
      */
     public Map<String, Order> getActiveOrders() {
         return new HashMap<>(activeOrders);
@@ -294,15 +477,89 @@ public class ExecutionEngine {
     }
 
     /**
-     * Helper class to store stop and target levels.
+     * Get current order levels for a symbol.
      */
-    private static class OrderLevels {
-        final double stopPrice;
-        final double targetPrice;
+    public EnhancedOrderLevels getOrderLevels(String symbol) {
+        return orderLevels.get(symbol);
+    }
 
-        OrderLevels(double stopPrice, double targetPrice) {
-            this.stopPrice = stopPrice;
-            this.targetPrice = targetPrice;
+    /**
+     * Enhanced order levels with partial profit and trailing stop support.
+     */
+    public static class EnhancedOrderLevels {
+        double entryPrice;
+        double originalStopPrice;
+        double currentStopPrice;
+        double finalTargetPrice;
+        double riskDistance;
+        double trailingDistance;
+        boolean isLong;
+        int originalQuantity;
+        TradeTier tier;
+        List<PartialTarget> partialTargets;
+        boolean stopMovedToBreakeven;
+        boolean trailingStopActive;
+
+        public EnhancedOrderLevels(double entryPrice, double stopPrice, double targetPrice,
+                                   OrderSide side, int quantity, TradeTier tier) {
+            this(entryPrice, stopPrice, targetPrice, side, quantity, tier, tier.getPartialProfitTargets());
+        }
+
+        public EnhancedOrderLevels(double entryPrice, double stopPrice, double targetPrice,
+                                   OrderSide side, int quantity, TradeTier tier,
+                                   double[][] partialProfitTargets) {
+            this.entryPrice = entryPrice;
+            this.originalStopPrice = stopPrice;
+            this.currentStopPrice = stopPrice;
+            this.finalTargetPrice = targetPrice;
+            this.isLong = (side == OrderSide.BUY);
+            this.originalQuantity = quantity;
+            this.tier = tier;
+            this.riskDistance = Math.abs(entryPrice - stopPrice);
+            this.stopMovedToBreakeven = false;
+            this.trailingStopActive = false;
+            this.trailingDistance = riskDistance;
+
+            // Initialize partial targets
+            this.partialTargets = new ArrayList<>();
+            if (partialProfitTargets != null) {
+                for (double[] target : partialProfitTargets) {
+                    double rMultiple = target[0];
+                    double percentage = target[1];
+                    double price;
+
+                    if (isLong) {
+                        price = entryPrice + (riskDistance * rMultiple);
+                    } else {
+                        price = entryPrice - (riskDistance * rMultiple);
+                    }
+
+                    partialTargets.add(new PartialTarget(rMultiple, percentage, price));
+                }
+            }
+        }
+
+        // Getters
+        public double getCurrentStopPrice() { return currentStopPrice; }
+        public double getFinalTargetPrice() { return finalTargetPrice; }
+        public boolean isStopMovedToBreakeven() { return stopMovedToBreakeven; }
+        public TradeTier getTier() { return tier; }
+    }
+
+    /**
+     * Represents a partial profit target.
+     */
+    private static class PartialTarget {
+        final double rMultiple;
+        final double percentage;
+        double price;
+        boolean executed;
+
+        PartialTarget(double rMultiple, double percentage, double price) {
+            this.rMultiple = rMultiple;
+            this.percentage = percentage;
+            this.price = price;
+            this.executed = false;
         }
     }
 }
