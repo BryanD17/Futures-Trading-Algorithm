@@ -40,4 +40,12 @@ public interface StrategyContext {
      * Get the total number of open contracts across all positions.
      */
     int getTotalContracts();
+
+    /**
+     * Set the current time (for simulation/live updates).
+     * Default implementation does nothing.
+     */
+    default void setCurrentTime(Instant time) {
+        // Default no-op - implementations should override
+    }
 }
