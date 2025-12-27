@@ -412,9 +412,9 @@ public class TradingRiskManager {
         sb.append("\nActive Positions (").append(activePositions.size())
                 .append("/").append(MAX_TOTAL_POSITIONS).append("):\n");
         for (PositionInfo pos : activePositions.values()) {
-            sb.append("  - ").append(pos.symbol).append(": ")
-                    .append(pos.isBullish ? "LONG" : "SHORT")
-                    .append(" at ").append(pos.entryPrice).append("\n");
+            sb.append("  - ").append(pos.getSymbol()).append(": ")
+                    .append(pos.isBullish() ? "LONG" : "SHORT")
+                    .append(" at ").append(pos.getEntryPrice()).append("\n");
         }
 
         sb.append("\nBlocked Instruments: ")
