@@ -2,7 +2,12 @@ package com.topstep.trading.engine;
 
 import com.topstep.trading.connector.TradingConnector;
 import com.topstep.trading.domain.Candle;
+import com.topstep.trading.domain.OrderSide;
 import com.topstep.trading.event.EventBus;
+import com.topstep.trading.event.StrategySignalEvent;
+import com.topstep.trading.risk.MarketConditionFilter;
+import com.topstep.trading.risk.RiskDecision;
+import com.topstep.trading.risk.TradingRiskManager;
 import com.topstep.trading.strategy.*;
 
 import java.time.Instant;
@@ -10,20 +15,20 @@ import java.util.*;
 import java.util.concurrent.*;
 
 /**
- * Multi-Instrument Trading Engine with automatic session-based switching.
+ * Multi-Instrument Trading Engine with HYBRID SIMULTANEOUS TRADING.
  *
- * This engine manages multiple instrument-specific strategies and automatically:
- * 1. Detects the current trading session (Sydney, Tokyo, London, NY)
- * 2. Activates/deactivates instruments based on their optimal sessions
- * 3. Manages market data subscriptions for active instruments
- * 4. Routes market data to the appropriate strategies
+ * ENHANCED MODEL: Instead of session-based switching, this engine now supports
+ * simultaneous trading across ALL instruments with intelligent safeguards.
  *
- * Session-Instrument Mapping:
- * - SYDNEY: Minimal trading (low volatility)
- * - TOKYO: 6J (Yen)
- * - LONDON: GC (Gold), 6E (Euro), CL (Oil)
- * - NEW_YORK: NQ, ES
- * - LONDON_NY_OVERLAP: All of the above (highest volatility)
+ * Key Features:
+ * 1. ALL INSTRUMENTS ALWAYS ACTIVE - No longer switching between instruments
+ * 2. Session-based TIER BONUS - Trading in preferred session upgrades tier
+ * 3. POSITION LIMITS - Max 1 per instrument, max 3 total
+ * 4. CORRELATION PROTECTION - No conflicting positions (e.g., long NQ + short ES)
+ * 5. CONSECUTIVE LOSS TRACKING - Stop instrument after 2 consecutive losses
+ * 6. MARKET CONDITION FILTERING - Skip trades in unfavorable conditions
+ *
+ * This hybrid model INCREASES weekly trades while MAINTAINING win percentage.
  */
 public class MultiInstrumentEngine {
 
@@ -35,15 +40,22 @@ public class MultiInstrumentEngine {
     // Shared correlation tracker across all instruments for SMT divergence
     private final CorrelationTracker sharedCorrelationTracker;
 
+    // Risk management
+    private final TradingRiskManager riskManager;
+    private final MarketConditionFilter conditionFilter;
+
     // Instrument profiles and their strategies
     private final Map<String, InstrumentProfile> profiles;
     private final Map<String, InstrumentSpecificStrategy> strategies;
 
-    // Currently active instruments (subscribed to market data)
+    // Active instruments - NOW ALL INSTRUMENTS ARE ALWAYS ACTIVE
     private final Set<String> activeSymbols;
     private final Set<String> subscribedSymbols;
 
-    // Session tracking
+    // ATR calculators per instrument for condition filtering
+    private final Map<String, ATRCalculator> atrCalculators;
+
+    // Session tracking (for tier bonus, not for switching)
     private SessionManager.Session lastPrimarySession;
     private Instant lastSessionCheck;
     private static final long SESSION_CHECK_INTERVAL_MS = 60000; // Check every minute
@@ -51,6 +63,9 @@ public class MultiInstrumentEngine {
     // Scheduler for periodic session checks
     private final ScheduledExecutorService sessionMonitor;
     private volatile boolean running = false;
+
+    // Mode flag - true for hybrid simultaneous, false for session-switching
+    private boolean hybridMode = true;
 
     // Callback for subscription changes
     private SubscriptionCallback subscriptionCallback;
@@ -70,10 +85,15 @@ public class MultiInstrumentEngine {
         this.sessionManager = new SessionManager();
         this.sharedCorrelationTracker = new CorrelationTracker(50);
 
+        // Initialize risk management components
+        this.riskManager = new TradingRiskManager(context);
+        this.conditionFilter = new MarketConditionFilter();
+
         this.profiles = new ConcurrentHashMap<>();
         this.strategies = new ConcurrentHashMap<>();
         this.activeSymbols = ConcurrentHashMap.newKeySet();
         this.subscribedSymbols = ConcurrentHashMap.newKeySet();
+        this.atrCalculators = new ConcurrentHashMap<>();
 
         this.sessionMonitor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "SessionMonitor");
@@ -83,6 +103,69 @@ public class MultiInstrumentEngine {
 
         // Initialize all instrument profiles
         initializeProfiles();
+
+        // Subscribe to strategy signals for risk management
+        setupSignalInterception();
+    }
+
+    /**
+     * Setup signal interception for risk management.
+     * Intercepts signals before they reach execution engine.
+     */
+    private void setupSignalInterception() {
+        // Register as a handler for strategy signals to apply risk checks
+        eventBus.subscribe(StrategySignalEvent.class, this::handleStrategySignal);
+    }
+
+    /**
+     * Handle strategy signal with risk checks.
+     */
+    private void handleStrategySignal(StrategySignalEvent signal) {
+        String symbol = signal.getSymbol();
+
+        System.out.println("\n[HYBRID ENGINE] Processing signal: " + signal.getSignalType() +
+                " " + symbol + " " + signal.getSide());
+
+        // 1. Validate with TradingRiskManager
+        RiskDecision riskDecision = riskManager.validateSignal(signal);
+        if (!riskDecision.isApproved()) {
+            System.out.println("[HYBRID ENGINE] Signal REJECTED by risk manager: " +
+                    riskDecision.getReason());
+            return;  // Signal blocked, don't proceed
+        }
+
+        // 2. Check market conditions
+        InstrumentProfile profile = profiles.get(symbol);
+        ATRCalculator atr = atrCalculators.get(symbol);
+        if (profile != null) {
+            MarketConditionFilter.MarketCondition condition =
+                    conditionFilter.evaluate(strategyContext.getCurrentTime(), symbol, atr, profile);
+
+            if (!condition.shouldTrade()) {
+                System.out.println("[HYBRID ENGINE] Signal SKIPPED due to market conditions: " +
+                        condition.getRecommendation());
+                return;
+            }
+
+            // Log condition assessment
+            if (!condition.isOptimal()) {
+                System.out.println("[HYBRID ENGINE] Market condition: " + condition.getRecommendation() +
+                        " (size multiplier: " + String.format("%.0f%%", condition.getSizeMultiplier() * 100) + ")");
+            }
+        }
+
+        // 3. Apply session-based tier bonus
+        TradeTier baseTier = signal.getTier();
+        boolean isPreferredSession = isInstrumentInPreferredSession(symbol);
+        TradeTier adjustedTier = riskManager.applySessionBonus(symbol, baseTier, isPreferredSession);
+
+        // 4. Record position opened
+        boolean isBullish = signal.getSide() == OrderSide.BUY;
+        riskManager.recordPositionOpened(symbol, isBullish, signal.getEntryPrice());
+
+        System.out.println("[HYBRID ENGINE] Signal APPROVED: " + symbol +
+                " | Tier: " + baseTier + " -> " + adjustedTier +
+                " | Preferred Session: " + (isPreferredSession ? "YES" : "NO"));
     }
 
     /**
@@ -111,23 +194,36 @@ public class MultiInstrumentEngine {
      */
     public void start() {
         if (running) {
-            System.out.println("[MultiInstrument] Engine already running");
+            System.out.println("[HYBRID ENGINE] Engine already running");
             return;
         }
 
         running = true;
         System.out.println("\n" + "=".repeat(60));
-        System.out.println("MULTI-INSTRUMENT ENGINE STARTING");
+        System.out.println("HYBRID SIMULTANEOUS TRADING ENGINE STARTING");
         System.out.println("=".repeat(60));
 
-        // Perform initial session check and activate instruments
-        checkAndUpdateSession(Instant.now());
+        if (hybridMode) {
+            // HYBRID MODE: Activate ALL instruments at once
+            System.out.println("[HYBRID ENGINE] Mode: SIMULTANEOUS TRADING");
+            System.out.println("[HYBRID ENGINE] All instruments always active");
+            System.out.println("[HYBRID ENGINE] Session-based tier bonuses enabled");
+            activateAllInstruments();
+        } else {
+            // Legacy mode: Session-based switching
+            System.out.println("[HYBRID ENGINE] Mode: SESSION-BASED SWITCHING");
+            checkAndUpdateSession(Instant.now());
+        }
 
-        // Schedule periodic session checks
+        // Schedule periodic session checks (for logging/tier bonus, not switching)
         sessionMonitor.scheduleAtFixedRate(
             () -> {
                 if (running) {
-                    checkAndUpdateSession(Instant.now());
+                    if (hybridMode) {
+                        logSessionStatus(Instant.now());
+                    } else {
+                        checkAndUpdateSession(Instant.now());
+                    }
                 }
             },
             SESSION_CHECK_INTERVAL_MS,
@@ -135,7 +231,86 @@ public class MultiInstrumentEngine {
             TimeUnit.MILLISECONDS
         );
 
-        System.out.println("[MultiInstrument] Engine started - monitoring sessions for auto-switching");
+        System.out.println("\n[HYBRID ENGINE] Safeguards enabled:");
+        System.out.println("  - Max 1 position per instrument");
+        System.out.println("  - Max 3 total positions");
+        System.out.println("  - Correlation conflict prevention");
+        System.out.println("  - Consecutive loss protection (2 max)");
+        System.out.println("  - Market condition filtering");
+        System.out.println("  - Session-based tier bonus");
+
+        System.out.println("\n[HYBRID ENGINE] Engine started successfully");
+    }
+
+    /**
+     * Activate ALL instruments for hybrid simultaneous trading.
+     */
+    private void activateAllInstruments() {
+        System.out.println("\n[HYBRID ENGINE] Activating all instruments:");
+
+        for (InstrumentProfile profile : profiles.values()) {
+            activateInstrument(profile.getSymbol());
+        }
+
+        System.out.println("\n[HYBRID ENGINE] Active instruments: " + activeSymbols);
+        System.out.println("[HYBRID ENGINE] Total active: " + activeSymbols.size());
+    }
+
+    /**
+     * Log current session status (for hybrid mode).
+     */
+    private void logSessionStatus(Instant now) {
+        SessionManager.Session currentSession = sessionManager.getPrimarySession(now);
+
+        // Only log on session change
+        if (currentSession != lastPrimarySession) {
+            String overlapType = sessionManager.getOverlapType(now);
+            System.out.println("\n[HYBRID ENGINE] Session update: " +
+                    (lastPrimarySession != null ? lastPrimarySession.getName() : "NONE") +
+                    " -> " + currentSession.getName());
+
+            if (!"SINGLE_SESSION".equals(overlapType)) {
+                System.out.println("[HYBRID ENGINE] Overlap: " + overlapType + " (tier bonus active for overlapping instruments)");
+            }
+
+            // Log which instruments get tier bonus in this session
+            StringBuilder preferredInstruments = new StringBuilder();
+            for (String symbol : activeSymbols) {
+                if (isInstrumentInPreferredSession(symbol)) {
+                    if (preferredInstruments.length() > 0) preferredInstruments.append(", ");
+                    preferredInstruments.append(symbol);
+                }
+            }
+            if (preferredInstruments.length() > 0) {
+                System.out.println("[HYBRID ENGINE] Tier bonus active for: " + preferredInstruments);
+            }
+
+            lastPrimarySession = currentSession;
+        }
+    }
+
+    /**
+     * Check if an instrument is in its preferred session.
+     */
+    private boolean isInstrumentInPreferredSession(String symbol) {
+        InstrumentProfile profile = profiles.get(symbol);
+        if (profile == null) return false;
+        return isInstrumentPreferredNow(profile, Instant.now());
+    }
+
+    /**
+     * Set hybrid mode on/off.
+     */
+    public void setHybridMode(boolean hybrid) {
+        this.hybridMode = hybrid;
+        System.out.println("[HYBRID ENGINE] Mode set to: " + (hybrid ? "SIMULTANEOUS" : "SESSION-SWITCHING"));
+    }
+
+    /**
+     * Check if hybrid mode is enabled.
+     */
+    public boolean isHybridMode() {
+        return hybridMode;
     }
 
     /**
@@ -284,7 +459,7 @@ public class MultiInstrumentEngine {
             return;
         }
 
-        System.out.println("[MultiInstrument] Activating instrument: " + symbol + " (" + profile.getName() + ")");
+        System.out.println("[HYBRID ENGINE] Activating: " + symbol + " (" + profile.getName() + ")");
 
         // Create strategy if not exists
         if (!strategies.containsKey(symbol)) {
@@ -293,6 +468,11 @@ public class MultiInstrumentEngine {
             );
             strategy.initialize();
             strategies.put(symbol, strategy);
+        }
+
+        // Create ATR calculator for this instrument (for market condition filtering)
+        if (!atrCalculators.containsKey(symbol)) {
+            atrCalculators.put(symbol, new ATRCalculator(14));
         }
 
         // Subscribe to market data
@@ -308,8 +488,8 @@ public class MultiInstrumentEngine {
 
         activeSymbols.add(symbol);
 
-        System.out.println("[MultiInstrument] Activated: " + symbol +
-                          " | Strategy: " + strategies.get(symbol).getName());
+        System.out.println("[HYBRID ENGINE] Activated: " + symbol +
+                          " | Primary Sessions: " + profile.getPrimaryKillzones());
     }
 
     /**
@@ -382,12 +562,23 @@ public class MultiInstrumentEngine {
         // Update shared correlation tracker for all candles
         sharedCorrelationTracker.update(candle);
 
+        // Update ATR calculator for this symbol
+        ATRCalculator atr = atrCalculators.get(symbol);
+        if (atr != null) {
+            atr.update(candle);
+        }
+
         // Update strategy context time
         strategyContext.setCurrentTime(candle.getTimestamp());
 
         // Route to primary strategy if this is an active trading instrument
         InstrumentSpecificStrategy strategy = strategies.get(symbol);
         if (strategy != null && activeSymbols.contains(symbol)) {
+            // Check if instrument is blocked by risk manager
+            if (riskManager.isInstrumentBlocked(symbol)) {
+                // Skip - instrument is blocked due to consecutive losses
+                return;
+            }
             strategy.onCandle(candle, strategyContext);
         }
 
@@ -438,32 +629,65 @@ public class MultiInstrumentEngine {
         Instant now = Instant.now();
         StringBuilder sb = new StringBuilder();
 
-        sb.append("\n").append("=".repeat(50)).append("\n");
-        sb.append("MULTI-INSTRUMENT ENGINE STATUS\n");
-        sb.append("=".repeat(50)).append("\n");
+        sb.append("\n").append("=".repeat(60)).append("\n");
+        sb.append("HYBRID SIMULTANEOUS TRADING ENGINE STATUS\n");
+        sb.append("=".repeat(60)).append("\n");
 
+        sb.append("Mode: ").append(hybridMode ? "SIMULTANEOUS" : "SESSION-SWITCHING").append("\n");
         sb.append("Session: ").append(sessionManager.getSessionInfo(now)).append("\n");
         sb.append("Volatility Multiplier: ").append(sessionManager.getVolatilityMultiplier(now)).append("x\n");
 
-        sb.append("\nActive Instruments:\n");
+        sb.append("\nActive Instruments (").append(activeSymbols.size()).append("):\n");
         for (String symbol : activeSymbols) {
             InstrumentSpecificStrategy strategy = strategies.get(symbol);
             if (strategy != null) {
                 InstrumentProfile profile = strategy.getProfile();
-                sb.append("  - ").append(symbol).append(": ").append(profile.getName());
+                boolean preferred = isInstrumentInPreferredSession(symbol);
+                boolean blocked = riskManager.isInstrumentBlocked(symbol);
+
+                sb.append("  ").append(symbol).append(": ").append(profile.getName());
+                sb.append(" | Session Bonus: ").append(preferred ? "YES" : "NO");
+                sb.append(" | Status: ").append(blocked ? "BLOCKED" : "ACTIVE");
+
                 TradeTier tier = strategy.getCurrentTier();
                 if (tier != null) {
                     sb.append(" | Last Tier: ").append(tier);
                 }
                 sb.append("\n");
             } else {
-                sb.append("  - ").append(symbol).append(": SMT Data Only\n");
+                sb.append("  ").append(symbol).append(": SMT Data Only\n");
             }
         }
 
         sb.append("\nSubscribed Symbols: ").append(subscribedSymbols).append("\n");
 
+        // Add risk manager status
+        sb.append(riskManager.getStatusSummary());
+
         return sb.toString();
+    }
+
+    /**
+     * Notify the engine that a position was closed.
+     * This updates the risk manager for consecutive loss/win tracking.
+     */
+    public void notifyPositionClosed(String symbol, double pnl) {
+        boolean isWin = pnl > 0;
+        riskManager.recordPositionClosed(symbol, pnl, isWin);
+    }
+
+    /**
+     * Get the risk manager.
+     */
+    public TradingRiskManager getRiskManager() {
+        return riskManager;
+    }
+
+    /**
+     * Get the market condition filter.
+     */
+    public MarketConditionFilter getConditionFilter() {
+        return conditionFilter;
     }
 
     /**
