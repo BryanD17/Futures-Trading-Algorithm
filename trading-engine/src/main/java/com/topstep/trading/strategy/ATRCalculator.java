@@ -97,6 +97,13 @@ public class ATRCalculator {
     }
 
     /**
+     * Alias for getAtr() - more descriptive name.
+     */
+    public double getCurrentAtr() {
+        return currentAtr;
+    }
+
+    /**
      * Check if ATR has been initialized (enough data).
      */
     public boolean isInitialized() {
