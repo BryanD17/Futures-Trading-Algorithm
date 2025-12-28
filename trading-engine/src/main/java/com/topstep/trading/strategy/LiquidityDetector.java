@@ -81,10 +81,10 @@ public class LiquidityDetector {
         }
 
         // Bullish sweep: price wicks below recent low and then closes back above it
-        // OR price touches within 0.5 points of recent low and bounces (less strict)
-        double sweepTolerance = 2.0; // Allow 2 points tolerance for NQ
+        // CRITICAL: Tightened tolerance to avoid false positives (was 2.0, now 0.5)
+        double sweepTolerance = 0.5; // Strict tolerance for accurate sweep detection
         boolean bullishSweep = (latest.getLow() < recentLow && latest.getClose() > recentLow) ||
-                               (latest.getLow() <= recentLow + sweepTolerance && latest.getClose() > recentLow + sweepTolerance * 2);
+                               (latest.getLow() <= recentLow + sweepTolerance && latest.getClose() > recentLow + sweepTolerance);
 
         if (bullishSweep) {
             boolean hasSmtDiv = checkBullishSmtDivergence(recentLow);
@@ -95,10 +95,10 @@ public class LiquidityDetector {
             candleCountAtLastSweep = totalCandleCount;
         }
         // Bearish sweep: price wicks above recent high and then closes back below it
-        // OR price touches within tolerance of recent high and rejects
+        // Uses same strict tolerance as bullish sweep
         else {
             boolean bearishSweep = (latest.getHigh() > recentHigh && latest.getClose() < recentHigh) ||
-                                   (latest.getHigh() >= recentHigh - sweepTolerance && latest.getClose() < recentHigh - sweepTolerance * 2);
+                                   (latest.getHigh() >= recentHigh - sweepTolerance && latest.getClose() < recentHigh - sweepTolerance);
 
             if (bearishSweep) {
                 boolean hasSmtDiv = checkBearishSmtDivergence(recentHigh);

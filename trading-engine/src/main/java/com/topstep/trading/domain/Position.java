@@ -51,10 +51,25 @@ public class Position {
         return quantity == 0;
     }
 
+    /**
+     * Get the side of the position.
+     * @return BUY for long positions, SELL for short positions
+     * @throws IllegalStateException if position is flat (quantity == 0)
+     */
     public OrderSide getSide() {
         if (quantity > 0) return OrderSide.BUY;
         if (quantity < 0) return OrderSide.SELL;
-        return null; // Flat
+        throw new IllegalStateException("Cannot get side of flat position (quantity=0)");
+    }
+
+    /**
+     * Get the side of the position, or null if flat.
+     * Use this method when caller can handle flat positions.
+     */
+    public OrderSide getSideOrNull() {
+        if (quantity > 0) return OrderSide.BUY;
+        if (quantity < 0) return OrderSide.SELL;
+        return null;
     }
 
     /**

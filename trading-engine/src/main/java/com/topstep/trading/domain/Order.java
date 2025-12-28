@@ -29,7 +29,19 @@ public class Order {
         this.symbol = Objects.requireNonNull(builder.symbol, "symbol cannot be null");
         this.side = Objects.requireNonNull(builder.side, "side cannot be null");
         this.type = Objects.requireNonNull(builder.type, "type cannot be null");
+
+        // Validate quantity
+        if (builder.quantity <= 0) {
+            throw new IllegalArgumentException("Order quantity must be positive, got: " + builder.quantity);
+        }
         this.quantity = builder.quantity;
+
+        // Validate limit price for LIMIT orders
+        if ((builder.type == OrderType.LIMIT || builder.type == OrderType.STOP_LIMIT) &&
+            (builder.limitPrice == null || builder.limitPrice <= 0)) {
+            throw new IllegalArgumentException("LIMIT order requires a valid limit price, got: " + builder.limitPrice);
+        }
+
         this.limitPrice = builder.limitPrice;
         this.stopPrice = builder.stopPrice;
         this.createdAt = builder.createdAt != null ? builder.createdAt : Instant.now();
@@ -46,7 +58,13 @@ public class Order {
         this.symbol = Objects.requireNonNull(symbol, "symbol cannot be null");
         this.side = Objects.requireNonNull(side, "side cannot be null");
         this.type = Objects.requireNonNull(type, "type cannot be null");
+
+        // Validate quantity
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("Order quantity must be positive, got: " + quantity);
+        }
         this.quantity = quantity;
+
         this.limitPrice = price;
         this.stopPrice = null;
         this.createdAt = Instant.now();
@@ -92,11 +110,25 @@ public class Order {
 
     // State mutations
     public void updateStatus(OrderStatus newStatus) {
+        if (newStatus == null) {
+            throw new IllegalArgumentException("Order status cannot be null");
+        }
         this.status = newStatus;
         this.updatedAt = Instant.now();
     }
 
     public void recordFill(int fillQuantity, double fillPrice) {
+        // Validate fill quantity
+        if (fillQuantity <= 0) {
+            throw new IllegalArgumentException("Fill quantity must be positive, got: " + fillQuantity);
+        }
+
+        // Prevent over-filling
+        if (this.filledQuantity + fillQuantity > this.quantity) {
+            throw new IllegalStateException("Fill would exceed order quantity: " +
+                (this.filledQuantity + fillQuantity) + " > " + this.quantity);
+        }
+
         this.filledQuantity += fillQuantity;
         if (this.avgFillPrice == null) {
             this.avgFillPrice = fillPrice;

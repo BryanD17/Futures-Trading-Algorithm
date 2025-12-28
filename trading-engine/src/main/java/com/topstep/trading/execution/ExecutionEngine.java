@@ -6,6 +6,7 @@ import com.topstep.trading.strategy.TradeTier;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -30,7 +31,8 @@ import java.util.Map;
 public class ExecutionEngine {
 
     private final AccountState accountState;
-    private final Map<String, Order> activeOrders;
+    // CRITICAL: Changed to List<Order> to support multiple orders per symbol
+    private final Map<String, List<Order>> activeOrders;
     private final Map<String, Double> tickValues;
     private final List<Trade> completedTrades;
 
@@ -77,7 +79,8 @@ public class ExecutionEngine {
         }
 
         order.updateStatus(OrderStatus.SUBMITTED);
-        activeOrders.put(order.getSymbol(), order);
+        // CRITICAL: Support multiple orders per symbol by using a list
+        activeOrders.computeIfAbsent(order.getSymbol(), k -> new ArrayList<>()).add(order);
     }
 
     /**
@@ -140,30 +143,45 @@ public class ExecutionEngine {
      * Check if any active orders should fill based on current candle.
      */
     private void checkOrderFills(Candle candle) {
-        Order order = activeOrders.get(candle.getSymbol());
-        if (order == null || !order.isActive()) {
+        List<Order> orders = activeOrders.get(candle.getSymbol());
+        if (orders == null || orders.isEmpty()) {
             return;
         }
 
-        boolean filled = false;
-        double fillPrice = 0;
-
-        if (order.getSide() == OrderSide.BUY) {
-            // Buy limit fills when price drops to or below limit
-            if (candle.getLow() <= order.getLimitPrice()) {
-                filled = true;
-                fillPrice = order.getLimitPrice();
+        // Iterate using Iterator to allow removal during iteration
+        Iterator<Order> iterator = orders.iterator();
+        while (iterator.hasNext()) {
+            Order order = iterator.next();
+            if (!order.isActive()) {
+                iterator.remove();
+                continue;
             }
-        } else { // SELL
-            // Sell limit fills when price rises to or above limit
-            if (candle.getHigh() >= order.getLimitPrice()) {
-                filled = true;
-                fillPrice = order.getLimitPrice();
+
+            boolean filled = false;
+            double fillPrice = 0;
+
+            if (order.getSide() == OrderSide.BUY) {
+                // Buy limit fills when price drops to or below limit
+                if (candle.getLow() <= order.getLimitPrice()) {
+                    filled = true;
+                    fillPrice = order.getLimitPrice();
+                }
+            } else { // SELL
+                // Sell limit fills when price rises to or above limit
+                if (candle.getHigh() >= order.getLimitPrice()) {
+                    filled = true;
+                    fillPrice = order.getLimitPrice();
+                }
+            }
+
+            if (filled) {
+                executeFill(order, fillPrice, candle.getTimestamp());
+                iterator.remove();
             }
         }
 
-        if (filled) {
-            executeFill(order, fillPrice, candle.getTimestamp());
+        // Clean up empty lists
+        if (orders.isEmpty()) {
             activeOrders.remove(candle.getSymbol());
         }
     }
@@ -175,11 +193,12 @@ public class ExecutionEngine {
         if (activeOrders.isEmpty()) {
             System.out.println("  [ExecutionEngine] No active orders pending");
         } else {
-            for (Map.Entry<String, Order> entry : activeOrders.entrySet()) {
-                Order order = entry.getValue();
-                System.out.println("  [ExecutionEngine] PENDING ORDER: " + order.getSymbol() + " " +
-                                   order.getSide() + " @ limit " + String.format("%.2f", order.getLimitPrice()) +
-                                   " (waiting for fill)");
+            for (Map.Entry<String, List<Order>> entry : activeOrders.entrySet()) {
+                for (Order order : entry.getValue()) {
+                    System.out.println("  [ExecutionEngine] PENDING ORDER: " + order.getSymbol() + " " +
+                                       order.getSide() + " @ limit " + String.format("%.2f", order.getLimitPrice()) +
+                                       " (waiting for fill)");
+                }
             }
         }
     }
@@ -381,7 +400,6 @@ public class ExecutionEngine {
                                      Instant exitTime, String reason) {
         String symbol = position.getSymbol();
         double entryPrice = position.getAvgEntryPrice();
-        OrderSide side = position.getSide();
 
         // Calculate realized PnL for this partial
         double tickValue = tickValues.getOrDefault(symbol, 12.50);
@@ -479,17 +497,44 @@ public class ExecutionEngine {
     }
 
     /**
-     * Get all active (pending) orders.
+     * Get all active (pending) orders as a flat map (first order per symbol for compatibility).
+     * Use getActiveOrdersList() for full list.
      */
     public Map<String, Order> getActiveOrders() {
-        return new HashMap<>(activeOrders);
+        Map<String, Order> result = new HashMap<>();
+        for (Map.Entry<String, List<Order>> entry : activeOrders.entrySet()) {
+            if (!entry.getValue().isEmpty()) {
+                result.put(entry.getKey(), entry.getValue().get(0));
+            }
+        }
+        return result;
     }
 
     /**
-     * Remove an order from active orders (e.g., after cancellation).
+     * Get all active orders for a symbol.
+     */
+    public List<Order> getActiveOrdersList(String symbol) {
+        return activeOrders.getOrDefault(symbol, new ArrayList<>());
+    }
+
+    /**
+     * Remove all orders for a symbol (e.g., after cancellation).
      */
     public void removeOrder(String symbol) {
         activeOrders.remove(symbol);
+    }
+
+    /**
+     * Remove a specific order by order ID.
+     */
+    public void removeOrderById(String symbol, String orderId) {
+        List<Order> orders = activeOrders.get(symbol);
+        if (orders != null) {
+            orders.removeIf(o -> o.getOrderId().equals(orderId));
+            if (orders.isEmpty()) {
+                activeOrders.remove(symbol);
+            }
+        }
     }
 
     /**
