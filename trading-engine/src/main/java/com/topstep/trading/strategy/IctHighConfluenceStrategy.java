@@ -56,6 +56,17 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private volatile long lastSignalTime = 0;
     private static final long SIGNAL_TIMEOUT_MS = 60000;
 
+    // Debug counters for diagnosing signal generation
+    private int outsideKillzone = 0;
+    private int notTradingDay = 0;
+    private int wrongPhase = 0;
+    private int volatilityBlocked = 0;
+    private int neutralBias = 0;
+    private int noSweep = 0;
+    private int sweepMismatch = 0;
+    private int noEntryZone = 0;
+    private int signalsGenerated = 0;
+
     // Current trade setup info
     private TradeTier currentTier = null;
     private BreakerBlock currentBreaker = null;
@@ -171,50 +182,41 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         KillzonePhase phase = killzoneClock.getKillzonePhase(candle.getTimestamp());
 
         if (!inKillzone) {
-            if (shouldLog) {
-                System.out.println("[STRATEGY] Not in killzone - waiting");
-            }
+            outsideKillzone++;
             return false;
         }
 
         if (!killzoneClock.isTradingDay(candle.getTimestamp())) {
+            notTradingDay++;
             return false;
         }
 
         // Check killzone phase - only trade during PRIME phase
         if (!phase.allowsNewEntries()) {
-            if (shouldLog) {
-                System.out.println("[STRATEGY] Killzone phase: " + phase + " - no new entries");
-            }
+            wrongPhase++;
             return false;
         }
 
         // 2. Check volatility - is it tradeable?
         if (!atrCalculator.isTradeable()) {
-            if (shouldLog) {
-                System.out.println("[STRATEGY] Volatility too extreme - skipping");
-            }
+            volatilityBlocked++;
             return false;
         }
 
         // 3. Check higher-timeframe structure bias
         MarketBias bias = structureDetector.getBias();
         if (bias == MarketBias.NEUTRAL) {
-            if (shouldLog) {
-                System.out.println("[STRATEGY] ✓ In killzone (PRIME) | ✗ Bias NEUTRAL");
-            }
+            neutralBias++;
             return false;
         }
 
         // 4. Check for recent liquidity sweep
         boolean hasRecentSweep = liquidityDetector.hasRecentSweep(15);
         if (!hasRecentSweep) {
+            noSweep++;
             // During opening phase, we expect to wait for sweep
             if (phase == KillzonePhase.OPENING) {
                 return false;
-            }
-            if (shouldLog) {
-                System.out.println("[STRATEGY] ✓ Killzone | ✓ Bias: " + bias + " | ✗ No sweep");
             }
             return false;
         }
@@ -223,8 +225,14 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         if (sweep == null) return false;
 
         // 5. Ensure sweep matches bias
-        if (bias == MarketBias.BULLISH && !sweep.isBullish()) return false;
-        if (bias == MarketBias.BEARISH && !sweep.isBearish()) return false;
+        if (bias == MarketBias.BULLISH && !sweep.isBullish()) {
+            sweepMismatch++;
+            return false;
+        }
+        if (bias == MarketBias.BEARISH && !sweep.isBearish()) {
+            sweepMismatch++;
+            return false;
+        }
 
         boolean isBullish = bias == MarketBias.BULLISH;
 
@@ -292,9 +300,7 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         }
 
         // No valid confluence
-        if (shouldLog) {
-            System.out.println("[STRATEGY] ✓ Killzone | ✓ Bias | ✓ Sweep | ✗ No entry zone");
-        }
+        noEntryZone++;
         return false;
     }
 
@@ -381,6 +387,7 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
                 recommendedQuantity
         );
 
+        signalsGenerated++;
         eventBus.publish(signal);
     }
 
@@ -420,6 +427,7 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
                 recommendedQuantity
         );
 
+        signalsGenerated++;
         eventBus.publish(signal);
     }
 
@@ -518,6 +526,28 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     @Override
     public void shutdown() {
         System.out.println("Shutting down " + getName());
+
+        // Print diagnostic summary
+        System.out.println("\n" + "=".repeat(60));
+        System.out.println("STRATEGY DIAGNOSTIC SUMMARY");
+        System.out.println("=".repeat(60));
+        System.out.println("Total candles processed: " + candleCount);
+        System.out.println("Signals generated: " + signalsGenerated);
+        System.out.println("\nRejection breakdown:");
+        System.out.println("  Outside killzone:     " + outsideKillzone + " (" + pct(outsideKillzone) + ")");
+        System.out.println("  Not trading day:      " + notTradingDay + " (" + pct(notTradingDay) + ")");
+        System.out.println("  Wrong phase:          " + wrongPhase + " (" + pct(wrongPhase) + ")");
+        System.out.println("  Volatility blocked:   " + volatilityBlocked + " (" + pct(volatilityBlocked) + ")");
+        System.out.println("  Neutral bias:         " + neutralBias + " (" + pct(neutralBias) + ")");
+        System.out.println("  No recent sweep:      " + noSweep + " (" + pct(noSweep) + ")");
+        System.out.println("  Sweep direction mismatch: " + sweepMismatch + " (" + pct(sweepMismatch) + ")");
+        System.out.println("  No entry zone found:  " + noEntryZone + " (" + pct(noEntryZone) + ")");
+        System.out.println("=".repeat(60));
+    }
+
+    private String pct(int count) {
+        if (candleCount == 0) return "0%";
+        return String.format("%.1f%%", (count * 100.0) / candleCount);
     }
 
     // Getters for external access

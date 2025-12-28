@@ -48,19 +48,28 @@ public class BacktestExample {
         List<Candle> nqCandles = null;
         List<Candle> esCandles = null;
 
+        // Debug: show current working directory
+        String cwd = System.getProperty("user.dir");
+        System.out.println("\nDEBUG: Current working directory: " + cwd);
+
         // Try to find and load real data files
         String[] possiblePaths = {
             DATA_DIR,                           // Relative to CWD
-            "trading-engine/" + DATA_DIR,       // From project root
-            "../" + DATA_DIR,                   // From trading-engine
-            System.getProperty("user.dir") + "/" + DATA_DIR  // Absolute
+            "../" + DATA_DIR,                   // Up one level
+            "../../" + DATA_DIR,                // Up two levels
+            cwd + "/" + DATA_DIR,               // Absolute from CWD
+            cwd + "/../" + DATA_DIR,            // Parent of CWD
+            "/home/user/Futures-Trading-Algorithm/" + DATA_DIR  // Absolute fallback
         };
 
         String foundDataPath = null;
         for (String path : possiblePaths) {
+            File dir = new File(path);
             File nqFile = new File(path, NQ_DATA_FILE);
+            System.out.println("DEBUG: Checking path: " + path + " (exists: " + dir.exists() + ", nq file: " + nqFile.exists() + ")");
             if (nqFile.exists()) {
                 foundDataPath = path;
+                System.out.println("DEBUG: Found data at: " + path);
                 break;
             }
         }
