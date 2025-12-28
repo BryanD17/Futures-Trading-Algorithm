@@ -47,26 +47,24 @@ public class BreakerBlockDetector {
 
     /**
      * Check if any Order Blocks have failed and should become Breaker Blocks.
+     * CRITICAL FIX: Use getBreachedOrderBlocks() instead of getValidOrderBlocks()
+     * because breached OBs are what become breaker blocks!
      */
     private void checkForBreakerFormation(Candle candle) {
-        List<OrderBlock> validObs = orderBlockDetector.getValidOrderBlocks();
+        // Get OBs that were just breached (after being mitigated)
+        // These are candidates for becoming breaker blocks
+        List<OrderBlock> breachedObs = orderBlockDetector.getBreachedOrderBlocks();
 
-        for (OrderBlock ob : validObs) {
-            // A breaker forms when price closes THROUGH the order block
-            // (not just wicks into it)
+        for (OrderBlock ob : breachedObs) {
+            // A breaker forms when a mitigated OB gets breached
+            // The breaker is the OPPOSITE direction of the original OB
 
             if (ob.isBullish()) {
-                // Bullish OB fails when price closes below its low
-                if (candle.getClose() < ob.getLow() && ob.isMitigated()) {
-                    // This bullish OB has failed -> becomes BEARISH breaker
-                    createBreakerBlock(ob, false, candle);
-                }
+                // Bullish OB was breached -> becomes BEARISH breaker (resistance)
+                createBreakerBlock(ob, false, candle);
             } else {
-                // Bearish OB fails when price closes above its high
-                if (candle.getClose() > ob.getHigh() && ob.isMitigated()) {
-                    // This bearish OB has failed -> becomes BULLISH breaker
-                    createBreakerBlock(ob, true, candle);
-                }
+                // Bearish OB was breached -> becomes BULLISH breaker (support)
+                createBreakerBlock(ob, true, candle);
             }
         }
     }

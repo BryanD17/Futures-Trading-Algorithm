@@ -25,8 +25,11 @@ import java.util.List;
  *    - ExecutionEngine processes approved orders
  *    - Track PnL
  * 3. Generate backtest report
+ *
+ * CRITICAL: Implements ExecutionEngine.ExecutionListener to receive fill/close notifications
+ * and properly track position state in TradingRiskManager.
  */
-public class BacktestRunner {
+public class BacktestRunner implements ExecutionEngine.ExecutionListener {
 
     private final TradingStrategy strategy;
     private final PropFirmRiskEngine riskEngine;
@@ -53,6 +56,10 @@ public class BacktestRunner {
         this.eventBus = (sharedEventBus != null) ? sharedEventBus : new EventBus();
         this.context = new BacktestContext(accountState);
         this.tradingRiskManager = new TradingRiskManager(context);
+
+        // CRITICAL: Register as execution listener to receive fill/close notifications
+        // This ensures TradingRiskManager is notified ONLY when orders actually fill
+        executionEngine.setExecutionListener(this);
 
         // Subscribe to strategy signals on the SAME EventBus the strategy uses
         eventBus.subscribe(StrategySignalEvent.class, this::handleStrategySignal);
@@ -83,6 +90,11 @@ public class BacktestRunner {
             allCandles = primaryCandles;
             System.out.println("Starting backtest with " + allCandles.size() + " candles (no SMT data)...");
         }
+
+        // CRITICAL: Start EventBus BEFORE strategy initialization
+        // Without this, all signals published by strategy are silently dropped!
+        eventBus.start();
+        System.out.println("✓ EventBus started");
 
         strategy.initialize();
 
@@ -126,6 +138,10 @@ public class BacktestRunner {
 
         strategy.shutdown();
 
+        // CRITICAL: Stop EventBus to prevent thread leaks
+        eventBus.stop();
+        System.out.println("✓ EventBus stopped");
+
         // Show any unfilled orders at end of backtest
         System.out.println("\n--- End of Backtest Order Status ---");
         executionEngine.printActiveOrderStatus();
@@ -162,9 +178,9 @@ public class BacktestRunner {
             System.out.println("  ✓ PropFirmRiskEngine APPROVED");
             System.out.println("  " + decision.getReason());
 
-            // Record position opened in risk manager (for tracking)
-            boolean isBullish = signal.getSide() == OrderSide.BUY;
-            tradingRiskManager.recordPositionOpened(signal.getSymbol(), isBullish, signal.getEntryPrice());
+            // CRITICAL FIX: Removed early recordPositionOpened call here
+            // Position will be recorded when ExecutionEngine actually fills the order
+            // via the ExecutionListener.onPositionOpened callback
 
             // Submit order to execution engine with stop/target levels
             Order order = decision.getOrder();
@@ -203,5 +219,27 @@ public class BacktestRunner {
     private BacktestReport generateReport() {
         List<Trade> trades = executionEngine.getCompletedTrades();
         return new BacktestReport(trades, accountState, riskLimits);
+    }
+
+    // ============================================
+    // ExecutionEngine.ExecutionListener implementation
+    // CRITICAL: These methods are called when orders fill/close,
+    // ensuring TradingRiskManager has accurate position state.
+    // ============================================
+
+    @Override
+    public void onPositionOpened(String symbol, OrderSide side, double entryPrice, int quantity) {
+        // Now we notify risk manager when order actually fills, not when signal is approved
+        boolean isBullish = side == OrderSide.BUY;
+        tradingRiskManager.recordPositionOpened(symbol, isBullish, entryPrice);
+        System.out.println("  [RiskManager] Position opened: " + symbol + " " + side + " @ " + entryPrice);
+    }
+
+    @Override
+    public void onPositionClosed(String symbol, double pnl, boolean isWin) {
+        // Notify risk manager of position close for consecutive loss/win tracking
+        tradingRiskManager.recordPositionClosed(symbol, pnl, isWin);
+        System.out.println("  [RiskManager] Position closed: " + symbol + " PnL=$" +
+                          String.format("%.2f", pnl) + " (" + (isWin ? "WIN" : "LOSS") + ")");
     }
 }

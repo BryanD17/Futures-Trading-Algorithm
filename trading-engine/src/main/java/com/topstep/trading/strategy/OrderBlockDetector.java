@@ -215,6 +215,24 @@ public class OrderBlockDetector {
     }
 
     /**
+     * Get all order blocks including breached ones (for breaker block detection).
+     * CRITICAL: BreakerBlockDetector needs to see breached OBs to convert them to breakers.
+     */
+    public List<OrderBlock> getAllOrderBlocks() {
+        return new ArrayList<>(orderBlocks);
+    }
+
+    /**
+     * Get breached order blocks that can become breaker blocks.
+     */
+    public List<OrderBlock> getBreachedOrderBlocks() {
+        return orderBlocks.stream()
+                .filter(OrderBlock::isBreached)
+                .filter(OrderBlock::isMitigated)  // Must have been mitigated before breach
+                .collect(Collectors.toList());
+    }
+
+    /**
      * Reset the detector.
      */
     public void reset() {

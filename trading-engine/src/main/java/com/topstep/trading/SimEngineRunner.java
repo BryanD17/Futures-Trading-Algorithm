@@ -97,6 +97,11 @@ public class SimEngineRunner {
             // Connect to mock market data
             connector.connect();
 
+            // CRITICAL: Start EventBus BEFORE strategy initialization
+            // Without this, all signals published by strategy are silently dropped!
+            eventBus.start();
+            System.out.println("✓ EventBus started");
+
             // Initialize strategy
             strategy.initialize();
 
@@ -181,6 +186,10 @@ public class SimEngineRunner {
 
         // Shutdown strategy
         strategy.shutdown();
+
+        // CRITICAL: Stop EventBus to prevent thread leaks
+        eventBus.stop();
+        System.out.println("✓ EventBus stopped");
 
         // Disconnect from market data
         connector.disconnect();
