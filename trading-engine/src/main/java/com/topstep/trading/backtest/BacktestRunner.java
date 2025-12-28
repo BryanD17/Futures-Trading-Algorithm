@@ -126,6 +126,10 @@ public class BacktestRunner {
 
         strategy.shutdown();
 
+        // Show any unfilled orders at end of backtest
+        System.out.println("\n--- End of Backtest Order Status ---");
+        executionEngine.printActiveOrderStatus();
+
         System.out.println("\nBacktest completed. Processed " + candleCount + " candles.");
         return generateReport();
     }
@@ -134,6 +138,14 @@ public class BacktestRunner {
      * Handle strategy signal event.
      */
     private void handleStrategySignal(StrategySignalEvent signal) {
+        System.out.println("\n>>> SIGNAL RECEIVED by BacktestRunner <<<");
+        System.out.println("  Symbol: " + signal.getSymbol());
+        System.out.println("  Side: " + signal.getSide());
+        System.out.println("  Entry: " + String.format("%.2f", signal.getEntryPrice()));
+        System.out.println("  Stop: " + String.format("%.2f", signal.getStopPrice()));
+        System.out.println("  Target: " + String.format("%.2f", signal.getTargetPrice()));
+        System.out.println("  Reason: " + signal.getReason());
+
         // STEP 1: Validate with TradingRiskManager (correlation, consecutive loss, position limits)
         RiskDecision riskManagerDecision = tradingRiskManager.validateSignal(signal);
         if (!riskManagerDecision.isApproved()) {
@@ -141,12 +153,13 @@ public class BacktestRunner {
             System.out.println("  Reason: " + riskManagerDecision.getReason());
             return;
         }
+        System.out.println("  ✓ TradingRiskManager APPROVED");
 
         // STEP 2: Evaluate against prop firm risk limits (DLL, MLL, position sizing)
         RiskDecision decision = riskEngine.evaluate(signal, accountState, riskLimits);
 
         if (decision.isAllowed()) {
-            System.out.println("\n✓ Signal APPROVED: " + signal.getReason());
+            System.out.println("  ✓ PropFirmRiskEngine APPROVED");
             System.out.println("  " + decision.getReason());
 
             // Record position opened in risk manager (for tracking)
@@ -155,7 +168,13 @@ public class BacktestRunner {
 
             // Submit order to execution engine with stop/target levels
             Order order = decision.getOrder();
-            executionEngine.submitOrder(order, signal.getStopPrice(), signal.getTargetPrice());
+            if (order != null) {
+                System.out.println("  Order submitted: " + order.getSide() + " " + order.getQuantity() +
+                                   " @ limit " + String.format("%.2f", order.getLimitPrice()));
+                executionEngine.submitOrder(order, signal.getStopPrice(), signal.getTargetPrice());
+            } else {
+                System.out.println("  ⚠ WARNING: decision.getOrder() returned null!");
+            }
         } else {
             System.out.println("\n❌ Signal DENIED by PropFirmRiskEngine: " + signal.getReason());
             System.out.println("  Reason: " + decision.getReason());
