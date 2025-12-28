@@ -39,30 +39,55 @@ public class BacktestRunner {
     private final BacktestContext context;
 
     public BacktestRunner(TradingStrategy strategy, AccountState accountState, RiskLimits riskLimits) {
+        this(strategy, accountState, riskLimits, null);
+    }
+
+    public BacktestRunner(TradingStrategy strategy, AccountState accountState, RiskLimits riskLimits, EventBus sharedEventBus) {
         this.strategy = strategy;
         this.accountState = accountState;
         this.riskLimits = riskLimits;
         this.riskEngine = new PropFirmRiskEngine();
         this.executionEngine = new ExecutionEngine(accountState);
         this.sessionManager = new TradingSessionManager();
-        this.eventBus = new EventBus();
+        // CRITICAL: Use shared EventBus if provided, otherwise create new one
+        this.eventBus = (sharedEventBus != null) ? sharedEventBus : new EventBus();
         this.context = new BacktestContext(accountState);
-        this.tradingRiskManager = new TradingRiskManager(context);  // NEW
+        this.tradingRiskManager = new TradingRiskManager(context);
 
-        // Subscribe to strategy signals
+        // Subscribe to strategy signals on the SAME EventBus the strategy uses
         eventBus.subscribe(StrategySignalEvent.class, this::handleStrategySignal);
     }
 
     /**
-     * Run the backtest with historical candles.
+     * Run the backtest with historical candles (single instrument).
      */
     public BacktestReport run(List<Candle> candles) {
-        System.out.println("Starting backtest with " + candles.size() + " candles...");
+        return run(candles, null);
+    }
+
+    /**
+     * Run the backtest with primary and SMT instrument candles.
+     * Both candle lists are interleaved by timestamp for proper SMT divergence detection.
+     */
+    public BacktestReport run(List<Candle> primaryCandles, List<Candle> smtCandles) {
+        // Merge and sort candles by timestamp if SMT candles provided
+        List<Candle> allCandles;
+        if (smtCandles != null && !smtCandles.isEmpty()) {
+            allCandles = new java.util.ArrayList<>(primaryCandles.size() + smtCandles.size());
+            allCandles.addAll(primaryCandles);
+            allCandles.addAll(smtCandles);
+            allCandles.sort((a, b) -> a.getTimestamp().compareTo(b.getTimestamp()));
+            System.out.println("Starting backtest with " + primaryCandles.size() + " primary + " +
+                             smtCandles.size() + " SMT candles (" + allCandles.size() + " total)...");
+        } else {
+            allCandles = primaryCandles;
+            System.out.println("Starting backtest with " + allCandles.size() + " candles (no SMT data)...");
+        }
 
         strategy.initialize();
 
         int candleCount = 0;
-        for (Candle candle : candles) {
+        for (Candle candle : allCandles) {
             candleCount++;
 
             // Update current time in context
@@ -79,7 +104,7 @@ public class BacktestRunner {
             // ExecutionEngine processes fills and updates
             executionEngine.onNewCandle(candle);
 
-            // Feed candle to strategy
+            // Feed candle to strategy (strategy routes based on symbol)
             strategy.onCandle(candle, context);
 
             // Break if account is breached

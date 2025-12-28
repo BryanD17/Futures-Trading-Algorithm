@@ -105,7 +105,7 @@ public class BacktestExample {
             esCandles = dataProvider.generateSyntheticData("ES", 5000);
         }
 
-        // Step 3: Create strategy
+        // Step 3: Create strategy with shared EventBus
         EventBus eventBus = new EventBus();
         IctHighConfluenceStrategy strategy = new IctHighConfluenceStrategy("NQ", "ES", eventBus);
 
@@ -113,15 +113,15 @@ public class BacktestExample {
         System.out.println("Primary Instrument: NQ (Nasdaq 100 E-mini)");
         System.out.println("SMT Pair: ES (S&P 500 E-mini)");
 
-        // Step 4: Create backtest runner
-        BacktestRunner runner = new BacktestRunner(strategy, accountState, riskLimits);
+        // Step 4: Create backtest runner with SHARED EventBus (critical for signal flow)
+        BacktestRunner runner = new BacktestRunner(strategy, accountState, riskLimits, eventBus);
 
-        // Step 5: Run backtest
+        // Step 5: Run backtest with both NQ (primary) and ES (SMT) candles
         System.out.println("\n" + "-".repeat(60));
         System.out.println("RUNNING BACKTEST...");
         System.out.println("-".repeat(60));
 
-        BacktestReport report = runner.run(nqCandles);
+        BacktestReport report = runner.run(nqCandles, esCandles);
 
         // Step 6: Print results
         report.printReport();
