@@ -9,6 +9,7 @@ import com.topstep.trading.event.StrategySignalEvent;
 import com.topstep.trading.execution.ExecutionEngine;
 import com.topstep.trading.risk.PropFirmRiskEngine;
 import com.topstep.trading.risk.RiskDecision;
+import com.topstep.trading.risk.TradingRiskManager;
 import com.topstep.trading.strategy.DefaultStrategyContext;
 import com.topstep.trading.strategy.IctHighConfluenceStrategy;
 import com.topstep.trading.strategy.SessionManager;
@@ -340,7 +341,25 @@ public class LiveEngineRunner {
             return;
         }
 
-        // Evaluate against risk limits
+        // STEP 1: Validate with TradingRiskManager (correlation, consecutive loss, position limits)
+        if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
+            RiskDecision riskManagerDecision = multiEngine.validateSignalWithRiskManager(signal);
+            if (!riskManagerDecision.isApproved()) {
+                System.out.println("\n❌ LIVE Signal BLOCKED by TradingRiskManager: " + signal.getReason());
+                System.out.println("  Reason: " + riskManagerDecision.getReason());
+                return;
+            }
+
+            // Check market conditions
+            String conditionIssue = multiEngine.checkMarketConditions(signal);
+            if (conditionIssue != null) {
+                System.out.println("\n❌ LIVE Signal SKIPPED: " + signal.getReason());
+                System.out.println("  Reason: " + conditionIssue);
+                return;
+            }
+        }
+
+        // STEP 2: Evaluate against prop firm risk limits (DLL, MLL, position sizing)
         RiskDecision decision = riskEngine.evaluate(signal, accountState, riskLimits);
 
         if (decision.isAllowed()) {
@@ -352,7 +371,7 @@ public class LiveEngineRunner {
                 // Submit order to live market via connector
                 Order order = decision.getOrder();
                 String orderId = connector.submitOrder(order, (id, status, fillPrice, fillQty) -> {
-                    handleOrderUpdate(id, status, fillPrice, fillQty, order);
+                    handleOrderUpdate(id, status, fillPrice, fillQty, order, signal);
                 });
 
                 order.setOrderId(orderId);
@@ -374,7 +393,7 @@ public class LiveEngineRunner {
             }
 
         } else {
-            System.out.println("\n❌ Signal DENIED: " + signal.getReason());
+            System.out.println("\n❌ Signal DENIED by PropFirmRiskEngine: " + signal.getReason());
             System.out.println("  Reason: " + decision.getReason());
         }
     }
@@ -382,7 +401,8 @@ public class LiveEngineRunner {
     /**
      * Handle order status updates from the connector.
      */
-    private void handleOrderUpdate(String orderId, OrderStatus status, Double fillPrice, Integer fillQty, Order order) {
+    private void handleOrderUpdate(String orderId, OrderStatus status, Double fillPrice, Integer fillQty,
+                                   Order order, StrategySignalEvent signal) {
         System.out.println("Order Update: " + orderId + " -> " + status);
 
         if (status == OrderStatus.FILLED && fillPrice != null && fillQty != null) {
@@ -395,10 +415,28 @@ public class LiveEngineRunner {
                 accountState.addPosition(position);
             }
             position.addFill(fillPrice, fillQty);
+
+            // Record position opened in TradingRiskManager (NOW that order is actually filled)
+            if (MULTI_INSTRUMENT_MODE && multiEngine != null && signal != null) {
+                boolean isBullish = signal.getSide() == OrderSide.BUY;
+                multiEngine.getRiskManager().recordPositionOpened(
+                    signal.getSymbol(), isBullish, fillPrice
+                );
+            }
         }
 
         if (status == OrderStatus.REJECTED) {
             System.err.println("  ❌ ORDER REJECTED!");
+        }
+    }
+
+    /**
+     * Notify risk manager when a position is closed.
+     * Should be called when a trade completes (stop hit or target hit).
+     */
+    public void notifyPositionClosed(String symbol, double pnl) {
+        if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
+            multiEngine.notifyPositionClosed(symbol, pnl);
         }
     }
 

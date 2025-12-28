@@ -6,6 +6,7 @@ import com.topstep.trading.event.StrategySignalEvent;
 import com.topstep.trading.execution.ExecutionEngine;
 import com.topstep.trading.risk.PropFirmRiskEngine;
 import com.topstep.trading.risk.RiskDecision;
+import com.topstep.trading.risk.TradingRiskManager;
 import com.topstep.trading.strategy.TradingStrategy;
 
 import java.util.List;
@@ -19,7 +20,8 @@ import java.util.List;
  *    - Check for new trading session (daily reset)
  *    - Update strategy
  *    - Strategy emits signals
- *    - Risk engine evaluates signals
+ *    - TradingRiskManager validates (correlation, consecutive loss, position limits)
+ *    - PropFirmRiskEngine evaluates (DLL, MLL, position sizing)
  *    - ExecutionEngine processes approved orders
  *    - Track PnL
  * 3. Generate backtest report
@@ -28,6 +30,7 @@ public class BacktestRunner {
 
     private final TradingStrategy strategy;
     private final PropFirmRiskEngine riskEngine;
+    private final TradingRiskManager tradingRiskManager;  // NEW: For correlation/loss tracking
     private final ExecutionEngine executionEngine;
     private final TradingSessionManager sessionManager;
     private final EventBus eventBus;
@@ -44,6 +47,7 @@ public class BacktestRunner {
         this.sessionManager = new TradingSessionManager();
         this.eventBus = new EventBus();
         this.context = new BacktestContext(accountState);
+        this.tradingRiskManager = new TradingRiskManager(context);  // NEW
 
         // Subscribe to strategy signals
         eventBus.subscribe(StrategySignalEvent.class, this::handleStrategySignal);
@@ -105,20 +109,48 @@ public class BacktestRunner {
      * Handle strategy signal event.
      */
     private void handleStrategySignal(StrategySignalEvent signal) {
-        // Evaluate against risk limits
+        // STEP 1: Validate with TradingRiskManager (correlation, consecutive loss, position limits)
+        RiskDecision riskManagerDecision = tradingRiskManager.validateSignal(signal);
+        if (!riskManagerDecision.isApproved()) {
+            System.out.println("\n❌ Signal BLOCKED by TradingRiskManager: " + signal.getReason());
+            System.out.println("  Reason: " + riskManagerDecision.getReason());
+            return;
+        }
+
+        // STEP 2: Evaluate against prop firm risk limits (DLL, MLL, position sizing)
         RiskDecision decision = riskEngine.evaluate(signal, accountState, riskLimits);
 
         if (decision.isAllowed()) {
             System.out.println("\n✓ Signal APPROVED: " + signal.getReason());
             System.out.println("  " + decision.getReason());
 
+            // Record position opened in risk manager (for tracking)
+            boolean isBullish = signal.getSide() == OrderSide.BUY;
+            tradingRiskManager.recordPositionOpened(signal.getSymbol(), isBullish, signal.getEntryPrice());
+
             // Submit order to execution engine with stop/target levels
             Order order = decision.getOrder();
             executionEngine.submitOrder(order, signal.getStopPrice(), signal.getTargetPrice());
         } else {
-            System.out.println("\n❌ Signal DENIED: " + signal.getReason());
+            System.out.println("\n❌ Signal DENIED by PropFirmRiskEngine: " + signal.getReason());
             System.out.println("  Reason: " + decision.getReason());
         }
+    }
+
+    /**
+     * Notify risk manager of position close (for consecutive loss tracking).
+     * Should be called when a trade completes.
+     */
+    public void notifyPositionClosed(String symbol, double pnl) {
+        boolean isWin = pnl > 0;
+        tradingRiskManager.recordPositionClosed(symbol, pnl, isWin);
+    }
+
+    /**
+     * Get the trading risk manager for status reporting.
+     */
+    public TradingRiskManager getTradingRiskManager() {
+        return tradingRiskManager;
     }
 
     /**

@@ -119,53 +119,72 @@ public class MultiInstrumentEngine {
 
     /**
      * Handle strategy signal with risk checks.
+     * NOTE: This is for logging/monitoring only. Position tracking happens in the Runner
+     * after the order is actually filled to avoid race conditions.
      */
     private void handleStrategySignal(StrategySignalEvent signal) {
         String symbol = signal.getSymbol();
 
-        System.out.println("\n[HYBRID ENGINE] Processing signal: " + signal.getSignalType() +
+        // Log signal reception (for monitoring)
+        System.out.println("\n[HYBRID ENGINE] Signal received: " + signal.getSignalType() +
                 " " + symbol + " " + signal.getSide());
 
-        // 1. Validate with TradingRiskManager
-        RiskDecision riskDecision = riskManager.validateSignal(signal);
-        if (!riskDecision.isApproved()) {
-            System.out.println("[HYBRID ENGINE] Signal REJECTED by risk manager: " +
-                    riskDecision.getReason());
-            return;  // Signal blocked, don't proceed
-        }
-
-        // 2. Check market conditions
+        // Log market conditions (informational only - actual validation in Runner)
         InstrumentProfile profile = profiles.get(symbol);
         ATRCalculator atr = atrCalculators.get(symbol);
-        if (profile != null) {
+        if (profile != null && atr != null) {
             MarketConditionFilter.MarketCondition condition =
                     conditionFilter.evaluate(strategyContext.getCurrentTime(), symbol, atr, profile);
 
-            if (!condition.shouldTrade()) {
-                System.out.println("[HYBRID ENGINE] Signal SKIPPED due to market conditions: " +
-                        condition.getRecommendation());
-                return;
-            }
-
-            // Log condition assessment
-            if (!condition.isOptimal()) {
-                System.out.println("[HYBRID ENGINE] Market condition: " + condition.getRecommendation() +
-                        " (size multiplier: " + String.format("%.0f%%", condition.getSizeMultiplier() * 100) + ")");
-            }
+            System.out.println("[HYBRID ENGINE] Market condition: " + condition.getRecommendation() +
+                    " (score: " + condition.getTotalScore() + ")");
         }
 
-        // 3. Apply session-based tier bonus
-        TradeTier baseTier = signal.getTier();
+        // Log session status
         boolean isPreferredSession = isInstrumentInPreferredSession(symbol);
-        TradeTier adjustedTier = riskManager.applySessionBonus(symbol, baseTier, isPreferredSession);
+        System.out.println("[HYBRID ENGINE] Preferred Session: " + (isPreferredSession ? "YES (tier bonus)" : "NO"));
 
-        // 4. Record position opened
-        boolean isBullish = signal.getSide() == OrderSide.BUY;
-        riskManager.recordPositionOpened(symbol, isBullish, signal.getEntryPrice());
+        // NOTE: Do NOT record position here - let the Runner do it after order fills
+        // to avoid race condition with PropFirmRiskEngine validation
+    }
 
-        System.out.println("[HYBRID ENGINE] Signal APPROVED: " + symbol +
-                " | Tier: " + baseTier + " -> " + adjustedTier +
-                " | Preferred Session: " + (isPreferredSession ? "YES" : "NO"));
+    /**
+     * Validate a signal using TradingRiskManager.
+     * Called by Runners BEFORE PropFirmRiskEngine evaluation.
+     */
+    public RiskDecision validateSignalWithRiskManager(StrategySignalEvent signal) {
+        return riskManager.validateSignal(signal);
+    }
+
+    /**
+     * Check market conditions for a signal.
+     * Returns null if conditions are acceptable, or a rejection reason if not.
+     */
+    public String checkMarketConditions(StrategySignalEvent signal) {
+        String symbol = signal.getSymbol();
+        InstrumentProfile profile = profiles.get(symbol);
+        ATRCalculator atr = atrCalculators.get(symbol);
+
+        if (profile == null) {
+            return null; // No profile means no filtering
+        }
+
+        MarketConditionFilter.MarketCondition condition =
+                conditionFilter.evaluate(strategyContext.getCurrentTime(), symbol, atr, profile);
+
+        if (!condition.shouldTrade()) {
+            return "Market conditions unfavorable: " + condition.getRecommendation();
+        }
+
+        return null; // Conditions OK
+    }
+
+    /**
+     * Get the adjusted tier with session bonus applied.
+     */
+    public TradeTier getAdjustedTier(String symbol, TradeTier baseTier) {
+        boolean isPreferredSession = isInstrumentInPreferredSession(symbol);
+        return riskManager.applySessionBonus(symbol, baseTier, isPreferredSession);
     }
 
     /**
