@@ -169,6 +169,22 @@ public class ExecutionEngine {
     }
 
     /**
+     * Print status of all active orders (for debugging).
+     */
+    public void printActiveOrderStatus() {
+        if (activeOrders.isEmpty()) {
+            System.out.println("  [ExecutionEngine] No active orders pending");
+        } else {
+            for (Map.Entry<String, Order> entry : activeOrders.entrySet()) {
+                Order order = entry.getValue();
+                System.out.println("  [ExecutionEngine] PENDING ORDER: " + order.getSymbol() + " " +
+                                   order.getSide() + " @ limit " + String.format("%.2f", order.getLimitPrice()) +
+                                   " (waiting for fill)");
+            }
+        }
+    }
+
+    /**
      * Check and execute partial profit targets.
      */
     private void checkPartialProfitTargets(Candle candle) {
