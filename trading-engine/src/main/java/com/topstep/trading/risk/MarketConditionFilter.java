@@ -268,6 +268,10 @@ public class MarketConditionFilter {
         }
 
         KillzonePhase phase = killzoneClock.getKillzonePhase(timestamp);
+        // CRITICAL: Null check for phase to avoid NPE
+        if (phase == null) {
+            return new ConditionFactor("Killzone", 0, "Killzone phase unavailable");
+        }
         switch (phase) {
             case PRIME:
                 return new ConditionFactor("Killzone", 2, "PRIME phase - optimal");
