@@ -6,20 +6,32 @@ import com.topstep.trading.domain.RiskLimits;
 import com.topstep.trading.event.EventBus;
 import com.topstep.trading.strategy.IctHighConfluenceStrategy;
 
+import java.io.File;
 import java.util.List;
 
 /**
  * Example demonstrating how to run a backtest with the ICT High Confluence Strategy.
  *
+ * Data Source:
+ * - Uses real historical data from Oanda (NAS100/SPX500 CFD data)
+ * - Data sourced from: https://github.com/FutureSharks/financial-data
+ * - Format: 5-minute OHLCV candles
+ *
  * Usage:
- * 1. Prepare historical data CSV files for ES and NQ
- * 2. Configure the backtest parameters
- * 3. Run and analyze the results
+ * 1. Run: ./gradlew :trading-engine:run --args="BACKTEST"
+ * 2. Data files should be in: data/NQ_5min.csv and data/ES_5min.csv
  */
 public class BacktestExample {
 
+    // Path to data files (relative to project root)
+    private static final String DATA_DIR = "data";
+    private static final String NQ_DATA_FILE = "NQ_5min.csv";
+    private static final String ES_DATA_FILE = "ES_5min.csv";
+    private static final String NQ_2019_FILE = "NQ_2019_5min.csv";
+
     public static void main(String[] args) {
-        System.out.println("ICT High Confluence Strategy - Backtest Example");
+        System.out.println("=" + "=".repeat(59));
+        System.out.println("ICT HIGH CONFLUENCE STRATEGY - BACKTEST WITH REAL DATA");
         System.out.println("=" + "=".repeat(59));
 
         // Step 1: Set up Topstep 50K account
@@ -33,32 +45,94 @@ public class BacktestExample {
 
         // Step 2: Load historical data
         HistoricalDataProvider dataProvider = new HistoricalDataProvider();
+        List<Candle> nqCandles = null;
+        List<Candle> esCandles = null;
 
-        // For this example, we'll use synthetic data
-        // In production, load from CSV: dataProvider.loadFromCsv("path/to/ES_data.csv", "ES")
-        System.out.println("\nLoading historical data...");
-        List<Candle> esCandles = dataProvider.generateSyntheticData("ES", 500);
-        List<Candle> nqCandles = dataProvider.generateSyntheticData("NQ", 500);
+        // Try to find and load real data files
+        String[] possiblePaths = {
+            DATA_DIR,                           // Relative to CWD
+            "trading-engine/" + DATA_DIR,       // From project root
+            "../" + DATA_DIR,                   // From trading-engine
+            System.getProperty("user.dir") + "/" + DATA_DIR  // Absolute
+        };
+
+        String foundDataPath = null;
+        for (String path : possiblePaths) {
+            File nqFile = new File(path, NQ_DATA_FILE);
+            if (nqFile.exists()) {
+                foundDataPath = path;
+                break;
+            }
+        }
+
+        if (foundDataPath != null) {
+            System.out.println("\n📊 Loading REAL historical data from: " + foundDataPath);
+            System.out.println("  Data source: Oanda NAS100/SPX500 CFD (proxy for NQ/ES futures)");
+            System.out.println("  Timeframe: 5-minute candles");
+
+            try {
+                // Load NQ data (try 2019 full year first, then 2020)
+                File nq2019File = new File(foundDataPath, NQ_2019_FILE);
+                if (nq2019File.exists()) {
+                    nqCandles = dataProvider.loadFromCsv(nq2019File.getAbsolutePath(), "NQ");
+                    System.out.println("  ✓ Loaded NQ 2019 data: " + nqCandles.size() + " candles (~12 months)");
+                } else {
+                    File nqFile = new File(foundDataPath, NQ_DATA_FILE);
+                    nqCandles = dataProvider.loadFromCsv(nqFile.getAbsolutePath(), "NQ");
+                    System.out.println("  ✓ Loaded NQ 2020 data: " + nqCandles.size() + " candles");
+                }
+
+                // Load ES data
+                File esFile = new File(foundDataPath, ES_DATA_FILE);
+                if (esFile.exists()) {
+                    esCandles = dataProvider.loadFromCsv(esFile.getAbsolutePath(), "ES");
+                    System.out.println("  ✓ Loaded ES data: " + esCandles.size() + " candles");
+                }
+
+            } catch (Exception e) {
+                System.err.println("  ❌ Error loading data: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+
+        // Fall back to synthetic data if real data not found
+        if (nqCandles == null || nqCandles.isEmpty()) {
+            System.out.println("\n⚠️  Real data not found, using synthetic data");
+            System.out.println("  To use real data, ensure these files exist:");
+            System.out.println("  - data/NQ_5min.csv");
+            System.out.println("  - data/ES_5min.csv");
+            nqCandles = dataProvider.generateSyntheticData("NQ", 5000);
+            esCandles = dataProvider.generateSyntheticData("ES", 5000);
+        }
 
         // Step 3: Create strategy
         EventBus eventBus = new EventBus();
-        IctHighConfluenceStrategy strategy = new IctHighConfluenceStrategy("ES", "NQ", eventBus);
+        IctHighConfluenceStrategy strategy = new IctHighConfluenceStrategy("NQ", "ES", eventBus);
 
         System.out.println("\nStrategy: " + strategy.getName());
+        System.out.println("Primary Instrument: NQ (Nasdaq 100 E-mini)");
+        System.out.println("SMT Pair: ES (S&P 500 E-mini)");
 
         // Step 4: Create backtest runner
         BacktestRunner runner = new BacktestRunner(strategy, accountState, riskLimits);
 
         // Step 5: Run backtest
-        System.out.println("\nRunning backtest...");
+        System.out.println("\n" + "-".repeat(60));
+        System.out.println("RUNNING BACKTEST...");
         System.out.println("-".repeat(60));
 
-        BacktestReport report = runner.run(esCandles);
+        BacktestReport report = runner.run(nqCandles);
 
         // Step 6: Print results
         report.printReport();
 
-        // Step 7: Analysis and recommendations
+        // Step 7: Print risk manager summary
+        System.out.println("\n" + "=".repeat(60));
+        System.out.println("TRADING RISK MANAGER SUMMARY");
+        System.out.println("=".repeat(60));
+        System.out.println(runner.getTradingRiskManager().getStatusSummary());
+
+        // Step 8: Analysis and recommendations
         printRecommendations(report, riskLimits);
     }
 
