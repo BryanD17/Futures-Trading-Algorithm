@@ -368,16 +368,10 @@ public class LiveEngineRunner {
             System.out.println("  Quantity: " + signal.getQuantity() + " | " + decision.getReason());
 
             try {
-                // Submit order to live market via connector
                 Order order = decision.getOrder();
-                String orderId = connector.submitOrder(order, (id, status, fillPrice, fillQty) -> {
-                    handleOrderUpdate(id, status, fillPrice, fillQty, order, signal);
-                });
 
-                order.setOrderId(orderId);
-                System.out.println("  Order submitted: " + orderId);
-
-                // Use enhanced order submission with tier and partial profit targets
+                // CRITICAL: Register order with execution engine FIRST (before connector)
+                // This prevents race condition where connector callback fires before order is tracked
                 executionEngine.submitOrderEnhanced(
                     order,
                     signal.getStopPrice(),
@@ -385,6 +379,14 @@ public class LiveEngineRunner {
                     signal.getTier(),
                     signal.getPartialProfitTargets()
                 );
+
+                // THEN submit to live market via connector
+                String orderId = connector.submitOrder(order, (id, status, fillPrice, fillQty) -> {
+                    handleOrderUpdate(id, status, fillPrice, fillQty, order, signal);
+                });
+
+                order.setOrderId(orderId);
+                System.out.println("  Order submitted: " + orderId);
 
                 printAccountStatus();
 

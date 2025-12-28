@@ -96,7 +96,12 @@ public class EventBus {
         }
 
         try {
-            eventQueue.offer(event, 100, TimeUnit.MILLISECONDS);
+            boolean added = eventQueue.offer(event, 100, TimeUnit.MILLISECONDS);
+            if (!added) {
+                // CRITICAL: Event was dropped due to queue full - this should never happen in normal operation
+                logger.error("EVENT DROPPED - Queue full! Event: {} (type: {})", event, event.getClass().getSimpleName());
+                // In production, consider throwing an exception or implementing retry logic
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.error("Interrupted while publishing event", e);

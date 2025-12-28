@@ -30,6 +30,7 @@ public class ATRCalculator {
     // Volatility thresholds for NQ (can be adjusted per instrument)
     private double lowVolatilityThreshold;
     private double highVolatilityThreshold;
+    private double extremeVolatilityThreshold;
 
     public ATRCalculator(int period) {
         this.period = period;
@@ -41,6 +42,7 @@ public class ATRCalculator {
         // Default thresholds for NQ
         this.lowVolatilityThreshold = 20.0;
         this.highVolatilityThreshold = 40.0;
+        this.extremeVolatilityThreshold = 60.0;  // EXTREME: ATR > 60 pts
     }
 
     /**
@@ -118,10 +120,12 @@ public class ATRCalculator {
             return VolatilityLevel.NORMAL;
         }
 
-        if (currentAtr < lowVolatilityThreshold) {
-            return VolatilityLevel.LOW;
+        if (currentAtr >= extremeVolatilityThreshold) {
+            return VolatilityLevel.EXTREME;  // CRITICAL: Must check EXTREME first!
         } else if (currentAtr > highVolatilityThreshold) {
             return VolatilityLevel.HIGH;
+        } else if (currentAtr < lowVolatilityThreshold) {
+            return VolatilityLevel.LOW;
         }
         return VolatilityLevel.NORMAL;
     }

@@ -68,7 +68,8 @@ public class PropFirmRiskEngine {
         }
 
         // Position size: Use a fraction of DLL per trade (e.g., 25% of DLL)
-        double riskPerTrade = limits.getRiskPerTrade();
+        // CRITICAL: Cap risk to remaining daily loss room to avoid exceeding DLL
+        double riskPerTrade = Math.min(limits.getRiskPerTrade(), remainingDailyLoss);
         int quantity = (int) Math.floor(riskPerTrade / dollarRiskPerContract);
 
         if (quantity <= 0) {

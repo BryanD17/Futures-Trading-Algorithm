@@ -214,10 +214,6 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         boolean hasRecentSweep = liquidityDetector.hasRecentSweep(15);
         if (!hasRecentSweep) {
             noSweep++;
-            // During opening phase, we expect to wait for sweep
-            if (phase == KillzonePhase.OPENING) {
-                return false;
-            }
             return false;
         }
 
