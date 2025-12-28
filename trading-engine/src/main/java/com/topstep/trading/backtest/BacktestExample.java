@@ -35,7 +35,9 @@ public class BacktestExample {
         System.out.println("=" + "=".repeat(59));
 
         // Step 1: Set up Topstep 50K account
-        double startingBalance = 0.0;  // Topstep Express starts at $0
+        // CRITICAL FIX: Topstep 50K funded account has $50,000 starting balance
+        // (The "Express" $0 start only applies to combine evaluation phase)
+        double startingBalance = 50_000.0;  // Topstep 50K funded account
         AccountState accountState = new AccountState(startingBalance);
         RiskLimits riskLimits = RiskLimits.topstep50k();
 

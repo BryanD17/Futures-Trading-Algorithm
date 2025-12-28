@@ -124,18 +124,38 @@ public class EventBus {
 
     /**
      * Stop the event bus.
+     * CRITICAL: Drains remaining events and waits for handlers to complete before stopping.
      */
     public void stop() {
         if (!running) {
             return;
         }
 
+        // First, drain any remaining events in the queue
+        // This ensures all published events are dispatched before shutdown
+        Event remainingEvent;
+        while ((remainingEvent = eventQueue.poll()) != null) {
+            dispatchEvent(remainingEvent);
+            eventsProcessed.incrementAndGet();
+        }
+
+        // Signal the processing thread to stop
         running = false;
         processingThread.interrupt();
-        executorService.shutdown();
 
+        // Wait for processing thread to finish
         try {
-            if (!executorService.awaitTermination(5, TimeUnit.SECONDS)) {
+            processingThread.join(2000);  // Wait up to 2 seconds for processing thread
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        // Shutdown executor and wait for all handler tasks to complete
+        executorService.shutdown();
+        try {
+            // CRITICAL: Wait for all handlers to finish (important for backtest)
+            if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
+                logger.warn("EventBus executor didn't terminate in time, forcing shutdown");
                 executorService.shutdownNow();
             }
         } catch (InterruptedException e) {
