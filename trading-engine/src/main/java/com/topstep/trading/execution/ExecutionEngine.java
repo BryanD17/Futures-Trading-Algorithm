@@ -30,6 +30,17 @@ import java.util.Map;
  */
 public class ExecutionEngine {
 
+    /**
+     * Listener interface for execution events (fills, closes).
+     * CRITICAL: Allows BacktestRunner/LiveRunner to track position state correctly.
+     */
+    public interface ExecutionListener {
+        /** Called when an order is filled and position is opened. */
+        void onPositionOpened(String symbol, OrderSide side, double entryPrice, int quantity);
+        /** Called when a position is fully or partially closed. */
+        void onPositionClosed(String symbol, double pnl, boolean isWin);
+    }
+
     private final AccountState accountState;
     // CRITICAL: Changed to List<Order> to support multiple orders per symbol
     private final Map<String, List<Order>> activeOrders;
@@ -38,6 +49,9 @@ public class ExecutionEngine {
 
     // Enhanced order management with partial profits and trailing stops
     private final Map<String, EnhancedOrderLevels> orderLevels;
+
+    // Execution listener for external notifications
+    private ExecutionListener executionListener;
 
     public ExecutionEngine(AccountState accountState) {
         this.accountState = accountState;
@@ -68,6 +82,14 @@ public class ExecutionEngine {
         tickValues.put("6J", 6.25);    // Japanese Yen
         tickValues.put("6B", 6.25);    // British Pound
         tickValues.put("6C", 10.00);   // Canadian Dollar
+    }
+
+    /**
+     * Set the execution listener for fill/close notifications.
+     * CRITICAL: Must be set before processing candles to receive all notifications.
+     */
+    public void setExecutionListener(ExecutionListener listener) {
+        this.executionListener = listener;
     }
 
     /**
@@ -391,6 +413,11 @@ public class ExecutionEngine {
 
         System.out.println("ENTRY FILLED: " + order.getSymbol() + " " + order.getSide() +
                           " " + order.getQuantity() + " @ " + String.format("%.2f", fillPrice));
+
+        // CRITICAL: Notify listener that position is opened
+        if (executionListener != null) {
+            executionListener.onPositionOpened(order.getSymbol(), order.getSide(), fillPrice, order.getQuantity());
+        }
     }
 
     /**
@@ -456,6 +483,12 @@ public class ExecutionEngine {
 
         System.out.println("EXIT FILLED: " + symbol + " @ " + String.format("%.2f", exitPrice) +
                           " | PnL: $" + String.format("%.2f", realizedPnl) + " | " + reason);
+
+        // CRITICAL: Notify listener that position is closed
+        if (executionListener != null) {
+            boolean isWin = realizedPnl > 0;
+            executionListener.onPositionClosed(symbol, realizedPnl, isWin);
+        }
     }
 
     /**

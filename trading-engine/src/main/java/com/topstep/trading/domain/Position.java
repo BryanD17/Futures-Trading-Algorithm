@@ -80,7 +80,11 @@ public class Position {
      */
     public double getUnrealizedPnL(double currentPrice, double tickValue) {
         if (isFlat()) return 0.0;
-        double priceDiff = currentPrice - avgEntryPrice;
+        // CRITICAL FIX: For LONG positions, profit when price rises (current - entry)
+        // For SHORT positions, profit when price falls (entry - current)
+        double priceDiff = isLong() ?
+            (currentPrice - avgEntryPrice) :
+            (avgEntryPrice - currentPrice);
         return priceDiff * Math.abs(quantity) * tickValue;
     }
 

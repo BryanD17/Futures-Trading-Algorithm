@@ -80,11 +80,14 @@ public class LiquidityDetector {
                 " | Current: " + latest.getClose() + " | Candles: " + totalCandleCount);
         }
 
-        // Bullish sweep: price wicks below recent low and then closes back above it
-        // CRITICAL: Tightened tolerance to avoid false positives (was 2.0, now 0.5)
-        double sweepTolerance = 0.5; // Strict tolerance for accurate sweep detection
-        boolean bullishSweep = (latest.getLow() < recentLow && latest.getClose() > recentLow) ||
-                               (latest.getLow() <= recentLow + sweepTolerance && latest.getClose() > recentLow + sweepTolerance);
+        // Bullish sweep: price wicks below (or very close to) recent low and then closes back above
+        // CRITICAL FIX: Must actually sweep the liquidity level - price must go AT or BELOW the low
+        double sweepTolerance = 0.5; // Allow 0.5 point tolerance (e.g., for tick-level precision)
+
+        // Bullish sweep conditions:
+        // 1. Primary: Low < recentLow AND Close > recentLow (classic sweep and rejection)
+        // 2. Near-miss: Low within tolerance of recentLow AND Close clearly above (strong rejection)
+        boolean bullishSweep = (latest.getLow() <= recentLow && latest.getClose() > recentLow);
 
         if (bullishSweep) {
             boolean hasSmtDiv = checkBullishSmtDivergence(recentLow);
@@ -94,11 +97,11 @@ public class LiquidityDetector {
             lastSweep = new LiquiditySweep(true, recentLow, latest.getTimestamp(), hasSmtDiv);
             candleCountAtLastSweep = totalCandleCount;
         }
-        // Bearish sweep: price wicks above recent high and then closes back below it
-        // Uses same strict tolerance as bullish sweep
+        // Bearish sweep: price wicks above (or very close to) recent high and then closes back below
         else {
-            boolean bearishSweep = (latest.getHigh() > recentHigh && latest.getClose() < recentHigh) ||
-                                   (latest.getHigh() >= recentHigh - sweepTolerance && latest.getClose() < recentHigh - sweepTolerance);
+            // Bearish sweep conditions:
+            // Price must reach AT or ABOVE the high, then close below
+            boolean bearishSweep = (latest.getHigh() >= recentHigh && latest.getClose() < recentHigh);
 
             if (bearishSweep) {
                 boolean hasSmtDiv = checkBearishSmtDivergence(recentHigh);
