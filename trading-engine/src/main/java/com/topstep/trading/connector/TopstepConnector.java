@@ -550,7 +550,13 @@ public class TopstepConnector implements TradingConnector {
         // ProjectX Gateway: side 0=Buy/Bid, 1=Sell/Ask (per official docs)
         orderMap.put("side", order.getSide() == OrderSide.BUY ? 0 : 1);
         orderMap.put("size", order.getQuantity());
-        if (order.getType() == OrderType.LIMIT && order.getLimitPrice() != null) {
+
+        // CRITICAL: Validate and include limit price for LIMIT orders
+        if (order.getType() == OrderType.LIMIT) {
+            if (order.getLimitPrice() == null || order.getLimitPrice() <= 0) {
+                orderListeners.remove(clientOrderId);
+                throw new IllegalArgumentException("LIMIT order requires a valid limit price, got: " + order.getLimitPrice());
+            }
             orderMap.put("limitPrice", order.getLimitPrice());
         }
 
@@ -574,8 +580,17 @@ public class TopstepConnector implements TradingConnector {
             logger.info("Order response: {}", responseBody);
             JsonNode json = objectMapper.readTree(responseBody);
 
-            // Check if order was successful
-            boolean success = json.has("success") ? json.get("success").asBoolean() : true;
+            // Check if order was successful - CRITICAL: Default to false for safety
+            boolean success;
+            if (json.has("success")) {
+                success = json.get("success").asBoolean();
+            } else {
+                // If no explicit success field, check for orderId presence as implicit success
+                success = json.has("orderId") || json.has("id");
+                if (!success) {
+                    logger.warn("API response missing 'success' field and no order ID found: {}", responseBody);
+                }
+            }
             if (!success) {
                 String errorMsg = json.has("errorMessage") ? json.get("errorMessage").asText() : "Unknown error";
                 int errorCode = json.has("errorCode") ? json.get("errorCode").asInt() : -1;
