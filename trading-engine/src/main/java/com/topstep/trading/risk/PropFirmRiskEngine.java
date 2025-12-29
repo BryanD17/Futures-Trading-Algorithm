@@ -15,10 +15,18 @@ import com.topstep.trading.event.StrategySignalEvent;
  */
 public class PropFirmRiskEngine {
 
-    private static final double TICK_VALUE_ES = 12.50;  // ES: $12.50 per tick
-    private static final double TICK_VALUE_NQ = 5.00;   // NQ: $5.00 per tick
+    // Tick values (dollar value per tick) for different instruments
+    private static final double TICK_VALUE_ES = 12.50;  // ES: $12.50 per tick (0.25 point)
+    private static final double TICK_VALUE_NQ = 5.00;   // NQ: $5.00 per tick (0.25 point)
+    private static final double TICK_VALUE_6E = 6.25;   // Euro FX: $6.25 per tick (125,000 EUR × 0.00005)
+    private static final double TICK_VALUE_6J = 6.25;   // Japanese Yen: $6.25 per tick (12,500,000 JPY × 0.0000005)
+    private static final double TICK_VALUE_6B = 6.25;   // British Pound: $6.25 per tick (62,500 GBP × 0.0001)
+    private static final double TICK_VALUE_CL = 10.00;  // Crude Oil: $10.00 per tick (1,000 barrels × 0.01)
+    private static final double TICK_VALUE_GC = 10.00;  // Gold: $10.00 per tick (100 oz × 0.10)
+    private static final double TICK_VALUE_NG = 10.00;  // Natural Gas: $10.00 per tick (10,000 MMBtu × 0.001)
+    private static final double TICK_VALUE_SI = 25.00;  // Silver: $25.00 per tick (5,000 oz × 0.005)
 
-    // Tick sizes for different instruments
+    // Tick sizes (minimum price increment) for different instruments
     private static final double TICK_SIZE_ES = 0.25;      // ES/MES
     private static final double TICK_SIZE_NQ = 0.25;      // NQ/MNQ
     private static final double TICK_SIZE_6E = 0.00005;   // Euro FX
@@ -137,13 +145,31 @@ public class PropFirmRiskEngine {
      * Get tick value for a given symbol (dollar value per tick).
      */
     private double getTickValue(String symbol) {
-        if (symbol.startsWith("ES") || symbol.equals("MES")) {
-            return TICK_VALUE_ES;
-        } else if (symbol.startsWith("NQ") || symbol.equals("MNQ")) {
-            return TICK_VALUE_NQ;
+        switch (symbol.toUpperCase()) {
+            case "ES":
+            case "MES":
+                return TICK_VALUE_ES;
+            case "NQ":
+            case "MNQ":
+                return TICK_VALUE_NQ;
+            case "6E":
+                return TICK_VALUE_6E;
+            case "6J":
+                return TICK_VALUE_6J;
+            case "6B":
+                return TICK_VALUE_6B;
+            case "CL":
+                return TICK_VALUE_CL;
+            case "GC":
+                return TICK_VALUE_GC;
+            case "NG":
+                return TICK_VALUE_NG;
+            case "SI":
+                return TICK_VALUE_SI;
+            default:
+                // Default to ES tick value for unknown instruments
+                return TICK_VALUE_ES;
         }
-        // Default to ES tick value
-        return TICK_VALUE_ES;
     }
 
     /**
