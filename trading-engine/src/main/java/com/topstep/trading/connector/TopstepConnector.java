@@ -41,7 +41,11 @@ public class TopstepConnector implements TradingConnector {
     private final String username;
     private final String apiKey;
     private final String accountId;
-    private final boolean useLiveData;  // true for LIVE trading, false for SIM data
+    private boolean useLiveData;  // true for LIVE trading, false for SIM data (auto-detected)
+
+    // Discovered contracts cache (symbol name -> contract ID)
+    private final Map<String, String> discoveredContracts = new ConcurrentHashMap<>();
+    private volatile boolean contractsDiscovered = false;
 
     // HTTP client
     private final OkHttpClient httpClient;
@@ -173,27 +177,24 @@ public class TopstepConnector implements TradingConnector {
 
     /**
      * Search for a contract by symbol and get its contract ID.
-     * ES -> CON.F.US.EP.H25 (current front month)
+     * Uses auto-detection to determine SIM vs LIVE mode.
      */
     private String searchContract(String symbol) throws Exception {
         logger.info("Searching for contract: {}", symbol);
 
-        // First, try to discover ALL available contracts (one-time diagnostic)
-        if (symbolToContractId.isEmpty()) {
-            discoverAvailableContracts();
+        // First, discover all available contracts and auto-detect SIM/LIVE mode
+        if (!contractsDiscovered) {
+            discoverAndCacheContracts();
         }
 
-        // Try multiple search terms to find the contract
-        String[] searchTerms = getSearchTermsForSymbol(symbol);
-
-        for (String searchTerm : searchTerms) {
-            String contractId = trySearchContract(searchTerm, symbol);
-            if (contractId != null) {
-                return contractId;
-            }
+        // Check if we have a cached contract for this symbol
+        String cachedContractId = findCachedContractForSymbol(symbol);
+        if (cachedContractId != null) {
+            logger.info("Using cached contract for {}: {}", symbol, cachedContractId);
+            return cachedContractId;
         }
 
-        // If no contracts found via search, try common contract ID patterns
+        // If not in cache, try fallback contract ID with correct ProjectX format
         String fallbackContractId = getFallbackContractId(symbol);
         if (fallbackContractId != null) {
             logger.info("Using fallback contract ID: {}", fallbackContractId);
@@ -204,65 +205,70 @@ public class TopstepConnector implements TradingConnector {
     }
 
     /**
-     * Discover all available contracts from TopstepX to understand the API.
+     * Find a cached contract ID for a symbol by matching name patterns.
      */
-    private void discoverAvailableContracts() {
-        logger.info("=== DISCOVERING ALL AVAILABLE CONTRACTS ===");
+    private String findCachedContractForSymbol(String symbol) {
+        // Direct match by symbol name pattern
+        // Contracts have names like "ESH6", "NQH6", "6EH6", "CLG6", etc.
+        String upperSymbol = symbol.toUpperCase();
 
-        // Try various broad search terms to find ANY contracts
-        String[] broadSearches = {"", "F", "CON", "CME", "futures", "mini", "micro"};
+        for (Map.Entry<String, String> entry : discoveredContracts.entrySet()) {
+            String contractName = entry.getKey().toUpperCase();
+            String contractId = entry.getValue();
 
-        for (String search : broadSearches) {
-            try {
-                String searchUrl = apiUrl + "/Contract/search";
-                String searchBody = objectMapper.writeValueAsString(Map.of(
-                    "searchText", search,
-                    "live", useLiveData
-                ));
-
-                Request request = new Request.Builder()
-                    .url(searchUrl)
-                    .header("Authorization", "Bearer " + authToken)
-                    .post(RequestBody.create(searchBody, MediaType.parse("application/json")))
-                    .build();
-
-                try (Response response = httpClient.newCall(request).execute()) {
-                    if (response.isSuccessful()) {
-                        String responseBody = response.body().string();
-                        JsonNode json = objectMapper.readTree(responseBody);
-                        JsonNode contracts = json.has("contracts") ? json.get("contracts") : json;
-
-                        if (contracts.isArray() && contracts.size() > 0) {
-                            logger.info("FOUND {} contracts with search '{}' (live={}):",
-                                contracts.size(), search, useLiveData);
-                            int count = 0;
-                            for (JsonNode contract : contracts) {
-                                String id = contract.has("id") ? contract.get("id").asText() : "";
-                                String name = contract.has("name") ? contract.get("name").asText() : "";
-                                logger.info("  [{}] id='{}', name='{}'", ++count, id, name);
-                                if (count >= 20) {
-                                    logger.info("  ... and {} more", contracts.size() - 20);
-                                    break;
-                                }
-                            }
-                            return; // Found contracts, stop searching
-                        } else {
-                            logger.info("No contracts found with search '{}' (live={})", search, useLiveData);
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                logger.warn("Error during contract discovery with '{}': {}", search, e.getMessage());
+            // Match by symbol prefix (e.g., "ES" matches "ESH6", "6E" matches "6EH6")
+            if (contractName.startsWith(upperSymbol)) {
+                return contractId;
             }
         }
 
-        // Also try with live=false to see if SIM contracts are available
-        logger.info("Trying with live=false to check SIM contracts...");
+        return null;
+    }
+
+    /**
+     * Discover all available contracts and cache them.
+     * Auto-detects SIM vs LIVE mode based on which returns contracts.
+     */
+    private void discoverAndCacheContracts() {
+        logger.info("=== DISCOVERING AVAILABLE CONTRACTS (AUTO-DETECT MODE) ===");
+
+        // First try with current useLiveData setting
+        int liveContracts = tryDiscoverContracts(useLiveData);
+
+        if (liveContracts == 0) {
+            // No contracts found with current setting, try the opposite
+            boolean oppositeMode = !useLiveData;
+            logger.info("No contracts found with live={}. Trying live={}...", useLiveData, oppositeMode);
+
+            int simContracts = tryDiscoverContracts(oppositeMode);
+
+            if (simContracts > 0) {
+                // Found contracts with opposite mode - switch to it!
+                logger.warn("*** AUTO-SWITCHING TO {} MODE ***", oppositeMode ? "LIVE" : "SIM");
+                logger.warn("Your account appears to be a {} account. Using live={} for all requests.",
+                    oppositeMode ? "LIVE" : "SIM/Combine", oppositeMode);
+                useLiveData = oppositeMode;
+            } else {
+                logger.error("No contracts found with either live=true or live=false!");
+                logger.error("Please verify your TopstepX API credentials and account status.");
+            }
+        }
+
+        contractsDiscovered = true;
+        logger.info("=== CONTRACT DISCOVERY COMPLETE (live={}, {} contracts cached) ===",
+            useLiveData, discoveredContracts.size());
+    }
+
+    /**
+     * Try to discover contracts with the given live flag.
+     * Returns the number of contracts found and caches them.
+     */
+    private int tryDiscoverContracts(boolean liveFlag) {
         try {
             String searchUrl = apiUrl + "/Contract/search";
             String searchBody = objectMapper.writeValueAsString(Map.of(
                 "searchText", "",
-                "live", false
+                "live", liveFlag
             ));
 
             Request request = new Request.Builder()
@@ -278,176 +284,201 @@ public class TopstepConnector implements TradingConnector {
                     JsonNode contracts = json.has("contracts") ? json.get("contracts") : json;
 
                     if (contracts.isArray() && contracts.size() > 0) {
-                        logger.info("FOUND {} SIM contracts:", contracts.size());
-                        int count = 0;
+                        logger.info("FOUND {} contracts with live={}:", contracts.size(), liveFlag);
+
+                        // Cache all contracts
+                        discoveredContracts.clear();
                         for (JsonNode contract : contracts) {
                             String id = contract.has("id") ? contract.get("id").asText() : "";
                             String name = contract.has("name") ? contract.get("name").asText() : "";
-                            logger.info("  [{}] id='{}', name='{}'", ++count, id, name);
-                            if (count >= 20) {
-                                logger.info("  ... and {} more", contracts.size() - 20);
-                                break;
+                            if (!id.isEmpty() && !name.isEmpty()) {
+                                discoveredContracts.put(name, id);
+                                logger.info("  Cached: {} -> {}", name, id);
                             }
                         }
-                    } else {
-                        logger.info("No SIM contracts found either");
+
+                        return contracts.size();
                     }
                 }
             }
         } catch (Exception e) {
-            logger.warn("Error checking SIM contracts: {}", e.getMessage());
+            logger.warn("Error discovering contracts with live={}: {}", liveFlag, e.getMessage());
         }
 
-        logger.info("=== END CONTRACT DISCOVERY ===");
+        return 0;
     }
 
     /**
-     * Get search terms to try for a symbol.
-     */
-    private String[] getSearchTermsForSymbol(String symbol) {
-        return switch (symbol.toUpperCase()) {
-            case "ES" -> new String[]{"ES", "EP", "E-mini S&P", "S&P 500"};
-            case "NQ" -> new String[]{"NQ", "ENQ", "E-mini NASDAQ", "NASDAQ"};
-            case "MES" -> new String[]{"MES", "Micro E-mini S&P"};
-            case "MNQ" -> new String[]{"MNQ", "Micro E-mini NASDAQ"};
-            case "6E" -> new String[]{"6E", "E6", "Euro FX", "EUR/USD"};
-            case "6J" -> new String[]{"6J", "J6", "Japanese Yen", "JPY"};
-            case "6B" -> new String[]{"6B", "B6", "British Pound", "GBP"};
-            case "6C" -> new String[]{"6C", "C6", "Canadian Dollar", "CAD"};
-            case "6A" -> new String[]{"6A", "A6", "Australian Dollar", "AUD"};
-            case "CL" -> new String[]{"CL", "Crude Oil", "WTI"};
-            case "GC" -> new String[]{"GC", "Gold"};
-            case "SI" -> new String[]{"SI", "Silver"};
-            case "NG" -> new String[]{"NG", "Natural Gas"};
-            case "YM" -> new String[]{"YM", "E-mini Dow", "Dow"};
-            case "RTY" -> new String[]{"RTY", "E-mini Russell", "Russell"};
-            default -> new String[]{symbol};
-        };
-    }
-
-    /**
-     * Try to search for a contract with the given search term.
-     */
-    private String trySearchContract(String searchTerm, String originalSymbol) throws Exception {
-        logger.info("Trying search term '{}' for symbol {}", searchTerm, originalSymbol);
-
-        String searchUrl = apiUrl + "/Contract/search";
-        String searchBody = objectMapper.writeValueAsString(Map.of(
-            "searchText", searchTerm,
-            "live", useLiveData
-        ));
-
-        Request request = new Request.Builder()
-            .url(searchUrl)
-            .header("Authorization", "Bearer " + authToken)
-            .post(RequestBody.create(searchBody, MediaType.parse("application/json")))
-            .build();
-
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                String body = response.body() != null ? response.body().string() : "No body";
-                logger.warn("Contract search failed for '{}': {} - {}", searchTerm, response.code(), body);
-                return null;
-            }
-
-            String responseBody = response.body().string();
-            logger.info("Contract search response for '{}': {}", searchTerm, responseBody);
-            JsonNode json = objectMapper.readTree(responseBody);
-
-            // TopstepX returns { "contracts": [...], "success": true }
-            JsonNode contracts = json.has("contracts") ? json.get("contracts") : json;
-
-            if (contracts.isArray() && contracts.size() > 0) {
-                // Log ALL available contracts for debugging
-                logger.info("Found {} contracts for search term '{}':", contracts.size(), searchTerm);
-                for (JsonNode contract : contracts) {
-                    String contractId = contract.has("id") ? contract.get("id").asText() : "";
-                    String name = contract.has("name") ? contract.get("name").asText() : "";
-                    String description = contract.has("description") ? contract.get("description").asText() : "";
-                    logger.info("  Contract: id='{}', name='{}', desc='{}'", contractId, name, description);
-                }
-
-                // Return the first contract's ID
-                JsonNode firstContract = contracts.get(0);
-                String contractId = firstContract.has("id") ? firstContract.get("id").asText() : "";
-                if (!contractId.isEmpty()) {
-                    logger.info("Selected contract ID '{}' for symbol {}", contractId, originalSymbol);
-                    return contractId;
-                }
-            } else {
-                logger.info("No contracts found for search term '{}'", searchTerm);
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Get a fallback contract ID based on common patterns.
+     * Get a fallback contract ID based on ProjectX contract patterns.
+     * Uses CORRECT ProjectX root codes discovered from the API.
      * Contract IDs follow pattern: CON.F.US.{root}.{month}{year}
      * Month codes: F=Jan, G=Feb, H=Mar, J=Apr, K=May, M=Jun, N=Jul, Q=Aug, U=Sep, V=Oct, X=Nov, Z=Dec
      */
     private String getFallbackContractId(String symbol) {
-        // Determine current front month
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
         int month = now.getMonthValue();
         int year = now.getYear() % 100; // 2-digit year
 
-        // Futures typically roll to next quarter: Mar (H), Jun (M), Sep (U), Dec (Z)
+        // Different products have different expiration patterns:
+        // - Index futures (ES, NQ): Quarterly (H, M, U, Z)
+        // - Energy (CL, NG): Monthly
+        // - Metals (GC, SI): Specific months (Feb, Apr, Jun, Aug, Oct, Dec for GC)
+        // - Currencies: Quarterly (H, M, U, Z)
+
         String monthCode;
-        if (month <= 3) {
-            monthCode = "H"; // March
-        } else if (month <= 6) {
-            monthCode = "M"; // June
-        } else if (month <= 9) {
-            monthCode = "U"; // September
+        String root;
+
+        switch (symbol.toUpperCase()) {
+            // INDEX FUTURES - Quarterly expiration
+            case "ES":
+                root = "EP";
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "NQ":
+                root = "ENQ";
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "YM":
+                root = "YM";
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "RTY":
+                root = "RTY";
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+
+            // MICRO INDEX - Quarterly
+            case "MES":
+                root = "MES";
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "MNQ":
+                root = "MNQ";
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+
+            // ENERGY - Monthly expiration (use next month's contract)
+            case "CL":
+                root = "CLE";  // ProjectX uses CLE, not CL
+                monthCode = getNextMonthCode(month);
+                if (month == 12) year++;
+                break;
+            case "NG":
+                root = "NGE";  // ProjectX uses NGE, not NG
+                monthCode = getNextMonthCode(month);
+                if (month == 12) year++;
+                break;
+            case "HO":  // Heating Oil
+                root = "HOE";
+                monthCode = getNextMonthCode(month);
+                if (month == 12) year++;
+                break;
+
+            // METALS - Specific expiration months
+            case "GC":
+                root = "GCE";  // ProjectX uses GCE, not GC
+                monthCode = getGoldMonthCode(month);
+                // Gold trades Feb, Apr, Jun, Aug, Oct, Dec
+                break;
+            case "SI":
+                root = "SIE";  // ProjectX uses SIE, not SI
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+
+            // CURRENCY FUTURES - Quarterly (using CORRECT ProjectX roots!)
+            case "6E":
+                root = "EU6";  // ProjectX uses EU6, not E6
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "6J":
+                root = "JY6";  // ProjectX uses JY6, not J6
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "6B":
+                root = "BP6";  // ProjectX uses BP6, not B6
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "6C":
+                root = "CA6";  // ProjectX uses CA6, not C6
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "6A":
+                root = "DA6";  // ProjectX uses DA6, not A6
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+
+            default:
+                logger.warn("No fallback contract ID mapping for symbol: {}", symbol);
+                return null;
+        }
+
+        String contractId = String.format("CON.F.US.%s.%s%02d", root, monthCode, year);
+        logger.info("Generated fallback contract ID for {}: {} (using ProjectX root: {})",
+            symbol, contractId, root);
+        return contractId;
+    }
+
+    /**
+     * Get quarterly month code (H=Mar, M=Jun, U=Sep, Z=Dec).
+     */
+    private String getQuarterlyMonthCode(int currentMonth, int dayOfMonth) {
+        if (currentMonth <= 3) {
+            return (currentMonth == 3 && dayOfMonth > 15) ? "M" : "H";
+        } else if (currentMonth <= 6) {
+            return (currentMonth == 6 && dayOfMonth > 15) ? "U" : "M";
+        } else if (currentMonth <= 9) {
+            return (currentMonth == 9 && dayOfMonth > 15) ? "Z" : "U";
         } else {
-            monthCode = "Z"; // December
+            return (currentMonth == 12 && dayOfMonth > 15) ? "H" : "Z";
         }
+    }
 
-        // If we're past the contract month, move to next quarter
-        if ((month == 3 && now.getDayOfMonth() > 15) ||
-            (month == 6 && now.getDayOfMonth() > 15) ||
-            (month == 9 && now.getDayOfMonth() > 15) ||
-            (month == 12 && now.getDayOfMonth() > 15)) {
-            if (monthCode.equals("H")) monthCode = "M";
-            else if (monthCode.equals("M")) monthCode = "U";
-            else if (monthCode.equals("U")) monthCode = "Z";
-            else {
-                monthCode = "H";
-                year++;
-            }
-        }
-
-        // Map common symbols to their root codes
-        String root = switch (symbol.toUpperCase()) {
-            case "ES" -> "EP";      // E-mini S&P 500
-            case "NQ" -> "ENQ";     // E-mini NASDAQ 100
-            case "MES" -> "MES";    // Micro E-mini S&P 500
-            case "MNQ" -> "MNQ";    // Micro E-mini NASDAQ 100
-            case "YM" -> "YM";      // E-mini Dow
-            case "RTY" -> "RTY";    // E-mini Russell 2000
-            case "CL" -> "CL";      // Crude Oil
-            case "GC" -> "GC";      // Gold
-            case "SI" -> "SI";      // Silver
-            case "NG" -> "NG";      // Natural Gas
-            case "6E" -> "E6";      // Euro FX (CME uses E6 internally)
-            case "6J" -> "J6";      // Japanese Yen (CME uses J6 internally)
-            case "6B" -> "B6";      // British Pound (CME uses B6 internally)
-            case "6C" -> "C6";      // Canadian Dollar
-            case "6A" -> "A6";      // Australian Dollar
-            default -> null;
+    /**
+     * Get next month's code for monthly contracts.
+     */
+    private String getNextMonthCode(int currentMonth) {
+        int nextMonth = (currentMonth % 12) + 1;
+        return switch (nextMonth) {
+            case 1 -> "F";
+            case 2 -> "G";
+            case 3 -> "H";
+            case 4 -> "J";
+            case 5 -> "K";
+            case 6 -> "M";
+            case 7 -> "N";
+            case 8 -> "Q";
+            case 9 -> "U";
+            case 10 -> "V";
+            case 11 -> "X";
+            case 12 -> "Z";
+            default -> "H";
         };
+    }
 
-        if (root != null) {
-            String contractId = String.format("CON.F.US.%s.%s%02d", root, monthCode, year);
-            logger.info("Generated fallback contract ID for {}: {} (month={}, day={}, year={})",
-                symbol, contractId, month, now.getDayOfMonth(), year);
-            return contractId;
-        }
-
-        logger.warn("No fallback contract ID available for symbol: {}", symbol);
-        return null;
+    /**
+     * Get Gold (GC) contract month code.
+     * Gold trades Feb (G), Apr (J), Jun (M), Aug (Q), Oct (V), Dec (Z).
+     */
+    private String getGoldMonthCode(int currentMonth) {
+        // Find next gold contract month
+        if (currentMonth <= 2) return "G";  // February
+        if (currentMonth <= 4) return "J";  // April
+        if (currentMonth <= 6) return "M";  // June
+        if (currentMonth <= 8) return "Q";  // August
+        if (currentMonth <= 10) return "V"; // October
+        return "Z";  // December
     }
 
     /**
@@ -455,22 +486,22 @@ public class TopstepConnector implements TradingConnector {
      */
     private void fetchBars(String symbol, String contractId) {
         try {
-            // Calculate time range - last 10 minutes to get recent data
+            // Calculate time range - use wider window for better diagnostics
             ZonedDateTime endTime = ZonedDateTime.now(ZoneOffset.UTC);
-            ZonedDateTime startTime = endTime.minusMinutes(10);
+            ZonedDateTime startTime = endTime.minusMinutes(60);  // 60 minutes for robustness
 
-            logger.info("Fetching bars for {} using contract ID: {}", symbol, contractId);
+            logger.debug("Fetching bars for {} using contract ID: {} (live={})", symbol, contractId, useLiveData);
             String barsUrl = apiUrl + "/History/retrieveBars";
 
             Map<String, Object> requestMap = new HashMap<>();
             requestMap.put("contractId", contractId);
-            requestMap.put("live", useLiveData);
+            requestMap.put("live", useLiveData);  // Use auto-detected live flag
             requestMap.put("startTime", startTime.format(DateTimeFormatter.ISO_INSTANT));
             requestMap.put("endTime", endTime.format(DateTimeFormatter.ISO_INSTANT));
             requestMap.put("unit", BAR_UNIT_MINUTE);
             requestMap.put("unitNumber", 1);
-            requestMap.put("limit", 10);
-            requestMap.put("includePartialBar", true);
+            requestMap.put("limit", 30);  // Request more bars
+            requestMap.put("includePartialBar", false);  // Exclude partial bars for cleaner data
 
             String requestBody = objectMapper.writeValueAsString(requestMap);
 
@@ -483,18 +514,35 @@ public class TopstepConnector implements TradingConnector {
             try (Response response = httpClient.newCall(request).execute()) {
                 if (!response.isSuccessful()) {
                     String body = response.body() != null ? response.body().string() : "No body";
-                    logger.error("Failed to fetch bars for {}: {} - {}", symbol, response.code(), body);
+                    logger.error("HTTP error fetching bars for {}: {} - {}", symbol, response.code(), body);
                     return;
                 }
 
                 String responseBody = response.body().string();
                 JsonNode json = objectMapper.readTree(responseBody);
 
+                // CRITICAL: Check success and errorCode FIRST before parsing bars
+                boolean success = json.path("success").asBoolean(true);  // Default true if not present
+                int errorCode = json.path("errorCode").asInt(0);
+                String errorMessage = json.path("errorMessage").asText(null);
+
+                if (!success || errorCode != 0) {
+                    logger.error("API ERROR fetching bars for {}: errorCode={}, errorMessage='{}', contractId={}, live={}",
+                        symbol, errorCode, errorMessage, contractId, useLiveData);
+
+                    // Provide actionable error messages based on error code
+                    if (errorCode == 1) {
+                        logger.error("ErrorCode 1 typically means: Invalid contract ID or account not authorized for this contract.");
+                        logger.error("Try: 1) Verify contract ID exists 2) Check if account is SIM vs LIVE 3) Verify API permissions");
+                    }
+                    return;
+                }
+
                 // Extract bars array
                 JsonNode bars = json.has("bars") ? json.get("bars") : json;
-                if (!bars.isArray() || bars.isEmpty()) {
-                    // Log the actual API response to diagnose the issue
-                    logger.warn("Empty bars response for {} - API returned: {}", symbol, responseBody);
+                if (bars == null || bars.isNull() || !bars.isArray() || bars.isEmpty()) {
+                    // This is normal during market closed hours - log at debug level
+                    logger.debug("No bars returned for {} (market may be closed)", symbol);
                     return;
                 }
 
