@@ -553,14 +553,15 @@ public class TopstepConnector implements TradingConnector {
                 }
 
                 Instant lastTimestamp = lastBarTimestamp.get(symbol);
-                int newBarsCount = 0;
-                int skippedBarsCount = 0;
                 int totalBarsReceived = bars.size();
 
                 logger.info("Received {} bars for {} (last processed: {})",
                     totalBarsReceived, symbol, lastTimestamp != null ? lastTimestamp : "none");
 
-                // Process each bar
+                // CRITICAL FIX: Parse all bars, sort by timestamp, then deliver in chronological order
+                // This prevents out-of-order candle delivery which can affect indicator calculations
+                java.util.List<Candle> parsedCandles = new java.util.ArrayList<>();
+
                 for (JsonNode bar : bars) {
                     try {
                         // Parse timestamp - try different field names
@@ -578,7 +579,6 @@ public class TopstepConnector implements TradingConnector {
 
                         // Skip bars we've already processed
                         if (lastTimestamp != null && !timestamp.isAfter(lastTimestamp)) {
-                            skippedBarsCount++;
                             continue;
                         }
 
@@ -589,35 +589,43 @@ public class TopstepConnector implements TradingConnector {
                         double close = getDoubleField(bar, "c", "close");
                         long volume = getLongField(bar, "v", "volume");
 
-                        // Create candle
-                        Candle candle = new Candle(
-                            symbol,
-                            timestamp,
-                            open,
-                            high,
-                            low,
-                            close,
-                            volume
-                        );
-
-                        // Deliver to listener
-                        listener.onCandle(candle);
-                        newBarsCount++;
-                        logger.info("CANDLE {} | {} | O:{} H:{} L:{} C:{} V:{}",
-                            symbol, timestamp, open, high, low, close, volume);
-
-                        // Update last timestamp
-                        if (lastTimestamp == null || timestamp.isAfter(lastTimestamp)) {
-                            lastBarTimestamp.put(symbol, timestamp);
-                        }
+                        // Create candle and add to list
+                        Candle candle = new Candle(symbol, timestamp, open, high, low, close, volume);
+                        parsedCandles.add(candle);
 
                     } catch (Exception e) {
                         logger.error("Error parsing bar for {}: {}", symbol, e.getMessage());
                     }
                 }
 
+                // Sort candles by timestamp ASCENDING (oldest first) for correct indicator processing
+                parsedCandles.sort((c1, c2) -> c1.getTimestamp().compareTo(c2.getTimestamp()));
+
+                // Deliver candles in chronological order
+                int newBarsCount = 0;
+                Instant maxTimestamp = lastTimestamp;
+
+                for (Candle candle : parsedCandles) {
+                    listener.onCandle(candle);
+                    newBarsCount++;
+                    logger.info("CANDLE {} | {} | O:{} H:{} L:{} C:{} V:{}",
+                        symbol, candle.getTimestamp(), candle.getOpen(), candle.getHigh(),
+                        candle.getLow(), candle.getClose(), candle.getVolume());
+
+                    // Track the maximum timestamp
+                    if (maxTimestamp == null || candle.getTimestamp().isAfter(maxTimestamp)) {
+                        maxTimestamp = candle.getTimestamp();
+                    }
+                }
+
+                // Update lastBarTimestamp to the max delivered timestamp
+                if (maxTimestamp != null && (lastTimestamp == null || maxTimestamp.isAfter(lastTimestamp))) {
+                    lastBarTimestamp.put(symbol, maxTimestamp);
+                }
+
+                int skippedBarsCount = totalBarsReceived - newBarsCount;
                 if (newBarsCount > 0) {
-                    logger.info("Delivered {} new candles for {} (skipped {} already processed)",
+                    logger.info("Delivered {} new candles for {} in chronological order (skipped {} already processed)",
                         newBarsCount, symbol, skippedBarsCount);
                 } else if (skippedBarsCount > 0) {
                     logger.info("All {} bars for {} already processed (no new data)",
