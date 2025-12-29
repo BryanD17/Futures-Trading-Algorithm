@@ -178,9 +178,59 @@ public class TopstepConnector implements TradingConnector {
     private String searchContract(String symbol) throws Exception {
         logger.info("Searching for contract: {}", symbol);
 
+        // Try multiple search terms to find the contract
+        String[] searchTerms = getSearchTermsForSymbol(symbol);
+
+        for (String searchTerm : searchTerms) {
+            String contractId = trySearchContract(searchTerm, symbol);
+            if (contractId != null) {
+                return contractId;
+            }
+        }
+
+        // If no contracts found via search, try common contract ID patterns
+        String fallbackContractId = getFallbackContractId(symbol);
+        if (fallbackContractId != null) {
+            logger.info("Using fallback contract ID: {}", fallbackContractId);
+            return fallbackContractId;
+        }
+
+        throw new IOException("No contracts found for symbol: " + symbol);
+    }
+
+    /**
+     * Get search terms to try for a symbol.
+     */
+    private String[] getSearchTermsForSymbol(String symbol) {
+        return switch (symbol.toUpperCase()) {
+            case "ES" -> new String[]{"ES", "EP", "E-mini S&P", "S&P 500"};
+            case "NQ" -> new String[]{"NQ", "ENQ", "E-mini NASDAQ", "NASDAQ"};
+            case "MES" -> new String[]{"MES", "Micro E-mini S&P"};
+            case "MNQ" -> new String[]{"MNQ", "Micro E-mini NASDAQ"};
+            case "6E" -> new String[]{"6E", "E6", "Euro FX", "EUR/USD"};
+            case "6J" -> new String[]{"6J", "J6", "Japanese Yen", "JPY"};
+            case "6B" -> new String[]{"6B", "B6", "British Pound", "GBP"};
+            case "6C" -> new String[]{"6C", "C6", "Canadian Dollar", "CAD"};
+            case "6A" -> new String[]{"6A", "A6", "Australian Dollar", "AUD"};
+            case "CL" -> new String[]{"CL", "Crude Oil", "WTI"};
+            case "GC" -> new String[]{"GC", "Gold"};
+            case "SI" -> new String[]{"SI", "Silver"};
+            case "NG" -> new String[]{"NG", "Natural Gas"};
+            case "YM" -> new String[]{"YM", "E-mini Dow", "Dow"};
+            case "RTY" -> new String[]{"RTY", "E-mini Russell", "Russell"};
+            default -> new String[]{symbol};
+        };
+    }
+
+    /**
+     * Try to search for a contract with the given search term.
+     */
+    private String trySearchContract(String searchTerm, String originalSymbol) throws Exception {
+        logger.info("Trying search term '{}' for symbol {}", searchTerm, originalSymbol);
+
         String searchUrl = apiUrl + "/Contract/search";
         String searchBody = objectMapper.writeValueAsString(Map.of(
-            "searchText", symbol,
+            "searchText", searchTerm,
             "live", useLiveData
         ));
 
@@ -193,42 +243,40 @@ public class TopstepConnector implements TradingConnector {
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 String body = response.body() != null ? response.body().string() : "No body";
-                throw new IOException("Contract search failed: " + response.code() + " - " + body);
+                logger.warn("Contract search failed for '{}': {} - {}", searchTerm, response.code(), body);
+                return null;
             }
 
             String responseBody = response.body().string();
-            logger.debug("Contract search response: {}", responseBody);
+            logger.info("Contract search response for '{}': {}", searchTerm, responseBody);
             JsonNode json = objectMapper.readTree(responseBody);
 
             // TopstepX returns { "contracts": [...], "success": true }
             JsonNode contracts = json.has("contracts") ? json.get("contracts") : json;
 
             if (contracts.isArray() && contracts.size() > 0) {
-                // Find the best matching contract (front month futures)
+                // Log ALL available contracts for debugging
+                logger.info("Found {} contracts for search term '{}':", contracts.size(), searchTerm);
                 for (JsonNode contract : contracts) {
                     String contractId = contract.has("id") ? contract.get("id").asText() : "";
                     String name = contract.has("name") ? contract.get("name").asText() : "";
                     String description = contract.has("description") ? contract.get("description").asText() : "";
-
-                    // Match based on symbol patterns
-                    // ES futures: CON.F.US.EP.xxx or similar
-                    // NQ futures: CON.F.US.ENQ.xxx or similar
-                    if (!contractId.isEmpty()) {
-                        logger.info("Found contract: {} - {} ({})", contractId, name, description);
-                        return contractId;
-                    }
+                    logger.info("  Contract: id='{}', name='{}', desc='{}'", contractId, name, description);
                 }
-            }
 
-            // If no contracts found via search, try common contract ID patterns
-            String fallbackContractId = getFallbackContractId(symbol);
-            if (fallbackContractId != null) {
-                logger.info("Using fallback contract ID: {}", fallbackContractId);
-                return fallbackContractId;
+                // Return the first contract's ID
+                JsonNode firstContract = contracts.get(0);
+                String contractId = firstContract.has("id") ? firstContract.get("id").asText() : "";
+                if (!contractId.isEmpty()) {
+                    logger.info("Selected contract ID '{}' for symbol {}", contractId, originalSymbol);
+                    return contractId;
+                }
+            } else {
+                logger.info("No contracts found for search term '{}'", searchTerm);
             }
-
-            throw new IOException("No contracts found for symbol: " + symbol);
         }
+
+        return null;
     }
 
     /**
@@ -289,9 +337,13 @@ public class TopstepConnector implements TradingConnector {
         };
 
         if (root != null) {
-            return String.format("CON.F.US.%s.%s%02d", root, monthCode, year);
+            String contractId = String.format("CON.F.US.%s.%s%02d", root, monthCode, year);
+            logger.info("Generated fallback contract ID for {}: {} (month={}, day={}, year={})",
+                symbol, contractId, month, now.getDayOfMonth(), year);
+            return contractId;
         }
 
+        logger.warn("No fallback contract ID available for symbol: {}", symbol);
         return null;
     }
 
@@ -304,6 +356,7 @@ public class TopstepConnector implements TradingConnector {
             ZonedDateTime endTime = ZonedDateTime.now(ZoneOffset.UTC);
             ZonedDateTime startTime = endTime.minusMinutes(10);
 
+            logger.info("Fetching bars for {} using contract ID: {}", symbol, contractId);
             String barsUrl = apiUrl + "/History/retrieveBars";
 
             Map<String, Object> requestMap = new HashMap<>();
