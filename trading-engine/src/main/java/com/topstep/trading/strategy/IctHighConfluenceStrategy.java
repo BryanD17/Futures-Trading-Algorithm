@@ -244,94 +244,142 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
                 power3Detector.confirmsDirection(isBullish);
 
         // 7. Look for entry zones by tier (highest to lowest)
+        // Count confluences for tier determination
+        int confluenceCount = 0;
 
-        // TIER 3: Breaker Block OR (IFVG + OB + Displacement + Power3)
+        // TIER 4: Breaker Block + Power3 + SMT + Displacement (ALL required)
         currentBreaker = breakerBlockDetector.findNearestBreaker(candle.getClose(), isBullish, maxPriceDistance);
         FairValueGap ifvg = fvgDetector.findNearestIfvg(candle.getClose(), isBullish);
         currentOrderBlock = orderBlockDetector.findNearestValidOb(candle.getClose(), isBullish, maxPriceDistance);
 
-        if (currentBreaker != null) {
-            // Breaker Block found - Tier 3
-            currentTier = TradeTier.TIER_3;
-            printTier3Signal(candle, bias, sweep, "Breaker Block", hasSmtDivergence);
+        if (currentBreaker != null && hasPower3Confirmation && hasSmtDivergence && hasDisplacement) {
+            // Elite setup - ALL confluences aligned
+            currentTier = TradeTier.TIER_4;
+            printTier4Signal(candle, bias, sweep, "Breaker+Power3+SMT+Displacement", hasSmtDivergence);
             return true;
         }
 
+        // TIER 3: Breaker Block + (SMT OR Displacement OR Power3)
+        //     OR: (IFVG + OB + Displacement + Power3)
+        if (currentBreaker != null) {
+            confluenceCount = 1;  // Breaker counts as 1
+            if (hasSmtDivergence) confluenceCount++;
+            if (hasDisplacement) confluenceCount++;
+            if (hasPower3Confirmation) confluenceCount++;
+
+            if (confluenceCount >= 2) {
+                // Breaker + at least 1 confirmation = Tier 3
+                currentTier = TradeTier.TIER_3;
+                String entryType = "Breaker";
+                if (hasSmtDivergence) entryType += "+SMT";
+                if (hasDisplacement) entryType += "+Displacement";
+                if (hasPower3Confirmation) entryType += "+Power3";
+                printTier3Signal(candle, bias, sweep, entryType, hasSmtDivergence);
+                return true;
+            }
+        }
+
         if (ifvg != null && currentOrderBlock != null && hasDisplacement && hasPower3Confirmation) {
-            // Full confluence - Tier 3
+            // Full confluence without Breaker - Tier 3
             currentTier = TradeTier.TIER_3;
             currentFvg = ifvg;
             printTier3Signal(candle, bias, sweep, "IFVG+OB+Displacement+Power3", hasSmtDivergence);
             return true;
         }
 
-        // TIER 2: OB + Displacement OR Unfilled FVG + SMT
+        // TIER 2: (OB + Displacement + SMT)
+        //     OR: (Unfilled FVG + SMT + Displacement)
+        //     OR: (Fresh Mitigation + SMT)
         FairValueGap unfilledFvg = fvgDetector.findNearestUnfilledFvg(candle.getClose(), isBullish, maxPriceDistance);
 
-        if (currentOrderBlock != null && hasDisplacement) {
+        if (currentOrderBlock != null && hasDisplacement && hasSmtDivergence) {
+            // Triple confluence with OB
             currentTier = TradeTier.TIER_2;
-            printTier2Signal(candle, bias, sweep, "OB+Displacement", hasSmtDivergence);
+            printTier2Signal(candle, bias, sweep, "OB+Displacement+SMT", hasSmtDivergence);
             return true;
         }
 
-        if (unfilledFvg != null && hasSmtDivergence) {
+        if (unfilledFvg != null && hasSmtDivergence && hasDisplacement) {
+            // Triple confluence with FVG
             currentTier = TradeTier.TIER_2;
             currentFvg = unfilledFvg;
-            printTier2Signal(candle, bias, sweep, "FVG+SMT", hasSmtDivergence);
+            printTier2Signal(candle, bias, sweep, "FVG+SMT+Displacement", hasSmtDivergence);
             return true;
         }
 
-        // Also Tier 2 for mitigation at fresh zone
         currentMitigationBlock = mitigationBlockDetector.findBestMitigationZone(candle.getClose(), isBullish, maxPriceDistance);
-        if (currentMitigationBlock != null && currentMitigationBlock.isFresh()) {
+        if (currentMitigationBlock != null && currentMitigationBlock.isFresh() && hasSmtDivergence) {
+            // Fresh mitigation + SMT confirmation
             currentTier = TradeTier.TIER_2;
-            printTier2Signal(candle, bias, sweep, "Fresh Mitigation", hasSmtDivergence);
+            printTier2Signal(candle, bias, sweep, "Fresh Mitigation+SMT", hasSmtDivergence);
             return true;
         }
 
-        // TIER 1: Any FVG OR SMT OR Displacement at OTE
+        // TIER 1: Double confluence required (minimum 2 of: FVG, SMT, Displacement, OB)
+        // Single confluence is NO LONGER accepted - must have confirmation
         FairValueGap anyFvg = fvgDetector.findNearestFvg(candle.getClose(), isBullish, maxPriceDistance);
 
-        if (anyFvg != null || hasSmtDivergence || hasDisplacement) {
+        confluenceCount = 0;
+        if (anyFvg != null) confluenceCount++;
+        if (hasSmtDivergence) confluenceCount++;
+        if (hasDisplacement) confluenceCount++;
+        if (currentOrderBlock != null) confluenceCount++;
+
+        if (confluenceCount >= 2) {
+            // Double confluence achieved - Tier 1 is valid
             currentTier = TradeTier.TIER_1;
             currentFvg = anyFvg;
-            printTier1Signal(candle, bias, sweep, hasSmtDivergence);
+            String entryType = "";
+            if (anyFvg != null) entryType += "FVG";
+            if (hasSmtDivergence) entryType += (entryType.isEmpty() ? "" : "+") + "SMT";
+            if (hasDisplacement) entryType += (entryType.isEmpty() ? "" : "+") + "Displacement";
+            if (currentOrderBlock != null) entryType += (entryType.isEmpty() ? "" : "+") + "OB";
+            printTier1Signal(candle, bias, sweep, entryType, hasSmtDivergence);
             return true;
         }
 
-        // No valid confluence
+        // No valid confluence (single confluence rejected)
         noEntryZone++;
         return false;
     }
 
+    private void printTier4Signal(Candle candle, MarketBias bias, LiquiditySweep sweep,
+                                   String entryType, boolean hasSmt) {
+        System.out.println("\n[" + symbol + "] ★★★★ TIER 4 CONFLUENCE - ELITE SETUP ★★★★");
+        System.out.println("[" + symbol + "] Entry Type: " + entryType);
+        printCommonInfo(candle, bias, sweep, hasSmt);
+    }
+
     private void printTier3Signal(Candle candle, MarketBias bias, LiquiditySweep sweep,
                                    String entryType, boolean hasSmt) {
-        System.out.println("\n[STRATEGY] ★★★ TIER 3 CONFLUENCE - PREMIUM SETUP ★★★");
-        System.out.println("[STRATEGY] Entry Type: " + entryType);
+        System.out.println("\n[" + symbol + "] ★★★ TIER 3 CONFLUENCE - PREMIUM SETUP ★★★");
+        System.out.println("[" + symbol + "] Entry Type: " + entryType);
         printCommonInfo(candle, bias, sweep, hasSmt);
     }
 
     private void printTier2Signal(Candle candle, MarketBias bias, LiquiditySweep sweep,
                                    String entryType, boolean hasSmt) {
-        System.out.println("\n[STRATEGY] ★★ TIER 2 CONFLUENCE - STANDARD SETUP ★★");
-        System.out.println("[STRATEGY] Entry Type: " + entryType);
+        System.out.println("\n[" + symbol + "] ★★ TIER 2 CONFLUENCE - STANDARD SETUP ★★");
+        System.out.println("[" + symbol + "] Entry Type: " + entryType);
         printCommonInfo(candle, bias, sweep, hasSmt);
     }
 
-    private void printTier1Signal(Candle candle, MarketBias bias, LiquiditySweep sweep, boolean hasSmt) {
-        System.out.println("\n[STRATEGY] ★ TIER 1 CONFLUENCE - SCALP SETUP ★");
+    private void printTier1Signal(Candle candle, MarketBias bias, LiquiditySweep sweep,
+                                   String entryType, boolean hasSmt) {
+        System.out.println("\n[" + symbol + "] ★ TIER 1 CONFLUENCE - CONFIRMED SETUP ★");
+        System.out.println("[" + symbol + "] Entry Type: " + entryType);
         printCommonInfo(candle, bias, sweep, hasSmt);
     }
 
     private void printCommonInfo(Candle candle, MarketBias bias, LiquiditySweep sweep, boolean hasSmt) {
-        System.out.println("[STRATEGY] Killzone: " + killzoneClock.getKillzoneName(candle.getTimestamp()) +
-                          " | Phase: " + killzoneClock.getKillzonePhase(candle.getTimestamp()));
-        System.out.println("[STRATEGY] Bias: " + bias + " | Sweep: " + (sweep.isBullish() ? "BULLISH" : "BEARISH"));
-        System.out.println("[STRATEGY] SMT: " + (hasSmt ? "✓" : "~") +
+        System.out.println("[" + symbol + "] Session: " + killzoneClock.getKillzoneName(candle.getTimestamp()));
+        System.out.println("[" + symbol + "] Bias: " + bias + " | Sweep: " + (sweep.isBullish() ? "BULLISH" : "BEARISH"));
+        System.out.println("[" + symbol + "] SMT: " + (hasSmt ? "✓" : "~") +
                           " | Displacement: " + (hasDisplacement ? "✓" : "~") +
                           " | Power3: " + (hasPower3Confirmation ? "✓" : "~"));
-        System.out.println("[STRATEGY] Volatility: " + atrCalculator.getVolatilitySummary());
-        System.out.println("[STRATEGY] R:R Target: 1:" + currentTier.getRiskRewardRatio());
+        double adjustedRR = currentTier.getRiskRewardRatio() * currentTier.getTierMultiplier();
+        System.out.println("[" + symbol + "] R:R Target: 1:" + currentTier.getRiskRewardRatio() +
+                          " (adjusted by tier multiplier: " + currentTier.getTierMultiplier() + ")");
     }
 
     /**
