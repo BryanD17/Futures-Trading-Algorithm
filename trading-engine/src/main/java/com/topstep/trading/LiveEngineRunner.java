@@ -129,8 +129,8 @@ public class LiveEngineRunner {
             // Set up subscription callback to manage connector subscriptions
             this.multiEngine.setSubscriptionCallback(new MultiInstrumentEngine.SubscriptionCallback() {
                 @Override
-                public void onSubscribe(String symbol) {
-                    subscribeToMarketData(symbol);
+                public boolean onSubscribe(String symbol) {
+                    return subscribeToMarketData(symbol);
                 }
 
                 @Override
@@ -168,17 +168,21 @@ public class LiveEngineRunner {
 
     /**
      * Subscribe to market data for a symbol via the connector.
+     * @return true if subscription was successful, false otherwise
      */
-    private void subscribeToMarketData(String symbol) {
+    private boolean subscribeToMarketData(String symbol) {
         if (subscribedSymbols.contains(symbol)) {
-            return;
+            return true;
         }
         try {
             connector.subscribeMarketData(symbol, this::onMarketData);
             subscribedSymbols.add(symbol);
             System.out.println("✓ Subscribed to market data for " + symbol);
+            return true;
         } catch (Exception e) {
             System.err.println("❌ Failed to subscribe to " + symbol + ": " + e.getMessage());
+            // Don't add to subscribedSymbols if subscription failed
+            return false;
         }
     }
 

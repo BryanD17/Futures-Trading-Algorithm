@@ -72,9 +72,10 @@ public class MultiInstrumentEngine {
 
     /**
      * Callback interface for subscription changes.
+     * Returns true if subscription was successful, false otherwise.
      */
     public interface SubscriptionCallback {
-        void onSubscribe(String symbol);
+        boolean onSubscribe(String symbol);
         void onUnsubscribe(String symbol);
     }
 
@@ -535,19 +536,27 @@ public class MultiInstrumentEngine {
 
     /**
      * Subscribe to market data for a symbol.
+     * @return true if subscription was successful
      */
-    private void subscribeToSymbol(String symbol) {
+    private boolean subscribeToSymbol(String symbol) {
         if (subscribedSymbols.contains(symbol)) {
-            return;
+            return true;
         }
 
         System.out.println("[MultiInstrument] Subscribing to market data: " + symbol);
 
+        boolean success = true;
         if (subscriptionCallback != null) {
-            subscriptionCallback.onSubscribe(symbol);
+            success = subscriptionCallback.onSubscribe(symbol);
         }
 
-        subscribedSymbols.add(symbol);
+        if (success) {
+            subscribedSymbols.add(symbol);
+        } else {
+            System.err.println("[MultiInstrument] ❌ Subscription FAILED for: " + symbol);
+        }
+
+        return success;
     }
 
     /**

@@ -55,9 +55,12 @@ public class TopstepConnector implements TradingConnector {
     private final Map<String, String> symbolToContractId = new ConcurrentHashMap<>();
     private final Map<String, Instant> lastBarTimestamp = new ConcurrentHashMap<>();
 
-    // Schedulers
-    private final ScheduledExecutorService marketDataPoller = Executors.newSingleThreadScheduledExecutor();
+    // Schedulers - use sized thread pool for market data to handle multiple symbols
+    private final ScheduledExecutorService marketDataPoller = Executors.newScheduledThreadPool(4);
     private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor();
+
+    // Track subscription status per symbol
+    private final Map<String, Boolean> subscriptionStatus = new ConcurrentHashMap<>();
 
     // Polling interval in seconds (30 seconds for near real-time data)
     private static final int POLL_INTERVAL_SECONDS = 30;
@@ -275,6 +278,13 @@ public class TopstepConnector implements TradingConnector {
             case "RTY" -> "RTY";    // E-mini Russell 2000
             case "CL" -> "CL";      // Crude Oil
             case "GC" -> "GC";      // Gold
+            case "SI" -> "SI";      // Silver
+            case "NG" -> "NG";      // Natural Gas
+            case "6E" -> "E6";      // Euro FX (CME uses E6 internally)
+            case "6J" -> "J6";      // Japanese Yen (CME uses J6 internally)
+            case "6B" -> "B6";      // British Pound (CME uses B6 internally)
+            case "6C" -> "C6";      // Canadian Dollar
+            case "6A" -> "A6";      // Australian Dollar
             default -> null;
         };
 
@@ -499,11 +509,23 @@ public class TopstepConnector implements TradingConnector {
         try {
             String contractId = searchContract(symbol);
             symbolToContractId.put(symbol, contractId);
+            subscriptionStatus.put(symbol, true);
             startMarketDataPolling(symbol, contractId);
+            logger.info("Successfully subscribed to market data for {} (contract: {})", symbol, contractId);
         } catch (Exception e) {
             logger.error("Failed to subscribe to market data for {}: {}", symbol, e.getMessage());
+            subscriptionStatus.put(symbol, false);
             listener.onError(symbol, e);
+            // CRITICAL: Throw exception so caller knows subscription failed
+            throw new RuntimeException("Subscription failed for " + symbol + ": " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Check if a symbol subscription is active.
+     */
+    public boolean isSubscriptionActive(String symbol) {
+        return subscriptionStatus.getOrDefault(symbol, false);
     }
 
     @Override
@@ -513,6 +535,7 @@ public class TopstepConnector implements TradingConnector {
         marketDataListeners.remove(symbol);
         symbolToContractId.remove(symbol);
         lastBarTimestamp.remove(symbol);
+        subscriptionStatus.remove(symbol);
 
         // Note: The poller will stop processing this symbol since listener is removed
     }
