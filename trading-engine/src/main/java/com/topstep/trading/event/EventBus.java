@@ -124,15 +124,20 @@ public class EventBus {
 
     /**
      * Stop the event bus.
-     * CRITICAL: Drains remaining events and waits for handlers to complete before stopping.
+     * CRITICAL: Uses synchronized drain to prevent race conditions.
+     * No new events can be published once stop() begins.
      */
     public void stop() {
         if (!running) {
             return;
         }
 
-        // First, drain any remaining events in the queue
-        // This ensures all published events are dispatched before shutdown
+        // CRITICAL FIX: Set running to false FIRST to reject new publishes
+        // This prevents race condition where events are added after drain starts
+        running = false;
+
+        // Now drain any remaining events in the queue
+        // Since running=false, no new events can be added
         Event remainingEvent;
         while ((remainingEvent = eventQueue.poll()) != null) {
             dispatchEvent(remainingEvent);
@@ -140,7 +145,6 @@ public class EventBus {
         }
 
         // Signal the processing thread to stop
-        running = false;
         processingThread.interrupt();
 
         // Wait for processing thread to finish

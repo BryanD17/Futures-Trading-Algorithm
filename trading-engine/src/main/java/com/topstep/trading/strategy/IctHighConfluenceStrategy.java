@@ -218,7 +218,11 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         }
 
         LiquiditySweep sweep = liquidityDetector.getLastSweep();
-        if (sweep == null) return false;
+        if (sweep == null) {
+            // This shouldn't happen if hasRecentSweep returned true
+            System.out.println("[STRATEGY] WARNING: hasRecentSweep=true but getLastSweep returned null");
+            return false;
+        }
 
         // 5. Ensure sweep matches bias
         if (bias == MarketBias.BULLISH && !sweep.isBullish()) {
@@ -349,7 +353,11 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
     private void generateBullishSignal(Candle candle, LiquiditySweep sweep) {
         Double swingHigh = structureDetector.getLastSwingHigh();
-        if (swingHigh == null) return;
+        if (swingHigh == null) {
+            System.out.println("[STRATEGY] Cannot generate bullish signal: no swing high detected yet");
+            signalPending = false;
+            return;
+        }
 
         double swingLow = sweep.getSweptLevel();
         double range = swingHigh - swingLow;
@@ -367,7 +375,12 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         double target = entry + (riskDistance * currentTier.getRiskRewardRatio());
 
         // Validate R:R
-        if (riskDistance <= 0) return;
+        if (riskDistance <= 0) {
+            System.out.println("[STRATEGY] Invalid bullish signal: risk distance <= 0 (entry=" +
+                              String.format("%.2f", entry) + ", stop=" + String.format("%.2f", stop) + ")");
+            signalPending = false;
+            return;
+        }
 
         String reason = buildSignalReason("Bullish", candle);
 
@@ -389,7 +402,11 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
     private void generateBearishSignal(Candle candle, LiquiditySweep sweep) {
         Double swingLow = structureDetector.getLastSwingLow();
-        if (swingLow == null) return;
+        if (swingLow == null) {
+            System.out.println("[STRATEGY] Cannot generate bearish signal: no swing low detected yet");
+            signalPending = false;
+            return;
+        }
 
         double swingHigh = sweep.getSweptLevel();
         double range = swingHigh - swingLow;
@@ -407,7 +424,12 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         double target = entry - (riskDistance * currentTier.getRiskRewardRatio());
 
         // Validate R:R
-        if (riskDistance <= 0) return;
+        if (riskDistance <= 0) {
+            System.out.println("[STRATEGY] Invalid bearish signal: risk distance <= 0 (entry=" +
+                              String.format("%.2f", entry) + ", stop=" + String.format("%.2f", stop) + ")");
+            signalPending = false;
+            return;
+        }
 
         String reason = buildSignalReason("Bearish", candle);
 
