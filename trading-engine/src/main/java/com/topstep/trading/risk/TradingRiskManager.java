@@ -288,6 +288,12 @@ public class TradingRiskManager {
     /**
      * Apply session-based tier bonus.
      * If trading in preferred session, upgrade the tier.
+     *
+     * Session bonus upgrades:
+     * - TIER_1 (1:2) -> TIER_2 (1:3)
+     * - TIER_2 (1:3) -> TIER_3 (1:4)
+     * - TIER_3 (1:4) -> TIER_4 (1:5)
+     * - TIER_4 already at max
      */
     public TradeTier applySessionBonus(String symbol, TradeTier baseTier, boolean isPreferredSession) {
         if (!isPreferredSession) {
@@ -298,17 +304,21 @@ public class TradingRiskManager {
         switch (baseTier) {
             case TIER_1:
                 System.out.println("[SESSION BONUS] " + symbol +
-                        ": Trading in preferred session - upgrading TIER_1 -> TIER_2");
+                        ": Trading in preferred session - upgrading TIER_1 (1:2) -> TIER_2 (1:3)");
                 return TradeTier.TIER_2;
             case TIER_2:
                 System.out.println("[SESSION BONUS] " + symbol +
-                        ": Trading in preferred session - upgrading TIER_2 -> TIER_3");
+                        ": Trading in preferred session - upgrading TIER_2 (1:3) -> TIER_3 (1:4)");
                 return TradeTier.TIER_3;
             case TIER_3:
-                // Already max tier
                 System.out.println("[SESSION BONUS] " + symbol +
-                        ": Trading in preferred session with TIER_3 - optimal conditions");
-                return TradeTier.TIER_3;
+                        ": Trading in preferred session - upgrading TIER_3 (1:4) -> TIER_4 (1:5)");
+                return TradeTier.TIER_4;
+            case TIER_4:
+                // Already max tier - elite setup in prime session is optimal
+                System.out.println("[SESSION BONUS] " + symbol +
+                        ": Trading in preferred session with TIER_4 - ELITE CONDITIONS");
+                return TradeTier.TIER_4;
             default:
                 return baseTier;
         }
