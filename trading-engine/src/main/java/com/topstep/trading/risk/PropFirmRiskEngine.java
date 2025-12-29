@@ -17,7 +17,17 @@ public class PropFirmRiskEngine {
 
     private static final double TICK_VALUE_ES = 12.50;  // ES: $12.50 per tick
     private static final double TICK_VALUE_NQ = 5.00;   // NQ: $5.00 per tick
-    private static final double TICK_SIZE = 0.25;       // Standard tick size for ES/NQ
+
+    // Tick sizes for different instruments
+    private static final double TICK_SIZE_ES = 0.25;      // ES/MES
+    private static final double TICK_SIZE_NQ = 0.25;      // NQ/MNQ
+    private static final double TICK_SIZE_6E = 0.00005;   // Euro FX
+    private static final double TICK_SIZE_6J = 0.0000005; // Japanese Yen
+    private static final double TICK_SIZE_6B = 0.0001;    // British Pound
+    private static final double TICK_SIZE_CL = 0.01;      // Crude Oil
+    private static final double TICK_SIZE_GC = 0.10;      // Gold
+    private static final double TICK_SIZE_NG = 0.001;     // Natural Gas
+    private static final double TICK_SIZE_SI = 0.005;     // Silver
 
     /**
      * Evaluate a strategy signal against account state and risk limits.
@@ -60,7 +70,8 @@ public class PropFirmRiskEngine {
         double tickValue = getTickValue(signal.getSymbol());
 
         // Calculate risk in dollars per contract
-        double ticksAtRisk = stopDistance / TICK_SIZE;
+        double tickSize = getTickSize(signal.getSymbol());
+        double ticksAtRisk = stopDistance / tickSize;
         double dollarRiskPerContract = ticksAtRisk * tickValue;
 
         if (dollarRiskPerContract <= 0) {
@@ -101,13 +112,14 @@ public class PropFirmRiskEngine {
             return RiskDecision.deny("R:R too high (unrealistic): " + String.format("%.2f", rewardRiskRatio));
         }
 
-        // 8. Build the order
+        // 8. Build the order - round limit price to valid tick
+        double roundedPrice = roundToTick(signal.getEntryPrice(), tickSize);
         Order order = Order.builder()
                 .symbol(signal.getSymbol())
                 .side(signal.getSide())
                 .type(OrderType.LIMIT)
                 .quantity(quantity)
-                .limitPrice(signal.getEntryPrice())
+                .limitPrice(roundedPrice)
                 .build();
 
         String approvalReason = String.format(
@@ -122,7 +134,7 @@ public class PropFirmRiskEngine {
     }
 
     /**
-     * Get tick value for a given symbol.
+     * Get tick value for a given symbol (dollar value per tick).
      */
     private double getTickValue(String symbol) {
         if (symbol.startsWith("ES") || symbol.equals("MES")) {
@@ -132,6 +144,66 @@ public class PropFirmRiskEngine {
         }
         // Default to ES tick value
         return TICK_VALUE_ES;
+    }
+
+    /**
+     * Get tick size for a given symbol (minimum price increment).
+     */
+    private double getTickSize(String symbol) {
+        switch (symbol.toUpperCase()) {
+            case "ES":
+            case "MES":
+                return TICK_SIZE_ES;
+            case "NQ":
+            case "MNQ":
+                return TICK_SIZE_NQ;
+            case "6E":
+                return TICK_SIZE_6E;
+            case "6J":
+                return TICK_SIZE_6J;
+            case "6B":
+                return TICK_SIZE_6B;
+            case "CL":
+                return TICK_SIZE_CL;
+            case "GC":
+                return TICK_SIZE_GC;
+            case "NG":
+                return TICK_SIZE_NG;
+            case "SI":
+                return TICK_SIZE_SI;
+            default:
+                // Default to ES tick size
+                return TICK_SIZE_ES;
+        }
+    }
+
+    /**
+     * Round a price to the nearest valid tick increment.
+     * This prevents floating point precision issues like 1.1828750000000001
+     */
+    private double roundToTick(double price, double tickSize) {
+        // Round to nearest tick
+        double ticks = Math.round(price / tickSize);
+        double rounded = ticks * tickSize;
+
+        // Handle floating point artifacts by rounding to appropriate decimal places
+        int decimals = getDecimalPlaces(tickSize);
+        double multiplier = Math.pow(10, decimals);
+        return Math.round(rounded * multiplier) / multiplier;
+    }
+
+    /**
+     * Get the number of decimal places in a tick size.
+     */
+    private int getDecimalPlaces(double tickSize) {
+        String tickStr = String.valueOf(tickSize);
+        int decimalIndex = tickStr.indexOf('.');
+        if (decimalIndex < 0) {
+            return 0;
+        }
+        // Remove trailing zeros for proper count
+        String decimals = tickStr.substring(decimalIndex + 1).replaceAll("0+$", "");
+        return decimals.length() > 0 ? tickStr.substring(decimalIndex + 1).length() : 0;
     }
 
     /**
