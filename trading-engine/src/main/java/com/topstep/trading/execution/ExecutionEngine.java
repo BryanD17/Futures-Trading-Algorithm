@@ -68,20 +68,27 @@ public class ExecutionEngine {
      * Initialize tick values for common futures symbols.
      */
     private void initializeTickValues() {
-        tickValues.put("ES", 12.50);   // E-mini S&P 500
-        tickValues.put("NQ", 5.00);    // E-mini NASDAQ 100
-        tickValues.put("MES", 1.25);   // Micro E-mini S&P 500
-        tickValues.put("MNQ", 0.50);   // Micro E-mini NASDAQ 100
-        tickValues.put("YM", 5.00);    // E-mini Dow
-        tickValues.put("RTY", 5.00);   // E-mini Russell 2000
-        tickValues.put("GC", 10.00);   // Gold
-        tickValues.put("SI", 5.00);    // Silver
-        tickValues.put("CL", 10.00);   // Crude Oil
-        tickValues.put("NG", 10.00);   // Natural Gas
-        tickValues.put("6E", 6.25);    // Euro FX
-        tickValues.put("6J", 6.25);    // Japanese Yen
-        tickValues.put("6B", 6.25);    // British Pound
-        tickValues.put("6C", 10.00);   // Canadian Dollar
+        // Index futures
+        tickValues.put("ES", 12.50);   // E-mini S&P 500: $12.50 per tick (0.25 point)
+        tickValues.put("NQ", 5.00);    // E-mini NASDAQ 100: $5.00 per tick (0.25 point)
+        tickValues.put("MES", 1.25);   // Micro E-mini S&P 500: $1.25 per tick
+        tickValues.put("MNQ", 0.50);   // Micro E-mini NASDAQ 100: $0.50 per tick
+        tickValues.put("YM", 5.00);    // E-mini Dow: $5.00 per tick
+        tickValues.put("RTY", 5.00);   // E-mini Russell 2000: $5.00 per tick
+
+        // Metals
+        tickValues.put("GC", 10.00);   // Gold: $10.00 per tick (100 oz × 0.10)
+        tickValues.put("SI", 25.00);   // Silver: $25.00 per tick (5,000 oz × 0.005)
+
+        // Energy
+        tickValues.put("CL", 10.00);   // Crude Oil: $10.00 per tick (1,000 barrels × 0.01)
+        tickValues.put("NG", 10.00);   // Natural Gas: $10.00 per tick (10,000 MMBtu × 0.001)
+
+        // Currency futures
+        tickValues.put("6E", 6.25);    // Euro FX: $6.25 per tick (125,000 EUR × 0.00005)
+        tickValues.put("6J", 6.25);    // Japanese Yen: $6.25 per tick (12,500,000 JPY × 0.0000005)
+        tickValues.put("6B", 6.25);    // British Pound: $6.25 per tick (62,500 GBP × 0.0001)
+        tickValues.put("6C", 10.00);   // Canadian Dollar: $10.00 per tick (100,000 CAD × 0.0001)
     }
 
     /**
