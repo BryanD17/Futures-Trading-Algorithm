@@ -178,6 +178,11 @@ public class TopstepConnector implements TradingConnector {
     private String searchContract(String symbol) throws Exception {
         logger.info("Searching for contract: {}", symbol);
 
+        // First, try to discover ALL available contracts (one-time diagnostic)
+        if (symbolToContractId.isEmpty()) {
+            discoverAvailableContracts();
+        }
+
         // Try multiple search terms to find the contract
         String[] searchTerms = getSearchTermsForSymbol(symbol);
 
@@ -196,6 +201,104 @@ public class TopstepConnector implements TradingConnector {
         }
 
         throw new IOException("No contracts found for symbol: " + symbol);
+    }
+
+    /**
+     * Discover all available contracts from TopstepX to understand the API.
+     */
+    private void discoverAvailableContracts() {
+        logger.info("=== DISCOVERING ALL AVAILABLE CONTRACTS ===");
+
+        // Try various broad search terms to find ANY contracts
+        String[] broadSearches = {"", "F", "CON", "CME", "futures", "mini", "micro"};
+
+        for (String search : broadSearches) {
+            try {
+                String searchUrl = apiUrl + "/Contract/search";
+                String searchBody = objectMapper.writeValueAsString(Map.of(
+                    "searchText", search,
+                    "live", useLiveData
+                ));
+
+                Request request = new Request.Builder()
+                    .url(searchUrl)
+                    .header("Authorization", "Bearer " + authToken)
+                    .post(RequestBody.create(searchBody, MediaType.parse("application/json")))
+                    .build();
+
+                try (Response response = httpClient.newCall(request).execute()) {
+                    if (response.isSuccessful()) {
+                        String responseBody = response.body().string();
+                        JsonNode json = objectMapper.readTree(responseBody);
+                        JsonNode contracts = json.has("contracts") ? json.get("contracts") : json;
+
+                        if (contracts.isArray() && contracts.size() > 0) {
+                            logger.info("FOUND {} contracts with search '{}' (live={}):",
+                                contracts.size(), search, useLiveData);
+                            int count = 0;
+                            for (JsonNode contract : contracts) {
+                                String id = contract.has("id") ? contract.get("id").asText() : "";
+                                String name = contract.has("name") ? contract.get("name").asText() : "";
+                                logger.info("  [{}] id='{}', name='{}'", ++count, id, name);
+                                if (count >= 20) {
+                                    logger.info("  ... and {} more", contracts.size() - 20);
+                                    break;
+                                }
+                            }
+                            return; // Found contracts, stop searching
+                        } else {
+                            logger.info("No contracts found with search '{}' (live={})", search, useLiveData);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                logger.warn("Error during contract discovery with '{}': {}", search, e.getMessage());
+            }
+        }
+
+        // Also try with live=false to see if SIM contracts are available
+        logger.info("Trying with live=false to check SIM contracts...");
+        try {
+            String searchUrl = apiUrl + "/Contract/search";
+            String searchBody = objectMapper.writeValueAsString(Map.of(
+                "searchText", "",
+                "live", false
+            ));
+
+            Request request = new Request.Builder()
+                .url(searchUrl)
+                .header("Authorization", "Bearer " + authToken)
+                .post(RequestBody.create(searchBody, MediaType.parse("application/json")))
+                .build();
+
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (response.isSuccessful()) {
+                    String responseBody = response.body().string();
+                    JsonNode json = objectMapper.readTree(responseBody);
+                    JsonNode contracts = json.has("contracts") ? json.get("contracts") : json;
+
+                    if (contracts.isArray() && contracts.size() > 0) {
+                        logger.info("FOUND {} SIM contracts:", contracts.size());
+                        int count = 0;
+                        for (JsonNode contract : contracts) {
+                            String id = contract.has("id") ? contract.get("id").asText() : "";
+                            String name = contract.has("name") ? contract.get("name").asText() : "";
+                            logger.info("  [{}] id='{}', name='{}'", ++count, id, name);
+                            if (count >= 20) {
+                                logger.info("  ... and {} more", contracts.size() - 20);
+                                break;
+                            }
+                        }
+                    } else {
+                        logger.info("No SIM contracts found either");
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("Error checking SIM contracts: {}", e.getMessage());
+        }
+
+        logger.info("=== END CONTRACT DISCOVERY ===");
     }
 
     /**
