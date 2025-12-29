@@ -327,19 +327,19 @@ public class TopstepConnector implements TradingConnector {
             try (Response response = httpClient.newCall(request).execute()) {
                 if (!response.isSuccessful()) {
                     String body = response.body() != null ? response.body().string() : "No body";
-                    logger.error("Failed to fetch bars: {} - {}", response.code(), body);
+                    logger.error("Failed to fetch bars for {}: {} - {}", symbol, response.code(), body);
                     return;
                 }
 
                 String responseBody = response.body().string();
-                logger.debug("Bars response: {}", responseBody);
+                logger.debug("Bars response for {}: {}", symbol, responseBody);
                 JsonNode json = objectMapper.readTree(responseBody);
 
                 // Extract bars array
                 JsonNode bars = json.has("bars") ? json.get("bars") : json;
                 if (!bars.isArray() || bars.isEmpty()) {
-                    // This is normal during market closures (weekends, holidays, pre-market)
-                    logger.debug("No market data available for {} - market may be closed", symbol);
+                    // Log at INFO level so we can see this during debugging
+                    logger.info("No bars returned for {} - market may be closed or no new data", symbol);
                     return;
                 }
 
@@ -351,6 +351,11 @@ public class TopstepConnector implements TradingConnector {
 
                 Instant lastTimestamp = lastBarTimestamp.get(symbol);
                 int newBarsCount = 0;
+                int skippedBarsCount = 0;
+                int totalBarsReceived = bars.size();
+
+                logger.info("Received {} bars for {} (last processed: {})",
+                    totalBarsReceived, symbol, lastTimestamp != null ? lastTimestamp : "none");
 
                 // Process each bar
                 for (JsonNode bar : bars) {
@@ -364,12 +369,13 @@ public class TopstepConnector implements TradingConnector {
                         } else if (bar.has("time")) {
                             timestamp = Instant.ofEpochMilli(bar.get("time").asLong());
                         } else {
-                            logger.warn("No timestamp in bar: {}", bar);
+                            logger.warn("No timestamp in bar for {}: {}", symbol, bar);
                             continue;
                         }
 
                         // Skip bars we've already processed
                         if (lastTimestamp != null && !timestamp.isAfter(lastTimestamp)) {
+                            skippedBarsCount++;
                             continue;
                         }
 
@@ -394,6 +400,8 @@ public class TopstepConnector implements TradingConnector {
                         // Deliver to listener
                         listener.onCandle(candle);
                         newBarsCount++;
+                        logger.info("CANDLE {} | {} | O:{} H:{} L:{} C:{} V:{}",
+                            symbol, timestamp, open, high, low, close, volume);
 
                         // Update last timestamp
                         if (lastTimestamp == null || timestamp.isAfter(lastTimestamp)) {
@@ -401,12 +409,16 @@ public class TopstepConnector implements TradingConnector {
                         }
 
                     } catch (Exception e) {
-                        logger.error("Error parsing bar: {}", e.getMessage());
+                        logger.error("Error parsing bar for {}: {}", symbol, e.getMessage());
                     }
                 }
 
                 if (newBarsCount > 0) {
-                    logger.info("Delivered {} new candles for {}", newBarsCount, symbol);
+                    logger.info("Delivered {} new candles for {} (skipped {} already processed)",
+                        newBarsCount, symbol, skippedBarsCount);
+                } else if (skippedBarsCount > 0) {
+                    logger.info("All {} bars for {} already processed (no new data)",
+                        skippedBarsCount, symbol);
                 }
             }
         } catch (Exception e) {
@@ -457,11 +469,15 @@ public class TopstepConnector implements TradingConnector {
             symbol, contractId, POLL_INTERVAL_SECONDS);
 
         // Initial fetch immediately
+        logger.info("Performing initial fetch for {}", symbol);
         fetchBars(symbol, contractId);
 
         // Schedule periodic polling
         marketDataPoller.scheduleAtFixedRate(
-            () -> fetchBars(symbol, contractId),
+            () -> {
+                logger.debug("Polling market data for {} (scheduled)", symbol);
+                fetchBars(symbol, contractId);
+            },
             POLL_INTERVAL_SECONDS,
             POLL_INTERVAL_SECONDS,
             TimeUnit.SECONDS
