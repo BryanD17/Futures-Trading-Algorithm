@@ -103,6 +103,23 @@ public class LiveEngineRunner {
         this.strategyContext = new DefaultStrategyContext(accountState);
         this.scheduler = Executors.newScheduledThreadPool(2);
 
+        // CRITICAL: Set execution listener to track position opens/closes
+        this.executionEngine.setExecutionListener(new ExecutionEngine.ExecutionListener() {
+            @Override
+            public void onPositionOpened(String symbol, OrderSide side, double entryPrice, int quantity) {
+                System.out.println("[LIVE] Position opened: " + symbol + " " + side + " x" + quantity + " @ " + entryPrice);
+                // Note: For live mode, we track via connector callbacks, so this is for logging only
+            }
+
+            @Override
+            public void onPositionClosed(String symbol, double pnl, boolean isWin) {
+                System.out.println("[LIVE] Position closed: " + symbol + " | PnL: $" + String.format("%.2f", pnl) +
+                                  " | " + (isWin ? "WIN" : "LOSS"));
+                // Notify risk manager
+                notifyPositionClosed(symbol, pnl);
+            }
+        });
+
         // Initialize single-instrument fallback strategy
         this.strategy = new IctHighConfluenceStrategy(DEFAULT_SYMBOL, SMT_SYMBOL, eventBus);
 
@@ -402,13 +419,23 @@ public class LiveEngineRunner {
 
     /**
      * Handle order status updates from the connector.
+     * CRITICAL: Updates order status to prevent ExecutionEngine from double-processing fills.
      */
     private void handleOrderUpdate(String orderId, OrderStatus status, Double fillPrice, Integer fillQty,
                                    Order order, StrategySignalEvent signal) {
         System.out.println("Order Update: " + orderId + " -> " + status);
 
+        // CRITICAL: Update order status FIRST to prevent ExecutionEngine from double-filling
+        order.updateStatus(status);
+
         if (status == OrderStatus.FILLED && fillPrice != null && fillQty != null) {
             System.out.println("  Filled at $" + String.format("%.2f", fillPrice) + " x " + fillQty);
+
+            // CRITICAL: Record the fill on the order to mark it as not active
+            order.recordFill(fillQty, fillPrice);
+
+            // Remove order from ExecutionEngine's active orders to prevent double-processing
+            executionEngine.removeOrderById(order.getSymbol(), orderId);
 
             // Update position in account state
             Position position = accountState.getPosition(order.getSymbol());
@@ -429,6 +456,13 @@ public class LiveEngineRunner {
 
         if (status == OrderStatus.REJECTED) {
             System.err.println("  ❌ ORDER REJECTED!");
+            // Remove rejected order from ExecutionEngine
+            executionEngine.removeOrderById(order.getSymbol(), orderId);
+        }
+
+        if (status == OrderStatus.CANCELED) {
+            // Remove cancelled order from ExecutionEngine
+            executionEngine.removeOrderById(order.getSymbol(), orderId);
         }
     }
 
