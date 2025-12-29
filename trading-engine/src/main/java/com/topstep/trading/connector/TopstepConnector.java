@@ -332,14 +332,13 @@ public class TopstepConnector implements TradingConnector {
                 }
 
                 String responseBody = response.body().string();
-                logger.debug("Bars response for {}: {}", symbol, responseBody);
                 JsonNode json = objectMapper.readTree(responseBody);
 
                 // Extract bars array
                 JsonNode bars = json.has("bars") ? json.get("bars") : json;
                 if (!bars.isArray() || bars.isEmpty()) {
-                    // Log at INFO level so we can see this during debugging
-                    logger.info("No bars returned for {} - market may be closed or no new data", symbol);
+                    // Log the actual API response to diagnose the issue
+                    logger.warn("Empty bars response for {} - API returned: {}", symbol, responseBody);
                     return;
                 }
 
