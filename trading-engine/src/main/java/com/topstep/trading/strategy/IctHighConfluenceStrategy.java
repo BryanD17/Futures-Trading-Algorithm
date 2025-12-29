@@ -345,40 +345,40 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
     private void printTier4Signal(Candle candle, MarketBias bias, LiquiditySweep sweep,
                                    String entryType, boolean hasSmt) {
-        System.out.println("\n[" + symbol + "] ★★★★ TIER 4 CONFLUENCE - ELITE SETUP ★★★★");
-        System.out.println("[" + symbol + "] Entry Type: " + entryType);
+        System.out.println("\n[" + primarySymbol + "] ★★★★ TIER 4 CONFLUENCE - ELITE SETUP ★★★★");
+        System.out.println("[" + primarySymbol + "] Entry Type: " + entryType);
         printCommonInfo(candle, bias, sweep, hasSmt);
     }
 
     private void printTier3Signal(Candle candle, MarketBias bias, LiquiditySweep sweep,
                                    String entryType, boolean hasSmt) {
-        System.out.println("\n[" + symbol + "] ★★★ TIER 3 CONFLUENCE - PREMIUM SETUP ★★★");
-        System.out.println("[" + symbol + "] Entry Type: " + entryType);
+        System.out.println("\n[" + primarySymbol + "] ★★★ TIER 3 CONFLUENCE - PREMIUM SETUP ★★★");
+        System.out.println("[" + primarySymbol + "] Entry Type: " + entryType);
         printCommonInfo(candle, bias, sweep, hasSmt);
     }
 
     private void printTier2Signal(Candle candle, MarketBias bias, LiquiditySweep sweep,
                                    String entryType, boolean hasSmt) {
-        System.out.println("\n[" + symbol + "] ★★ TIER 2 CONFLUENCE - STANDARD SETUP ★★");
-        System.out.println("[" + symbol + "] Entry Type: " + entryType);
+        System.out.println("\n[" + primarySymbol + "] ★★ TIER 2 CONFLUENCE - STANDARD SETUP ★★");
+        System.out.println("[" + primarySymbol + "] Entry Type: " + entryType);
         printCommonInfo(candle, bias, sweep, hasSmt);
     }
 
     private void printTier1Signal(Candle candle, MarketBias bias, LiquiditySweep sweep,
                                    String entryType, boolean hasSmt) {
-        System.out.println("\n[" + symbol + "] ★ TIER 1 CONFLUENCE - CONFIRMED SETUP ★");
-        System.out.println("[" + symbol + "] Entry Type: " + entryType);
+        System.out.println("\n[" + primarySymbol + "] ★ TIER 1 CONFLUENCE - CONFIRMED SETUP ★");
+        System.out.println("[" + primarySymbol + "] Entry Type: " + entryType);
         printCommonInfo(candle, bias, sweep, hasSmt);
     }
 
     private void printCommonInfo(Candle candle, MarketBias bias, LiquiditySweep sweep, boolean hasSmt) {
-        System.out.println("[" + symbol + "] Session: " + killzoneClock.getKillzoneName(candle.getTimestamp()));
-        System.out.println("[" + symbol + "] Bias: " + bias + " | Sweep: " + (sweep.isBullish() ? "BULLISH" : "BEARISH"));
-        System.out.println("[" + symbol + "] SMT: " + (hasSmt ? "✓" : "~") +
+        System.out.println("[" + primarySymbol + "] Session: " + killzoneClock.getKillzoneName(candle.getTimestamp()));
+        System.out.println("[" + primarySymbol + "] Bias: " + bias + " | Sweep: " + (sweep.isBullish() ? "BULLISH" : "BEARISH"));
+        System.out.println("[" + primarySymbol + "] SMT: " + (hasSmt ? "✓" : "~") +
                           " | Displacement: " + (hasDisplacement ? "✓" : "~") +
                           " | Power3: " + (hasPower3Confirmation ? "✓" : "~"));
         double adjustedRR = currentTier.getRiskRewardRatio() * currentTier.getTierMultiplier();
-        System.out.println("[" + symbol + "] R:R Target: 1:" + currentTier.getRiskRewardRatio() +
+        System.out.println("[" + primarySymbol + "] R:R Target: 1:" + currentTier.getRiskRewardRatio() +
                           " (adjusted by tier multiplier: " + currentTier.getTierMultiplier() + ")");
     }
 
