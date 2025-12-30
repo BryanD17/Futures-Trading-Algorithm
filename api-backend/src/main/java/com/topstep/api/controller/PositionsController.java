@@ -2,6 +2,7 @@ package com.topstep.api.controller;
 
 import com.topstep.trading.EngineFacade;
 import com.topstep.trading.domain.Position;
+import com.topstep.trading.execution.ExecutionEngine;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -29,22 +30,39 @@ public class PositionsController {
             for (Position position : enginePositions.values()) {
                 Map<String, Object> positionData = new HashMap<>();
                 positionData.put("symbol", position.getSymbol());
-                positionData.put("quantity", position.getQuantity());
-                positionData.put("side", position.getSide().toString());
-                positionData.put("averagePrice", position.getAvgEntryPrice());
+                positionData.put("quantity", Math.abs(position.getQuantity()));
+                positionData.put("side", position.getQuantity() > 0 ? "LONG" : "SHORT");
+                positionData.put("avgEntryPrice", position.getAvgEntryPrice());
                 positionData.put("openedAt", position.getOpenedAt().toString());
 
-                // Calculate unrealized PnL if we have execution engine
-                if (engine.getExecutionEngine() != null) {
-                    // For now, we'll use the position's built-in unrealized PnL calculation
-                    // In a real scenario, this would use current market prices
-                    double currentPrice = position.getAvgEntryPrice(); // Placeholder
-                    double tickValue = engine.getExecutionEngine().getTickValue(position.getSymbol());
-                    double unrealizedPnl = position.getUnrealizedPnL(currentPrice, tickValue);
-                    positionData.put("unrealizedPnL", unrealizedPnl);
-                } else {
-                    positionData.put("unrealizedPnL", 0.0);
+                // Get current price and calculate unrealized PnL
+                double currentPrice = position.getAvgEntryPrice(); // Default to entry
+                double unrealizedPnl = 0.0;
+                double stopPrice = 0.0;
+                double targetPrice = 0.0;
+
+                ExecutionEngine execEngine = engine.getExecutionEngine();
+                if (execEngine != null) {
+                    double tickValue = execEngine.getTickValue(position.getSymbol());
+
+                    // Try to get order levels for stop/target info
+                    ExecutionEngine.EnhancedOrderLevels levels = execEngine.getOrderLevels(position.getSymbol());
+                    if (levels != null) {
+                        stopPrice = levels.getCurrentStopPrice();
+                        targetPrice = levels.getFinalTargetPrice();
+                        // Use entry price from levels if available (more accurate)
+                        if (levels.entryPrice > 0) {
+                            currentPrice = levels.entryPrice;
+                        }
+                    }
+
+                    unrealizedPnl = position.getUnrealizedPnL(currentPrice, tickValue);
                 }
+
+                positionData.put("currentPrice", currentPrice);
+                positionData.put("unrealizedPnL", unrealizedPnl);
+                positionData.put("stopPrice", stopPrice > 0 ? stopPrice : null);
+                positionData.put("targetPrice", targetPrice > 0 ? targetPrice : null);
 
                 positions.add(positionData);
             }
@@ -52,6 +70,7 @@ public class PositionsController {
         } catch (Exception e) {
             // Return empty list if engine not initialized or error occurs
             System.err.println("Error fetching positions: " + e.getMessage());
+            e.printStackTrace();
         }
 
         return ResponseEntity.ok(positions);
