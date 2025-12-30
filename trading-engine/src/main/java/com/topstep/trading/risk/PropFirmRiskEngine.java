@@ -250,6 +250,10 @@ public class PropFirmRiskEngine {
      */
     private double getMaxRiskMultiplier(String symbol) {
         switch (symbol.toUpperCase()) {
+            case "6J":
+                // Japanese Yen: tiny tick size (0.0000005) means 200+ ticks for typical stops
+                // 200 ticks * $6.25 = $1,250 typical risk - needs 5x ($1,250 max)
+                return 5.0;
             case "SI":
                 // Silver: $25/tick - needs 4x to handle $0.25 stop ($1,000 max)
                 return 4.0;
@@ -263,7 +267,7 @@ public class PropFirmRiskEngine {
                 // NQ: $5/tick but can have wide stops - 2.5x ($625 max)
                 return 2.5;
             default:
-                // ES, 6E, 6J, 6B and others: standard 2x ($500 max)
+                // ES, 6E, 6B and others: standard 2x ($500 max)
                 return 2.0;
         }
     }
