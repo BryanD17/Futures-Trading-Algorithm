@@ -28,6 +28,10 @@ public class PositionsController {
             Map<String, Position> enginePositions = engine.getOpenPositions();
 
             for (Position position : enginePositions.values()) {
+                // Skip closed positions (quantity = 0)
+                if (position.getQuantity() == 0) {
+                    continue;
+                }
                 Map<String, Object> positionData = new HashMap<>();
                 positionData.put("symbol", position.getSymbol());
                 positionData.put("quantity", Math.abs(position.getQuantity()));

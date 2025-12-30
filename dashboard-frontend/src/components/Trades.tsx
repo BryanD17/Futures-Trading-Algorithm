@@ -3,17 +3,49 @@ import { TradesService } from '../services/api'
 import type { Trade } from '../types'
 import './Trades.css'
 
+/**
+ * Helper to safely format a number with fallback
+ */
+function formatPrice(value: number | undefined | null, decimals: number = 2): string {
+  if (value === undefined || value === null || isNaN(value)) {
+    return '-'
+  }
+  return value.toFixed(decimals)
+}
+
+/**
+ * Helper to safely format a date
+ */
+function formatDate(value: string | undefined | null): string {
+  if (!value) {
+    return '-'
+  }
+  try {
+    return new Date(value).toLocaleString()
+  } catch {
+    return '-'
+  }
+}
+
 export default function Trades() {
   const [trades, setTrades] = useState<Trade[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     const fetchTrades = async () => {
       try {
         const data = await TradesService.getTrades(0, 50)
-        setTrades(data)
+        if (Array.isArray(data)) {
+          setTrades(data)
+          setError(null)
+        } else {
+          console.error('Invalid trades data:', data)
+          setTrades([])
+        }
       } catch (err) {
         console.error('Failed to fetch trades:', err)
+        setError('Failed to load trades')
       } finally {
         setLoading(false)
       }
@@ -26,6 +58,10 @@ export default function Trades() {
 
   if (loading) {
     return <div className="loading">Loading trades...</div>
+  }
+
+  if (error) {
+    return <div className="error-state">{error}</div>
   }
 
   return (
@@ -51,27 +87,33 @@ export default function Trades() {
               </tr>
             </thead>
             <tbody>
-              {trades.map((trade) => (
-                <tr key={trade.tradeId}>
-                  <td>{new Date(trade.exitTime).toLocaleString()}</td>
-                  <td className="symbol">{trade.symbol}</td>
-                  <td>
-                    <span className={`side-badge ${trade.side.toLowerCase()}`}>
-                      {trade.side}
-                    </span>
-                  </td>
-                  <td>{trade.quantity}</td>
-                  <td>${trade.entryPrice.toFixed(2)}</td>
-                  <td>${trade.exitPrice.toFixed(2)}</td>
-                  <td style={{ color: trade.realizedPnL >= 0 ? '#10b981' : '#ef4444', fontWeight: 700 }}>
-                    ${trade.realizedPnL.toFixed(2)}
-                  </td>
-                  <td style={{ color: trade.rMultiple >= 0 ? '#10b981' : '#ef4444' }}>
-                    {trade.rMultiple.toFixed(2)}R
-                  </td>
-                  <td className="notes">{trade.notes || '-'}</td>
-                </tr>
-              ))}
+              {trades.map((trade, idx) => {
+                const side = trade.side || 'UNKNOWN'
+                const pnl = trade.realizedPnL ?? 0
+                const rMult = trade.rMultiple ?? 0
+
+                return (
+                  <tr key={trade.tradeId || idx}>
+                    <td>{formatDate(trade.exitTime)}</td>
+                    <td className="symbol">{trade.symbol || '-'}</td>
+                    <td>
+                      <span className={`side-badge ${side.toLowerCase()}`}>
+                        {side}
+                      </span>
+                    </td>
+                    <td>{trade.quantity ?? '-'}</td>
+                    <td>${formatPrice(trade.entryPrice)}</td>
+                    <td>${formatPrice(trade.exitPrice)}</td>
+                    <td style={{ color: pnl >= 0 ? '#10b981' : '#ef4444', fontWeight: 700 }}>
+                      ${formatPrice(pnl)}
+                    </td>
+                    <td style={{ color: rMult >= 0 ? '#10b981' : '#ef4444' }}>
+                      {formatPrice(rMult)}R
+                    </td>
+                    <td className="notes">{trade.notes || '-'}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

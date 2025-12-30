@@ -1102,12 +1102,23 @@ public class TopstepConnector implements TradingConnector {
                 throw new IOException("Stop order rejected: " + errorMsg);
             }
 
-            String orderId = json.has("orderId") ? json.get("orderId").asText() : "unknown";
+            String orderId = json.has("orderId") ? json.get("orderId").asText() :
+                             (json.has("id") ? json.get("id").asText() : "unknown");
             logger.info("Stop order submitted successfully: {}", orderId);
 
-            // Track the stop order for updates
+            // CRITICAL: Track stop order in pendingOrders for fill status polling
             if (listener != null) {
                 orderListeners.put(orderId, listener);
+                PendingOrder pending = new PendingOrder(
+                    orderId,
+                    symbol,
+                    quantity,
+                    side,
+                    stopPrice,
+                    listener
+                );
+                pendingOrders.put(orderId, pending);
+                logger.info("Stop order {} added to pending orders for fill tracking", orderId);
             }
 
             return orderId;
@@ -1174,12 +1185,23 @@ public class TopstepConnector implements TradingConnector {
                 throw new IOException("Take profit order rejected: " + errorMsg);
             }
 
-            String orderId = json.has("orderId") ? json.get("orderId").asText() : "unknown";
+            String orderId = json.has("orderId") ? json.get("orderId").asText() :
+                             (json.has("id") ? json.get("id").asText() : "unknown");
             logger.info("Take profit order submitted successfully: {}", orderId);
 
-            // Track the order for updates
+            // CRITICAL: Track take profit order in pendingOrders for fill status polling
             if (listener != null) {
                 orderListeners.put(orderId, listener);
+                PendingOrder pending = new PendingOrder(
+                    orderId,
+                    symbol,
+                    quantity,
+                    side,
+                    limitPrice,
+                    listener
+                );
+                pendingOrders.put(orderId, pending);
+                logger.info("Take profit order {} added to pending orders for fill tracking", orderId);
             }
 
             return orderId;

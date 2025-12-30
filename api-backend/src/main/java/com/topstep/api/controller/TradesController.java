@@ -44,14 +44,16 @@ public class TradesController {
             // Convert to response format
             for (Trade trade : paginatedTrades) {
                 Map<String, Object> tradeData = new HashMap<>();
+                tradeData.put("tradeId", trade.getTradeId());
                 tradeData.put("symbol", trade.getSymbol());
                 tradeData.put("side", trade.getSide().toString());
                 tradeData.put("quantity", trade.getQuantity());
                 tradeData.put("entryPrice", trade.getEntryPrice());
                 tradeData.put("exitPrice", trade.getExitPrice());
-                tradeData.put("entryTime", trade.getEntryTime().toString());
+                tradeData.put("entryTime", trade.getEntryTime() != null ? trade.getEntryTime().toString() : null);
                 tradeData.put("exitTime", trade.getExitTime() != null ? trade.getExitTime().toString() : null);
                 tradeData.put("realizedPnL", trade.getRealizedPnL());
+                tradeData.put("rMultiple", trade.getRMultiple());
                 tradeData.put("notes", trade.getNotes());
 
                 tradesResponse.add(tradeData);
