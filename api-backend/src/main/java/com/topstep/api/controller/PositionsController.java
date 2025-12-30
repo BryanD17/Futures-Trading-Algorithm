@@ -51,8 +51,8 @@ public class PositionsController {
                         stopPrice = levels.getCurrentStopPrice();
                         targetPrice = levels.getFinalTargetPrice();
                         // Use entry price from levels if available (more accurate)
-                        if (levels.entryPrice > 0) {
-                            currentPrice = levels.entryPrice;
+                        if (levels.getEntryPrice() > 0) {
+                            currentPrice = levels.getEntryPrice();
                         }
                     }
 
