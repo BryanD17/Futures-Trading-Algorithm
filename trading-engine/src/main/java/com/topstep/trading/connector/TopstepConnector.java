@@ -59,15 +59,45 @@ public class TopstepConnector implements TradingConnector {
     private final Map<String, String> symbolToContractId = new ConcurrentHashMap<>();
     private final Map<String, Instant> lastBarTimestamp = new ConcurrentHashMap<>();
 
+    // Track pending orders for fill status polling
+    private final Map<String, PendingOrder> pendingOrders = new ConcurrentHashMap<>();
+
     // Schedulers - use sized thread pool for market data to handle multiple symbols
     private final ScheduledExecutorService marketDataPoller = Executors.newScheduledThreadPool(4);
     private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor();
+    private final ScheduledExecutorService orderStatusPoller = Executors.newSingleThreadScheduledExecutor();
 
     // Track subscription status per symbol
     private final Map<String, Boolean> subscriptionStatus = new ConcurrentHashMap<>();
 
     // Polling interval in seconds (30 seconds for near real-time data)
     private static final int POLL_INTERVAL_SECONDS = 30;
+    // Order status polling interval (faster - every 2 seconds to detect fills quickly)
+    private static final int ORDER_POLL_INTERVAL_SECONDS = 2;
+
+    /**
+     * Tracks a pending order awaiting fill confirmation.
+     */
+    private static class PendingOrder {
+        final String orderId;
+        final String symbol;
+        final int quantity;
+        final OrderSide side;
+        final double limitPrice;
+        final OrderListener listener;
+        final Instant submittedAt;
+
+        PendingOrder(String orderId, String symbol, int quantity, OrderSide side,
+                    double limitPrice, OrderListener listener) {
+            this.orderId = orderId;
+            this.symbol = symbol;
+            this.quantity = quantity;
+            this.side = side;
+            this.limitPrice = limitPrice;
+            this.listener = listener;
+            this.submittedAt = Instant.now();
+        }
+    }
 
     /**
      * Create a TopstepConnector with credentials.
@@ -129,7 +159,128 @@ public class TopstepConnector implements TradingConnector {
         startHeartbeat();
 
         connected = true;
+
+        // Step 3: Start order status polling to detect fills
+        startOrderStatusPolling();
+
         logger.info("Connected to Topstep successfully");
+    }
+
+    /**
+     * Start polling for order status updates.
+     * This detects when orders are filled and triggers callbacks.
+     */
+    private void startOrderStatusPolling() {
+        orderStatusPoller.scheduleAtFixedRate(() -> {
+            try {
+                pollOrderStatuses();
+            } catch (Exception e) {
+                logger.error("Error polling order statuses: {}", e.getMessage());
+            }
+        }, ORDER_POLL_INTERVAL_SECONDS, ORDER_POLL_INTERVAL_SECONDS, TimeUnit.SECONDS);
+        logger.info("Order status polling started (every {}s)", ORDER_POLL_INTERVAL_SECONDS);
+    }
+
+    /**
+     * Poll for order status updates and notify listeners of fills.
+     */
+    private void pollOrderStatuses() {
+        if (pendingOrders.isEmpty()) {
+            return; // No orders to check
+        }
+
+        try {
+            // Get numeric account ID
+            String numericAccountId = getNumericAccountId();
+
+            // Search for recent orders
+            String searchUrl = apiUrl + "/Order/search";
+            Map<String, Object> searchRequest = new HashMap<>();
+            searchRequest.put("accountId", Integer.parseInt(numericAccountId));
+
+            String requestBody = objectMapper.writeValueAsString(searchRequest);
+
+            Request request = new Request.Builder()
+                .url(searchUrl)
+                .header("Authorization", "Bearer " + authToken)
+                .post(RequestBody.create(requestBody, MediaType.parse("application/json")))
+                .build();
+
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    logger.warn("Order search failed: {}", response.code());
+                    return;
+                }
+
+                String responseBody = response.body().string();
+                JsonNode json = objectMapper.readTree(responseBody);
+
+                // Parse orders array
+                JsonNode ordersNode = json.has("orders") ? json.get("orders") : json;
+                if (!ordersNode.isArray()) {
+                    return;
+                }
+
+                // Check each order against pending orders
+                for (JsonNode orderNode : ordersNode) {
+                    String orderId = orderNode.has("orderId")
+                        ? orderNode.get("orderId").asText()
+                        : (orderNode.has("id") ? orderNode.get("id").asText() : null);
+
+                    if (orderId == null) continue;
+
+                    PendingOrder pending = pendingOrders.get(orderId);
+                    if (pending == null) continue;
+
+                    // Check order status (2 = Filled, 3 = Cancelled)
+                    int status = orderNode.has("status") ? orderNode.get("status").asInt() : 0;
+
+                    if (status == 2) { // Filled
+                        double fillPrice = orderNode.has("avgFillPrice")
+                            ? orderNode.get("avgFillPrice").asDouble()
+                            : (orderNode.has("fillPrice") ? orderNode.get("fillPrice").asDouble() : pending.limitPrice);
+
+                        int fillQty = orderNode.has("filledSize")
+                            ? orderNode.get("filledSize").asInt()
+                            : pending.quantity;
+
+                        logger.info("Order {} FILLED: {} {} @ {}",
+                            orderId, pending.symbol, fillQty, fillPrice);
+
+                        // Notify listener
+                        if (pending.listener != null) {
+                            pending.listener.onOrderUpdate(orderId, OrderStatus.FILLED, fillPrice, fillQty);
+                        }
+
+                        // Remove from pending
+                        pendingOrders.remove(orderId);
+                        orderListeners.remove(orderId);
+
+                    } else if (status == 3) { // Cancelled
+                        logger.info("Order {} CANCELLED", orderId);
+
+                        if (pending.listener != null) {
+                            pending.listener.onOrderUpdate(orderId, OrderStatus.CANCELED, null, null);
+                        }
+
+                        pendingOrders.remove(orderId);
+                        orderListeners.remove(orderId);
+
+                    } else if (status == 5) { // Rejected
+                        logger.info("Order {} REJECTED", orderId);
+
+                        if (pending.listener != null) {
+                            pending.listener.onOrderUpdate(orderId, OrderStatus.REJECTED, null, null);
+                        }
+
+                        pendingOrders.remove(orderId);
+                        orderListeners.remove(orderId);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Error in pollOrderStatuses: {}", e.getMessage());
+        }
     }
 
     /**
@@ -704,10 +855,12 @@ public class TopstepConnector implements TradingConnector {
         // Shutdown schedulers
         marketDataPoller.shutdown();
         heartbeatScheduler.shutdown();
+        orderStatusPoller.shutdown();
 
         try {
             marketDataPoller.awaitTermination(5, TimeUnit.SECONDS);
             heartbeatScheduler.awaitTermination(5, TimeUnit.SECONDS);
+            orderStatusPoller.awaitTermination(5, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -717,6 +870,7 @@ public class TopstepConnector implements TradingConnector {
         orderListeners.clear();
         symbolToContractId.clear();
         lastBarTimestamp.clear();
+        pendingOrders.clear();
 
         logger.info("Disconnected from Topstep");
     }
@@ -865,6 +1019,19 @@ public class TopstepConnector implements TradingConnector {
             }
 
             logger.info("Order submitted successfully: {}", serverId);
+
+            // CRITICAL: Track order in pendingOrders for fill status polling
+            // This enables the polling mechanism to detect fills and trigger callbacks
+            PendingOrder pending = new PendingOrder(
+                serverId,
+                order.getSymbol(),
+                order.getQuantity(),
+                order.getSide(),
+                order.getLimitPrice() != null ? order.getLimitPrice() : 0.0,
+                listener
+            );
+            pendingOrders.put(serverId, pending);
+            logger.info("Order {} added to pending orders for fill tracking", serverId);
 
             // Notify listener of submission
             listener.onOrderSubmitted(order);
