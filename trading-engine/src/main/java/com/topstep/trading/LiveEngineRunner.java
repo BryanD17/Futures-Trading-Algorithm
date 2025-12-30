@@ -456,6 +456,12 @@ public class LiveEngineRunner {
                     signal.getSymbol(), isBullish, fillPrice
                 );
             }
+
+            // CRITICAL: Submit stop loss and take profit orders to the exchange
+            // This provides protection even if the bot crashes
+            if (signal != null && connector instanceof TopstepConnector) {
+                submitProtectiveOrders(signal, fillQty, fillPrice);
+            }
         }
 
         if (status == OrderStatus.REJECTED) {
@@ -467,6 +473,92 @@ public class LiveEngineRunner {
         if (status == OrderStatus.CANCELED) {
             // Remove cancelled order from ExecutionEngine
             executionEngine.removeOrderById(order.getSymbol(), orderId);
+        }
+    }
+
+    /**
+     * Submit protective stop loss and take profit orders after entry is filled.
+     * CRITICAL: These orders are placed on the exchange for protection even if bot crashes.
+     */
+    private void submitProtectiveOrders(StrategySignalEvent signal, int quantity, double fillPrice) {
+        TopstepConnector topstepConnector = (TopstepConnector) connector;
+        String symbol = signal.getSymbol();
+
+        // Determine exit side (opposite of entry)
+        OrderSide exitSide = (signal.getSide() == OrderSide.BUY) ? OrderSide.SELL : OrderSide.BUY;
+
+        // Get stop and target prices from signal
+        double stopPrice = signal.getStopPrice();
+        double targetPrice = signal.getTargetPrice();
+
+        System.out.println("  Submitting protective orders for " + symbol + ":");
+        System.out.println("    Stop Loss: " + stopPrice + " | Take Profit: " + targetPrice);
+
+        // Submit stop loss order
+        try {
+            String stopOrderId = topstepConnector.submitStopOrder(
+                symbol,
+                exitSide,
+                quantity,
+                stopPrice,
+                (id, status, price, qty) -> {
+                    if (status == OrderStatus.FILLED) {
+                        System.out.println("  ⛔ STOP LOSS HIT: " + symbol + " at $" + price);
+                        // Notify risk manager of loss
+                        double pnl = calculatePnl(symbol, fillPrice, price, quantity, signal.getSide());
+                        notifyPositionClosed(symbol, pnl);
+                    }
+                }
+            );
+            System.out.println("    ✓ Stop Loss order submitted: " + stopOrderId);
+        } catch (Exception e) {
+            System.err.println("    ❌ Failed to submit stop loss: " + e.getMessage());
+        }
+
+        // Submit take profit order
+        try {
+            String tpOrderId = topstepConnector.submitTakeProfitOrder(
+                symbol,
+                exitSide,
+                quantity,
+                targetPrice,
+                (id, status, price, qty) -> {
+                    if (status == OrderStatus.FILLED) {
+                        System.out.println("  🎯 TAKE PROFIT HIT: " + symbol + " at $" + price);
+                        // Notify risk manager of win
+                        double pnl = calculatePnl(symbol, fillPrice, price, quantity, signal.getSide());
+                        notifyPositionClosed(symbol, pnl);
+                    }
+                }
+            );
+            System.out.println("    ✓ Take Profit order submitted: " + tpOrderId);
+        } catch (Exception e) {
+            System.err.println("    ❌ Failed to submit take profit: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Calculate PnL for a closed position.
+     */
+    private double calculatePnl(String symbol, double entryPrice, double exitPrice, int quantity, OrderSide entrySide) {
+        double tickValue = getTickValue(symbol);
+        double priceDiff = (entrySide == OrderSide.BUY)
+            ? (exitPrice - entryPrice)
+            : (entryPrice - exitPrice);
+        return priceDiff * quantity * tickValue;
+    }
+
+    /**
+     * Get tick value for a symbol.
+     */
+    private double getTickValue(String symbol) {
+        switch (symbol.toUpperCase()) {
+            case "ES": return 12.50;
+            case "NQ": return 5.00;
+            case "6E": case "6J": case "6B": return 6.25;
+            case "CL": case "GC": case "NG": return 10.00;
+            case "SI": return 25.00;
+            default: return 12.50;
         }
     }
 

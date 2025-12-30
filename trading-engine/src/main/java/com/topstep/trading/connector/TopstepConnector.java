@@ -874,6 +874,152 @@ public class TopstepConnector implements TradingConnector {
     }
 
     /**
+     * Submit a stop loss order (Stop Market) for position protection.
+     * ProjectX Gateway: type 4 = Stop Market
+     *
+     * @param symbol The trading symbol
+     * @param side The order side (opposite of position - SELL for long positions, BUY for short)
+     * @param quantity Number of contracts
+     * @param stopPrice The stop trigger price
+     * @param listener Callback for order updates
+     * @return The order ID
+     */
+    public String submitStopOrder(String symbol, OrderSide side, int quantity, double stopPrice,
+                                  OrderListener listener) throws Exception {
+        logger.info("Submitting STOP order: {} {} {} @ stop {}",
+            side, quantity, symbol, stopPrice);
+
+        // Get contract ID for symbol
+        String contractId = symbolToContractId.get(symbol);
+        if (contractId == null) {
+            contractId = searchContract(symbol);
+            symbolToContractId.put(symbol, contractId);
+        }
+
+        // Get numeric account ID
+        String numericAccountId = getNumericAccountId();
+
+        // Build stop order request
+        // ProjectX Gateway: type 4 = Stop Market
+        Map<String, Object> orderMap = new HashMap<>();
+        orderMap.put("accountId", Integer.parseInt(numericAccountId));
+        orderMap.put("contractId", contractId);
+        orderMap.put("type", 4);  // Stop Market
+        orderMap.put("side", side == OrderSide.BUY ? 0 : 1);
+        orderMap.put("size", quantity);
+        orderMap.put("stopPrice", stopPrice);
+
+        String orderBody = objectMapper.writeValueAsString(orderMap);
+        logger.info("Stop order request body: {}", orderBody);
+
+        String orderUrl = apiUrl + "/Order/place";
+        Request request = new Request.Builder()
+            .url(orderUrl)
+            .header("Authorization", "Bearer " + authToken)
+            .post(RequestBody.create(orderBody, MediaType.parse("application/json")))
+            .build();
+
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                String body = response.body() != null ? response.body().string() : "No body";
+                throw new IOException("Stop order submission failed: " + response.code() + " - " + body);
+            }
+
+            String responseBody = response.body().string();
+            logger.info("Stop order response: {}", responseBody);
+            JsonNode json = objectMapper.readTree(responseBody);
+
+            boolean success = json.has("success") ? json.get("success").asBoolean() : json.has("orderId");
+            if (!success) {
+                String errorMsg = json.has("errorMessage") ? json.get("errorMessage").asText() : "Unknown error";
+                throw new IOException("Stop order rejected: " + errorMsg);
+            }
+
+            String orderId = json.has("orderId") ? json.get("orderId").asText() : "unknown";
+            logger.info("Stop order submitted successfully: {}", orderId);
+
+            // Track the stop order for updates
+            if (listener != null) {
+                orderListeners.put(orderId, listener);
+            }
+
+            return orderId;
+        }
+    }
+
+    /**
+     * Submit a take profit order (Limit) for position exit.
+     *
+     * @param symbol The trading symbol
+     * @param side The order side (opposite of position - SELL for long positions, BUY for short)
+     * @param quantity Number of contracts
+     * @param limitPrice The limit price for take profit
+     * @param listener Callback for order updates
+     * @return The order ID
+     */
+    public String submitTakeProfitOrder(String symbol, OrderSide side, int quantity, double limitPrice,
+                                        OrderListener listener) throws Exception {
+        logger.info("Submitting TAKE PROFIT order: {} {} {} @ limit {}",
+            side, quantity, symbol, limitPrice);
+
+        // Get contract ID for symbol
+        String contractId = symbolToContractId.get(symbol);
+        if (contractId == null) {
+            contractId = searchContract(symbol);
+            symbolToContractId.put(symbol, contractId);
+        }
+
+        // Get numeric account ID
+        String numericAccountId = getNumericAccountId();
+
+        // Build limit order request
+        Map<String, Object> orderMap = new HashMap<>();
+        orderMap.put("accountId", Integer.parseInt(numericAccountId));
+        orderMap.put("contractId", contractId);
+        orderMap.put("type", 1);  // Limit
+        orderMap.put("side", side == OrderSide.BUY ? 0 : 1);
+        orderMap.put("size", quantity);
+        orderMap.put("limitPrice", limitPrice);
+
+        String orderBody = objectMapper.writeValueAsString(orderMap);
+        logger.info("Take profit order request body: {}", orderBody);
+
+        String orderUrl = apiUrl + "/Order/place";
+        Request request = new Request.Builder()
+            .url(orderUrl)
+            .header("Authorization", "Bearer " + authToken)
+            .post(RequestBody.create(orderBody, MediaType.parse("application/json")))
+            .build();
+
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                String body = response.body() != null ? response.body().string() : "No body";
+                throw new IOException("Take profit order submission failed: " + response.code() + " - " + body);
+            }
+
+            String responseBody = response.body().string();
+            logger.info("Take profit order response: {}", responseBody);
+            JsonNode json = objectMapper.readTree(responseBody);
+
+            boolean success = json.has("success") ? json.get("success").asBoolean() : json.has("orderId");
+            if (!success) {
+                String errorMsg = json.has("errorMessage") ? json.get("errorMessage").asText() : "Unknown error";
+                throw new IOException("Take profit order rejected: " + errorMsg);
+            }
+
+            String orderId = json.has("orderId") ? json.get("orderId").asText() : "unknown";
+            logger.info("Take profit order submitted successfully: {}", orderId);
+
+            // Track the order for updates
+            if (listener != null) {
+                orderListeners.put(orderId, listener);
+            }
+
+            return orderId;
+        }
+    }
+
+    /**
      * Get the numeric account ID from the TopstepX account.
      */
     private String getNumericAccountId() throws Exception {
