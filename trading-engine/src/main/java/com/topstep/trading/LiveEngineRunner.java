@@ -7,6 +7,7 @@ import com.topstep.trading.engine.MultiInstrumentEngine;
 import com.topstep.trading.event.EventBus;
 import com.topstep.trading.event.StrategySignalEvent;
 import com.topstep.trading.execution.ExecutionEngine;
+import com.topstep.trading.execution.BracketOrderManager;
 import com.topstep.trading.risk.PropFirmRiskEngine;
 import com.topstep.trading.risk.RiskDecision;
 import com.topstep.trading.risk.TradingRiskManager;
@@ -65,6 +66,7 @@ public class LiveEngineRunner {
     private final RiskLimits riskLimits;
     private final PropFirmRiskEngine riskEngine;
     private final ExecutionEngine executionEngine;
+    private final BracketOrderManager bracketManager;  // OCO bracket order management
     private final TradingStrategy strategy;           // Fallback single-instrument strategy
     private final MultiInstrumentEngine multiEngine;  // Multi-instrument auto-switching engine
     private final EventBus eventBus;
@@ -100,6 +102,39 @@ public class LiveEngineRunner {
         this.executionEngine = new ExecutionEngine(accountState);
         this.riskEngine = new PropFirmRiskEngine();
         this.eventBus = new EventBus();
+
+        // Initialize bracket order manager for OCO SL/TP management
+        if (this.connector instanceof TopstepConnector) {
+            this.bracketManager = new BracketOrderManager((TopstepConnector) this.connector);
+            this.bracketManager.setListener(new BracketOrderManager.BracketListener() {
+                @Override
+                public void onStopLossFilled(BracketOrderManager.BracketOrder bracket, double fillPrice) {
+                    double pnl = calculatePnl(bracket.symbol, bracket.entryPrice, fillPrice,
+                                             bracket.quantity, bracket.entrySide);
+                    System.out.println("  PnL: $" + String.format("%.2f", pnl));
+                    notifyPositionClosed(bracket.symbol, pnl);
+                    // Clear position from account state
+                    accountState.closePosition(bracket.symbol);
+                }
+
+                @Override
+                public void onTakeProfitFilled(BracketOrderManager.BracketOrder bracket, double fillPrice) {
+                    double pnl = calculatePnl(bracket.symbol, bracket.entryPrice, fillPrice,
+                                             bracket.quantity, bracket.entrySide);
+                    System.out.println("  PnL: $" + String.format("%.2f", pnl));
+                    notifyPositionClosed(bracket.symbol, pnl);
+                    // Clear position from account state
+                    accountState.closePosition(bracket.symbol);
+                }
+
+                @Override
+                public void onBracketCanceled(BracketOrderManager.BracketOrder bracket, String reason) {
+                    System.out.println("[BRACKET] Bracket canceled for " + bracket.symbol + ": " + reason);
+                }
+            });
+        } else {
+            this.bracketManager = null;
+        }
         this.strategyContext = new DefaultStrategyContext(accountState);
         this.scheduler = Executors.newScheduledThreadPool(2);
 
@@ -460,7 +495,7 @@ public class LiveEngineRunner {
             // CRITICAL: Submit stop loss and take profit orders to the exchange
             // This provides protection even if the bot crashes
             if (signal != null && connector instanceof TopstepConnector) {
-                submitProtectiveOrders(signal, fillQty, fillPrice);
+                submitProtectiveOrders(signal, fillQty, fillPrice, orderId);
             }
         }
 
@@ -478,63 +513,33 @@ public class LiveEngineRunner {
 
     /**
      * Submit protective stop loss and take profit orders after entry is filled.
+     * Uses BracketOrderManager for OCO (One Cancels Other) management.
      * CRITICAL: These orders are placed on the exchange for protection even if bot crashes.
+     *
+     * Directional rules:
+     * - LONG position: SL = Sell Stop Market (below entry), TP = Sell Limit (above entry)
+     * - SHORT position: SL = Buy Stop Market (above entry), TP = Buy Limit (below entry)
      */
-    private void submitProtectiveOrders(StrategySignalEvent signal, int quantity, double fillPrice) {
-        TopstepConnector topstepConnector = (TopstepConnector) connector;
+    private void submitProtectiveOrders(StrategySignalEvent signal, int quantity, double fillPrice, String entryOrderId) {
+        if (bracketManager == null) {
+            System.err.println("  ❌ BracketOrderManager not available - position is UNPROTECTED!");
+            return;
+        }
+
         String symbol = signal.getSymbol();
-
-        // Determine exit side (opposite of entry)
-        OrderSide exitSide = (signal.getSide() == OrderSide.BUY) ? OrderSide.SELL : OrderSide.BUY;
-
-        // Get stop and target prices from signal
         double stopPrice = signal.getStopPrice();
         double targetPrice = signal.getTargetPrice();
 
-        System.out.println("  Submitting protective orders for " + symbol + ":");
-        System.out.println("    Stop Loss: " + stopPrice + " | Take Profit: " + targetPrice);
-
-        // Submit stop loss order
-        try {
-            String stopOrderId = topstepConnector.submitStopOrder(
-                symbol,
-                exitSide,
-                quantity,
-                stopPrice,
-                (id, status, price, qty) -> {
-                    if (status == OrderStatus.FILLED) {
-                        System.out.println("  ⛔ STOP LOSS HIT: " + symbol + " at $" + price);
-                        // Notify risk manager of loss
-                        double pnl = calculatePnl(symbol, fillPrice, price, quantity, signal.getSide());
-                        notifyPositionClosed(symbol, pnl);
-                    }
-                }
-            );
-            System.out.println("    ✓ Stop Loss order submitted: " + stopOrderId);
-        } catch (Exception e) {
-            System.err.println("    ❌ Failed to submit stop loss: " + e.getMessage());
-        }
-
-        // Submit take profit order
-        try {
-            String tpOrderId = topstepConnector.submitTakeProfitOrder(
-                symbol,
-                exitSide,
-                quantity,
-                targetPrice,
-                (id, status, price, qty) -> {
-                    if (status == OrderStatus.FILLED) {
-                        System.out.println("  🎯 TAKE PROFIT HIT: " + symbol + " at $" + price);
-                        // Notify risk manager of win
-                        double pnl = calculatePnl(symbol, fillPrice, price, quantity, signal.getSide());
-                        notifyPositionClosed(symbol, pnl);
-                    }
-                }
-            );
-            System.out.println("    ✓ Take Profit order submitted: " + tpOrderId);
-        } catch (Exception e) {
-            System.err.println("    ❌ Failed to submit take profit: " + e.getMessage());
-        }
+        // Create the OCO bracket - BracketOrderManager handles all the details
+        bracketManager.createBracket(
+            symbol,
+            entryOrderId,
+            fillPrice,
+            quantity,
+            signal.getSide(),
+            stopPrice,
+            targetPrice
+        );
     }
 
     /**
@@ -667,6 +672,8 @@ public class LiveEngineRunner {
 
     /**
      * Flatten all open positions.
+     * IMPORTANT: Also cancels any active bracket orders (SL/TP) to avoid
+     * duplicate exits or orphaned orders.
      */
     public void flattenAllPositions(String reason) {
         if (flatteningPositions.getAndSet(true)) {
@@ -678,11 +685,18 @@ public class LiveEngineRunner {
 
             for (Position position : accountState.getPositions().values()) {
                 if (position.getQuantity() != 0) {
+                    String symbol = position.getSymbol();
+
+                    // CRITICAL: Cancel any active brackets first to avoid orphaned orders
+                    if (bracketManager != null && bracketManager.hasBracket(symbol)) {
+                        bracketManager.cancelBracket(symbol, "Position flattened: " + reason);
+                    }
+
                     try {
                         // Create market order to close position
                         OrderSide closeSide = position.getQuantity() > 0 ? OrderSide.SELL : OrderSide.BUY;
                         Order closeOrder = new Order(
-                            position.getSymbol(),
+                            symbol,
                             closeSide,
                             OrderType.MARKET,
                             Math.abs(position.getQuantity()),
@@ -691,15 +705,15 @@ public class LiveEngineRunner {
 
                         String orderId = connector.submitOrder(closeOrder, (id, status, price, qty) -> {
                             if (status == OrderStatus.FILLED) {
-                                System.out.println("  ✓ Closed " + position.getSymbol() + " at $" + price);
+                                System.out.println("  ✓ Closed " + symbol + " at $" + price);
                             }
                         });
 
-                        System.out.println("  Closing " + position.getSymbol() +
+                        System.out.println("  Closing " + symbol +
                             " x " + position.getQuantity() + " (Order: " + orderId + ")");
 
                     } catch (Exception e) {
-                        System.err.println("  ❌ Failed to close " + position.getSymbol() + ": " + e.getMessage());
+                        System.err.println("  ❌ Failed to close " + symbol + ": " + e.getMessage());
                     }
                 }
             }

@@ -124,6 +124,15 @@ public class AccountState {
     }
 
     /**
+     * Close/remove a position for a symbol.
+     * Called when bracket order fills (SL or TP hit).
+     */
+    public void closePosition(String symbol) {
+        positions.remove(symbol);
+        this.lastUpdated = Instant.now();
+    }
+
+    /**
      * Record realized PnL from closing a position.
      */
     public void recordRealizedPnL(double pnl) {
