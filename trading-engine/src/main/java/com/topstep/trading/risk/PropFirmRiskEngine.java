@@ -98,20 +98,26 @@ public class PropFirmRiskEngine {
         double riskPerTrade = Math.min(limits.getRiskPerTrade(), remainingDailyLoss);
         int quantity = (int) Math.floor(riskPerTrade / dollarRiskPerContract);
 
-        // MINIMUM 1 CONTRACT: If calculation gives 0 but risk is within 2x budget, allow 1 contract
+        // MINIMUM 1 CONTRACT: If calculation gives 0 but risk is within acceptable limit, allow 1 contract
         // This prevents missing trades on instruments with naturally wider stops
+        // Use higher multiplier for high-tick-value instruments (SI, GC, NG, CL)
         if (quantity <= 0) {
-            if (dollarRiskPerContract <= riskPerTrade * 2.0) {
-                // Risk is within 2x budget - allow 1 contract with warning
+            double maxRiskMultiplier = getMaxRiskMultiplier(signal.getSymbol());
+            double maxAllowedRisk = riskPerTrade * maxRiskMultiplier;
+
+            if (dollarRiskPerContract <= maxAllowedRisk) {
+                // Risk is within acceptable limit - allow 1 contract with warning
                 quantity = 1;
                 System.out.println("[POSITION SIZING] " + signal.getSymbol() +
                     ": Using minimum 1 contract (risk $" + String.format("%.2f", dollarRiskPerContract) +
-                    " exceeds budget $" + String.format("%.2f", riskPerTrade) + " but within 2x limit)");
+                    " exceeds budget $" + String.format("%.2f", riskPerTrade) +
+                    " but within " + String.format("%.0fx", maxRiskMultiplier) + " limit)");
             } else {
                 // Risk is too high even for 1 contract
                 return RiskDecision.deny("Risk too high per contract: $" +
-                    String.format("%.2f", dollarRiskPerContract) + " > 2x budget $" +
-                    String.format("%.2f", riskPerTrade * 2.0));
+                    String.format("%.2f", dollarRiskPerContract) + " > " +
+                    String.format("%.0fx", maxRiskMultiplier) + " budget $" +
+                    String.format("%.2f", maxAllowedRisk));
             }
         }
 
@@ -236,6 +242,30 @@ public class PropFirmRiskEngine {
         int decimals = getDecimalPlaces(tickSize);
         double multiplier = Math.pow(10, decimals);
         return Math.round(rounded * multiplier) / multiplier;
+    }
+
+    /**
+     * Get the maximum risk multiplier for minimum 1 contract sizing.
+     * Higher tick value instruments get a larger multiplier to accommodate typical stop distances.
+     */
+    private double getMaxRiskMultiplier(String symbol) {
+        switch (symbol.toUpperCase()) {
+            case "SI":
+                // Silver: $25/tick - needs 4x to handle $0.25 stop ($1,000 max)
+                return 4.0;
+            case "GC":
+            case "NG":
+            case "CL":
+                // Gold, NatGas, Crude: $10/tick - needs 3x to handle typical stops ($750 max)
+                return 3.0;
+            case "NQ":
+            case "MNQ":
+                // NQ: $5/tick but can have wide stops - 2.5x ($625 max)
+                return 2.5;
+            default:
+                // ES, 6E, 6J, 6B and others: standard 2x ($500 max)
+                return 2.0;
+        }
     }
 
     /**
