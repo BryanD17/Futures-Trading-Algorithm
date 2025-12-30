@@ -683,6 +683,9 @@ public class LiveEngineRunner {
         try {
             System.out.println("\n📤 Flattening all positions: " + reason);
 
+            // Collect symbols to flatten (avoid concurrent modification)
+            java.util.List<String> symbolsToFlatten = new java.util.ArrayList<>();
+
             for (Position position : accountState.getPositions().values()) {
                 if (position.getQuantity() != 0) {
                     String symbol = position.getSymbol();
@@ -712,10 +715,21 @@ public class LiveEngineRunner {
                         System.out.println("  Closing " + symbol +
                             " x " + position.getQuantity() + " (Order: " + orderId + ")");
 
+                        // Track symbol for removal after orders submitted
+                        symbolsToFlatten.add(symbol);
+
                     } catch (Exception e) {
                         System.err.println("  ❌ Failed to close " + symbol + ": " + e.getMessage());
                     }
                 }
+            }
+
+            // CRITICAL: Clear flattened positions from account state
+            // Market orders are fire-and-forget on the exchange - they will fill
+            // We can't wait for fill detection during shutdown, so clear now
+            for (String symbol : symbolsToFlatten) {
+                accountState.closePosition(symbol);
+                System.out.println("  ✓ Removed " + symbol + " from account state");
             }
 
         } finally {
