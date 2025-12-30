@@ -82,6 +82,13 @@ public class PropFirmRiskEngine {
         double ticksAtRisk = stopDistance / tickSize;
         double dollarRiskPerContract = ticksAtRisk * tickValue;
 
+        // Debug logging for position sizing
+        System.out.println("[POSITION SIZING] " + signal.getSymbol() +
+            ": stopDist=" + String.format("%.7f", stopDistance) +
+            ", tickSize=" + tickSize +
+            ", ticks=" + String.format("%.1f", ticksAtRisk) +
+            ", $/contract=$" + String.format("%.2f", dollarRiskPerContract));
+
         if (dollarRiskPerContract <= 0) {
             return RiskDecision.deny("Invalid risk calculation: " + dollarRiskPerContract);
         }
@@ -91,8 +98,21 @@ public class PropFirmRiskEngine {
         double riskPerTrade = Math.min(limits.getRiskPerTrade(), remainingDailyLoss);
         int quantity = (int) Math.floor(riskPerTrade / dollarRiskPerContract);
 
+        // MINIMUM 1 CONTRACT: If calculation gives 0 but risk is within 2x budget, allow 1 contract
+        // This prevents missing trades on instruments with naturally wider stops
         if (quantity <= 0) {
-            return RiskDecision.deny("Calculated quantity is zero (risk too high per contract)");
+            if (dollarRiskPerContract <= riskPerTrade * 2.0) {
+                // Risk is within 2x budget - allow 1 contract with warning
+                quantity = 1;
+                System.out.println("[POSITION SIZING] " + signal.getSymbol() +
+                    ": Using minimum 1 contract (risk $" + String.format("%.2f", dollarRiskPerContract) +
+                    " exceeds budget $" + String.format("%.2f", riskPerTrade) + " but within 2x limit)");
+            } else {
+                // Risk is too high even for 1 contract
+                return RiskDecision.deny("Risk too high per contract: $" +
+                    String.format("%.2f", dollarRiskPerContract) + " > 2x budget $" +
+                    String.format("%.2f", riskPerTrade * 2.0));
+            }
         }
 
         // 5. Enforce max contracts limit
