@@ -641,6 +641,7 @@ public class ExecutionEngine {
         }
 
         // Getters
+        public double getEntryPrice() { return entryPrice; }
         public double getCurrentStopPrice() { return currentStopPrice; }
         public double getFinalTargetPrice() { return finalTargetPrice; }
         public boolean isStopMovedToBreakeven() { return stopMovedToBreakeven; }
