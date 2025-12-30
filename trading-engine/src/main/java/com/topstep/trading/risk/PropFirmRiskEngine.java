@@ -257,15 +257,15 @@ public class PropFirmRiskEngine {
             case "SI":
                 // Silver: $25/tick - needs 4x to handle $0.25 stop ($1,000 max)
                 return 4.0;
+            case "NQ":
+            case "MNQ":
+                // NQ: $5/tick, 50-point stop = 200 ticks * $5 = $1,000 - needs 4x
+                return 4.0;
             case "GC":
             case "NG":
             case "CL":
                 // Gold, NatGas, Crude: $10/tick - needs 3x to handle typical stops ($750 max)
                 return 3.0;
-            case "NQ":
-            case "MNQ":
-                // NQ: $5/tick but can have wide stops - 2.5x ($625 max)
-                return 2.5;
             default:
                 // ES, 6E, 6B and others: standard 2x ($500 max)
                 return 2.0;
