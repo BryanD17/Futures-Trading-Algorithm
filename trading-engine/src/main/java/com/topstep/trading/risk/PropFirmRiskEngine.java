@@ -105,7 +105,9 @@ public class PropFirmRiskEngine {
             double maxRiskMultiplier = getMaxRiskMultiplier(signal.getSymbol());
             double maxAllowedRisk = riskPerTrade * maxRiskMultiplier;
 
-            if (dollarRiskPerContract <= maxAllowedRisk) {
+            // Use small tolerance (0.01) to handle floating point precision issues
+            // e.g., $1250.0000001 should be treated as equal to $1250.00
+            if (dollarRiskPerContract <= maxAllowedRisk + 0.01) {
                 // Risk is within acceptable limit - allow 1 contract with warning
                 quantity = 1;
                 System.out.println("[POSITION SIZING] " + signal.getSymbol() +
