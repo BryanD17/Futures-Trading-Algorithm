@@ -44,6 +44,9 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     private final MarketStructureShiftDetector mssDetector;
     private final BarAggregationManager barManager;
 
+    // Multi-Timeframe Analysis (15m/30m bias, 5m/15m FVGs, 3m/5m OBs)
+    private final MultiTimeframeAnalyzer mtfAnalyzer;
+
     // Configuration from profile
     private final double oteLow;
     private final double oteHigh;
@@ -109,6 +112,9 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         this.silverBulletClock = new SilverBulletClock();
         this.mssDetector = new MarketStructureShiftDetector(50, 2);
         this.barManager = new BarAggregationManager(profile.getSymbol(), 100);
+
+        // Initialize Multi-Timeframe Analyzer
+        this.mtfAnalyzer = new MultiTimeframeAnalyzer(profile.getSymbol(), barManager);
     }
 
     /**
@@ -187,7 +193,10 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         if (mss != null) {
             lastSBMss = mss;
         }
-        barManager.processCandle(candle);
+
+        // Process 1m candle into higher timeframes and update MTF analyzer
+        java.util.Map<BarAggregationManager.Timeframe, Candle> completedCandles = barManager.processCandle(candle);
+        mtfAnalyzer.update(completedCandles);
 
         // Silver Bullet: Track liquidity raids
         updateSilverBulletRaidTracking(candle);
@@ -331,10 +340,11 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     }
 
     /**
-     * Grade Silver Bullet setup tier based on confluences.
+     * Grade Silver Bullet setup tier based on confluences + HTF analysis.
      */
     private TradeTier gradeSilverBulletTier(Candle candle, SilverBulletClock.SilverBulletWindow window, boolean isOptimalSymbol) {
         int tierScore = 0;
+        boolean isBullish = lastSBMss != null && lastSBMss.isBullish;
 
         // Base score: Silver Bullet itself is a premium methodology
         tierScore += 2;
@@ -349,26 +359,64 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
             tierScore += 1;
         }
 
-        // FVG quality (+1 if unfilled/fresh)
-        if (currentFvg != null && !currentFvg.isFilled()) {
-            tierScore += 1;
+        // ═══════════════════════════════════════════════════════════════════════
+        // HTF ANALYSIS FOR SILVER BULLET (major scoring factors)
+        // ═══════════════════════════════════════════════════════════════════════
+
+        // 30m + 15m bias alignment (+3 - major factor)
+        if (mtfAnalyzer.htfBiasAligns(isBullish)) {
+            tierScore += 3;
+        } else {
+            // 15m bias alignment (+1)
+            MarketBias htfBias15m = mtfAnalyzer.getHtfBias15m();
+            if ((isBullish && htfBias15m == MarketBias.BULLISH) ||
+                (!isBullish && htfBias15m == MarketBias.BEARISH)) {
+                tierScore += 1;
+            }
         }
 
-        // Check for additional confluences
-        boolean isBullish = lastSBMss != null && lastSBMss.isBullish;
-
-        // Order Block confluence (+1)
-        OrderBlock ob = orderBlockDetector.findNearestValidOb(candle.getClose(), isBullish, maxPriceDistance);
-        if (ob != null) {
-            currentOrderBlock = ob;
-            tierScore += 1;
-        }
-
-        // Breaker Block confluence (+2 - very strong)
-        BreakerBlock breaker = breakerBlockDetector.findNearestBreaker(candle.getClose(), isBullish, maxPriceDistance);
-        if (breaker != null) {
-            currentBreaker = breaker;
+        // 15m FVG present (+2 - premium entry zone)
+        FairValueGap htfFvg15m = mtfAnalyzer.findHtfUnfilledFvg15m(candle.getClose(), isBullish, maxPriceDistance);
+        if (htfFvg15m != null) {
             tierScore += 2;
+            currentFvg = htfFvg15m;  // Use HTF FVG for entry
+        } else if (currentFvg != null && !currentFvg.isFilled()) {
+            // 1m unfilled FVG (+1)
+            tierScore += 1;
+        }
+
+        // 5m FVG present (+1)
+        FairValueGap htfFvg5m = mtfAnalyzer.findUnfilledFvg5m(candle.getClose(), isBullish, maxPriceDistance);
+        if (htfFvg5m != null) {
+            tierScore += 1;
+            if (currentFvg == null) currentFvg = htfFvg5m;
+        }
+
+        // 5m Order Block confluence (+2)
+        OrderBlock htfOb5m = mtfAnalyzer.findOb5m(candle.getClose(), isBullish, maxPriceDistance);
+        if (htfOb5m != null) {
+            currentOrderBlock = htfOb5m;
+            tierScore += 2;
+        } else {
+            // 1m Order Block (+1)
+            OrderBlock ob = orderBlockDetector.findNearestValidOb(candle.getClose(), isBullish, maxPriceDistance);
+            if (ob != null) {
+                currentOrderBlock = ob;
+                tierScore += 1;
+            }
+        }
+
+        // 5m Breaker Block confluence (+2)
+        BreakerBlock htfBreaker5m = mtfAnalyzer.findBreaker5m(candle.getClose(), isBullish, maxPriceDistance);
+        if (htfBreaker5m != null) {
+            tierScore += 2;
+        } else {
+            // 1m Breaker (+1)
+            BreakerBlock breaker = breakerBlockDetector.findNearestBreaker(candle.getClose(), isBullish, maxPriceDistance);
+            if (breaker != null) {
+                currentBreaker = breaker;
+                tierScore += 1;
+            }
         }
 
         // SMT divergence (+1)
@@ -377,21 +425,18 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
             tierScore += 1;
         }
 
-        // HTF bias alignment from 15m bars (+1)
-        if (barManager.hasEnoughCandles(BarAggregationManager.Timeframe.M15, 5)) {
-            double htfSwingHigh = barManager.getSwingHigh(BarAggregationManager.Timeframe.M15, 5);
-            double htfSwingLow = barManager.getSwingLow(BarAggregationManager.Timeframe.M15, 5);
-            double htfMid = (htfSwingHigh + htfSwingLow) / 2;
-            boolean htfBullish = candle.getClose() > htfMid;
-            if (htfBullish == isBullish) {
-                tierScore += 1;
-            }
+        // Multi-TF displacement confirmation (+1)
+        if (mtfAnalyzer.hasConfirmedDisplacement(isBullish)) {
+            tierScore += 1;
         }
 
-        // Determine tier based on score
-        if (tierScore >= 7) {
-            return TradeTier.TIER_3;  // Premium Silver Bullet
-        } else if (tierScore >= 4) {
+        // ═══════════════════════════════════════════════════════════════════════
+        // TIER DETERMINATION (higher thresholds due to more scoring factors)
+        // ═══════════════════════════════════════════════════════════════════════
+        // Max possible: 2(base) + 1(optimal) + 1(mss) + 3(30m+15m) + 2(15mFVG) + 1(5mFVG) + 2(5mOB) + 2(5mBreaker) + 1(SMT) + 1(MTFDisp) = 16
+        if (tierScore >= 10) {
+            return TradeTier.TIER_3;  // Premium Silver Bullet (HTF confirmed)
+        } else if (tierScore >= 6) {
             return TradeTier.TIER_2;  // Standard Silver Bullet
         } else {
             return TradeTier.TIER_1;  // Basic Silver Bullet
@@ -399,9 +444,10 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     }
 
     /**
-     * Print Silver Bullet signal details.
+     * Print Silver Bullet signal details with HTF confirmation.
      */
     private void printSilverBulletSignal(Candle candle, SilverBulletClock.SilverBulletWindow window, boolean isOptimalSymbol) {
+        boolean isBullish = lastSBMss != null && lastSBMss.isBullish;
         String tierStars = currentTier == TradeTier.TIER_3 ? "★★★" :
                           (currentTier == TradeTier.TIER_2 ? "★★" : "★");
         String tierLabel = currentTier == TradeTier.TIER_3 ? "PREMIUM" :
@@ -417,12 +463,22 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
                           " | Strength: " + String.format("%.2f", lastSBMss.strength));
         System.out.println("[" + profile.getSymbol() + "] Entry FVG: " + String.format("%.2f - %.2f", currentFvg.getBottom(), currentFvg.getTop()));
 
+        // HTF Confirmation
+        MarketBias htf30m = mtfAnalyzer.getHtfBias30m();
+        MarketBias htf15m = mtfAnalyzer.getHtfBias15m();
+        boolean htfAligned = mtfAnalyzer.htfBiasAligns(isBullish);
+        System.out.println("[" + profile.getSymbol() + "] HTF: 30m=" + htf30m + " | 15m=" + htf15m +
+                          " | Aligned: " + (htfAligned ? "✓ YES" : "~"));
+
         StringBuilder confluences = new StringBuilder();
         confluences.append("[" + profile.getSymbol() + "] Confluences: MSS✓, FVG✓");
         if (currentBreaker != null) confluences.append(", Breaker✓");
         if (currentOrderBlock != null) confluences.append(", OB✓");
         if (correlationTracker.hasSMTDivergence(profile.getSymbol(), profile.getSmtSymbol(), 10)) {
             confluences.append(", SMT✓");
+        }
+        if (mtfAnalyzer.hasConfirmedDisplacement(isBullish)) {
+            confluences.append(", MTF-Disp✓");
         }
         System.out.println(confluences.toString());
 
@@ -535,9 +591,9 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         hasPower3Confirmation = power3Detector.isInDistribution() &&
                 power3Detector.confirmsDirection(isBullish);
 
-        // 8. Look for entry zones by tier (STRICT requirements for higher win rate)
+        // 8. Look for entry zones by tier (STRICT requirements + HTF CONFIRMATION)
 
-        // Find all potential entry structures
+        // Find all potential entry structures on 1m (LTF)
         currentBreaker = breakerBlockDetector.findNearestBreaker(candle.getClose(), isBullish, maxPriceDistance);
         FairValueGap ifvg = fvgDetector.findNearestIfvg(candle.getClose(), isBullish);
         currentOrderBlock = orderBlockDetector.findNearestValidOb(candle.getClose(), isBullish, maxPriceDistance);
@@ -546,15 +602,41 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         currentMitigationBlock = mitigationBlockDetector.findBestMitigationZone(candle.getClose(), isBullish, maxPriceDistance);
 
         // ═══════════════════════════════════════════════════════════════════════
+        // HTF ANALYSIS (30m/15m/5m/3m)
+        // ═══════════════════════════════════════════════════════════════════════
+        MarketBias htfBias30m = mtfAnalyzer.getHtfBias30m();
+        MarketBias htfBias15m = mtfAnalyzer.getHtfBias15m();
+        boolean htfFullAlignment = mtfAnalyzer.htfBiasAligns(isBullish);
+        boolean htf15mAligned = (isBullish && htfBias15m == MarketBias.BULLISH) ||
+                                (!isBullish && htfBias15m == MarketBias.BEARISH);
+        boolean htf15mNotOpposing = (isBullish && htfBias15m != MarketBias.BEARISH) ||
+                                    (!isBullish && htfBias15m != MarketBias.BULLISH);
+
+        // Find HTF zones (higher quality than 1m)
+        FairValueGap htfFvg15m = mtfAnalyzer.findHtfUnfilledFvg15m(candle.getClose(), isBullish, maxPriceDistance);
+        FairValueGap htfFvg5m = mtfAnalyzer.findUnfilledFvg5m(candle.getClose(), isBullish, maxPriceDistance);
+        OrderBlock htfOb5m = mtfAnalyzer.findOb5m(candle.getClose(), isBullish, maxPriceDistance);
+        BreakerBlock htfBreaker5m = mtfAnalyzer.findBreaker5m(candle.getClose(), isBullish, maxPriceDistance);
+        boolean htfDisplacement = mtfAnalyzer.hasConfirmedDisplacement(isBullish);
+
+        // ═══════════════════════════════════════════════════════════════════════
         // TIER 4 (Elite): Must have ALL of these:
-        //   ✓ Breaker Block
+        //   ✓ Breaker Block (1m or 5m)
         //   ✓ Power of 3 Confirmation
         //   ✓ SMT Divergence
         //   ✓ Displacement
+        //   ✓ HTF: 30m+15m bias aligned
+        //   ✓ HTF: 15m FVG OR 5m OB present
         // ═══════════════════════════════════════════════════════════════════════
-        if (currentBreaker != null && hasPower3Confirmation && hasSmtDivergence && hasDisplacement) {
+        boolean hasBreaker = currentBreaker != null || htfBreaker5m != null;
+        boolean hasHtfZone = htfFvg15m != null || htfOb5m != null;
+
+        if (hasBreaker && hasPower3Confirmation && hasSmtDivergence && hasDisplacement &&
+            htfFullAlignment && hasHtfZone) {
             currentTier = TradeTier.TIER_4;
-            printTier4Signal(candle, bias, sweep, "Breaker+Power3+SMT+Displacement");
+            if (htfBreaker5m != null) currentBreaker = null;  // Prefer HTF breaker tracking
+            if (htfFvg15m != null) currentFvg = htfFvg15m;
+            printTier4Signal(candle, bias, sweep, "Breaker+Power3+SMT+Disp [HTF:30m+15m✓]");
             return true;
         }
 
@@ -562,19 +644,26 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         // TIER 3 (Premium): One of these combinations:
         //   • Breaker + (SMT OR Displacement OR Power3)
         //   • IFVG + OB + Displacement + Power3
+        //   ✓ HTF: 15m bias aligned
+        //   ✓ HTF: (15m FVG OR 5m FVG OR 5m OB) present
         // ═══════════════════════════════════════════════════════════════════════
-        if (currentBreaker != null && (hasSmtDivergence || hasDisplacement || hasPower3Confirmation)) {
-            currentTier = TradeTier.TIER_3;
-            String combo = "Breaker+" + (hasSmtDivergence ? "SMT" : (hasDisplacement ? "Displacement" : "Power3"));
-            printTier3Signal(candle, bias, sweep, combo, hasSmtDivergence);
-            return true;
-        }
+        boolean hasHtfZoneT3 = htfFvg15m != null || htfFvg5m != null || htfOb5m != null;
 
-        if (ifvg != null && currentOrderBlock != null && hasDisplacement && hasPower3Confirmation) {
-            currentTier = TradeTier.TIER_3;
-            currentFvg = ifvg;
-            printTier3Signal(candle, bias, sweep, "IFVG+OB+Displacement+Power3", hasSmtDivergence);
-            return true;
+        if (htf15mAligned && hasHtfZoneT3) {
+            if (hasBreaker && (hasSmtDivergence || hasDisplacement || hasPower3Confirmation)) {
+                currentTier = TradeTier.TIER_3;
+                String htfInfo = htfFvg15m != null ? "15mFVG" : (htfFvg5m != null ? "5mFVG" : "5mOB");
+                String combo = "Breaker+" + (hasSmtDivergence ? "SMT" : (hasDisplacement ? "Displacement" : "Power3"));
+                printTier3Signal(candle, bias, sweep, combo + " [HTF:" + htfInfo + "✓]", hasSmtDivergence);
+                return true;
+            }
+
+            if (ifvg != null && currentOrderBlock != null && hasDisplacement && hasPower3Confirmation) {
+                currentTier = TradeTier.TIER_3;
+                currentFvg = htfFvg15m != null ? htfFvg15m : (htfFvg5m != null ? htfFvg5m : ifvg);
+                printTier3Signal(candle, bias, sweep, "IFVG+OB+Disp+Power3 [HTF:15m✓]", hasSmtDivergence);
+                return true;
+            }
         }
 
         // ═══════════════════════════════════════════════════════════════════════
@@ -582,24 +671,35 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         //   • Order Block + Displacement + SMT (all 3 required)
         //   • Unfilled FVG + SMT + Displacement (all 3 required)
         //   • Fresh Mitigation Zone + SMT
+        //   ✓ HTF: 15m bias NOT opposing
+        //   ✓ HTF: (5m FVG OR 3m/5m OB) present
         // ═══════════════════════════════════════════════════════════════════════
-        if (currentOrderBlock != null && hasDisplacement && hasSmtDivergence) {
-            currentTier = TradeTier.TIER_2;
-            printTier2Signal(candle, bias, sweep, "OB+Displacement+SMT", hasSmtDivergence);
-            return true;
-        }
+        MultiTimeframeAnalyzer.ObResult htfObResult = mtfAnalyzer.findBestHtfOb(candle.getClose(), isBullish, maxPriceDistance);
+        boolean hasHtfZoneT2 = htfFvg5m != null || htfObResult != null;
 
-        if (unfilledFvg != null && hasSmtDivergence && hasDisplacement) {
-            currentTier = TradeTier.TIER_2;
-            currentFvg = unfilledFvg;
-            printTier2Signal(candle, bias, sweep, "FVG+SMT+Displacement", hasSmtDivergence);
-            return true;
-        }
+        if (htf15mNotOpposing && hasHtfZoneT2) {
+            boolean obPresent = currentOrderBlock != null || htfOb5m != null;
 
-        if (currentMitigationBlock != null && currentMitigationBlock.isFresh() && hasSmtDivergence) {
-            currentTier = TradeTier.TIER_2;
-            printTier2Signal(candle, bias, sweep, "Mitigation+SMT", hasSmtDivergence);
-            return true;
+            if (obPresent && hasDisplacement && hasSmtDivergence) {
+                currentTier = TradeTier.TIER_2;
+                String htfInfo = htfOb5m != null ? "5mOB" : "5mFVG";
+                printTier2Signal(candle, bias, sweep, "OB+Disp+SMT [HTF:" + htfInfo + "✓]", hasSmtDivergence);
+                return true;
+            }
+
+            FairValueGap fvgToUse = htfFvg5m != null ? htfFvg5m : unfilledFvg;
+            if (fvgToUse != null && hasSmtDivergence && (hasDisplacement || htfDisplacement)) {
+                currentTier = TradeTier.TIER_2;
+                currentFvg = fvgToUse;
+                printTier2Signal(candle, bias, sweep, "FVG+SMT+Disp [HTF:5m✓]", hasSmtDivergence);
+                return true;
+            }
+
+            if (currentMitigationBlock != null && currentMitigationBlock.isFresh() && hasSmtDivergence) {
+                currentTier = TradeTier.TIER_2;
+                printTier2Signal(candle, bias, sweep, "Mitigation+SMT [HTF:5m✓]", hasSmtDivergence);
+                return true;
+            }
         }
 
         // ═══════════════════════════════════════════════════════════════════════
@@ -608,37 +708,46 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         //   • FVG + Displacement
         //   • SMT + Displacement
         //   • Order Block + any confirmation (SMT or Displacement)
+        //   ✓ HTF: 15m bias NOT opposing (no trading against HTF trend)
         // ═══════════════════════════════════════════════════════════════════════
-        boolean hasFvg = anyFvg != null;
-        boolean hasOb = currentOrderBlock != null;
+        if (!htf15mNotOpposing) {
+            if (shouldLog) {
+                System.out.println("[" + profile.getSymbol() + "] ✓ LTF Confluence | ✗ HTF 15m opposing direction");
+            }
+            return false;
+        }
+
+        boolean hasFvg = anyFvg != null || htfFvg5m != null;
+        boolean hasOb = currentOrderBlock != null || htfOb5m != null;
+        FairValueGap fvgToUse = htfFvg5m != null ? htfFvg5m : anyFvg;
 
         // FVG + SMT
         if (hasFvg && hasSmtDivergence) {
             currentTier = TradeTier.TIER_1;
-            currentFvg = anyFvg;
-            printTier1Signal(candle, bias, sweep, hasSmtDivergence, "FVG+SMT");
+            currentFvg = fvgToUse;
+            printTier1Signal(candle, bias, sweep, hasSmtDivergence, "FVG+SMT [HTF:OK]");
             return true;
         }
 
         // FVG + Displacement
-        if (hasFvg && hasDisplacement) {
+        if (hasFvg && (hasDisplacement || htfDisplacement)) {
             currentTier = TradeTier.TIER_1;
-            currentFvg = anyFvg;
-            printTier1Signal(candle, bias, sweep, hasSmtDivergence, "FVG+Displacement");
+            currentFvg = fvgToUse;
+            printTier1Signal(candle, bias, sweep, hasSmtDivergence, "FVG+Disp [HTF:OK]");
             return true;
         }
 
         // SMT + Displacement
-        if (hasSmtDivergence && hasDisplacement) {
+        if (hasSmtDivergence && (hasDisplacement || htfDisplacement)) {
             currentTier = TradeTier.TIER_1;
-            printTier1Signal(candle, bias, sweep, hasSmtDivergence, "SMT+Displacement");
+            printTier1Signal(candle, bias, sweep, hasSmtDivergence, "SMT+Disp [HTF:OK]");
             return true;
         }
 
         // Order Block + any confirmation
-        if (hasOb && (hasSmtDivergence || hasDisplacement)) {
+        if (hasOb && (hasSmtDivergence || hasDisplacement || htfDisplacement)) {
             currentTier = TradeTier.TIER_1;
-            String combo = "OB+" + (hasSmtDivergence ? "SMT" : "Displacement");
+            String combo = "OB+" + (hasSmtDivergence ? "SMT" : "Disp") + " [HTF:OK]";
             printTier1Signal(candle, bias, sweep, hasSmtDivergence, combo);
             return true;
         }
