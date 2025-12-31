@@ -143,7 +143,39 @@ public class LiveEngineRunner {
             @Override
             public void onPositionOpened(String symbol, OrderSide side, double entryPrice, int quantity) {
                 System.out.println("[LIVE] Position opened: " + symbol + " " + side + " x" + quantity + " @ " + entryPrice);
-                // Note: For live mode, we track via connector callbacks, so this is for logging only
+                // If exchange callbacks are delayed or unavailable (e.g., order search 4xx), create
+                // a protective bracket immediately using the strategy's recorded stop/target levels
+                // so the position is never left naked.
+                if (bracketManager != null && !bracketManager.hasBracket(symbol)) {
+                    ExecutionEngine.EnhancedOrderLevels levels = executionEngine.getOrderLevels(symbol);
+                    if (levels != null && levels.getCurrentStopPrice() > 0 && levels.getFinalTargetPrice() > 0) {
+                        double stop = levels.getCurrentStopPrice();
+                        double target = levels.getFinalTargetPrice();
+
+                        boolean isLong = side == OrderSide.BUY;
+                        boolean validLong = isLong && stop < entryPrice && target > entryPrice;
+                        boolean validShort = !isLong && stop > entryPrice && target < entryPrice;
+
+                        if (validLong || validShort) {
+                            String fallbackOrderId = symbol + "-bracket-" + System.currentTimeMillis();
+                            bracketManager.createBracket(
+                                symbol,
+                                fallbackOrderId,
+                                entryPrice,
+                                quantity,
+                                side,
+                                stop,
+                                target
+                            );
+                        } else {
+                            System.err.println("  ❌ Skipping fallback bracket for " + symbol +
+                                " due to invalid prices (stop=" + stop + ", target=" + target +
+                                ", entry=" + entryPrice + ")");
+                        }
+                    } else {
+                        System.err.println("  ❌ No levels available to build fallback bracket for " + symbol);
+                    }
+                }
             }
 
             @Override
@@ -534,6 +566,11 @@ public class LiveEngineRunner {
         double stopPrice = signal.getStopPrice();
         double targetPrice = signal.getTargetPrice();
 
+        if (stopPrice <= 0 || targetPrice <= 0) {
+            System.err.println("  ❌ Invalid bracket prices for " + symbol + " (stop=" + stopPrice + ", target=" + targetPrice + ")");
+            return;
+        }
+
         // Validate bracket order prices based on direction
         boolean isLong = signal.getSide() == OrderSide.BUY;
 
@@ -865,10 +902,14 @@ public class LiveEngineRunner {
         System.out.println("Cancelling pending orders...");
         cancelPendingOrders();
 
-        // Flatten positions if any remain
+        // Cancel any working brackets and clear tracked positions instead of
+        // submitting new market orders during shutdown.
         if (!accountState.getPositions().isEmpty()) {
-            System.out.println("⚠️  Positions still open - flattening...");
-            flattenAllPositions("Engine shutdown");
+            System.out.println("⚠️  Positions still open - cancelling protection and clearing state (no flatten orders)");
+            if (bracketManager != null) {
+                bracketManager.cancelAllBrackets("Engine shutdown");
+            }
+            accountState.clearAllPositions();
         }
 
         // Shutdown scheduler
