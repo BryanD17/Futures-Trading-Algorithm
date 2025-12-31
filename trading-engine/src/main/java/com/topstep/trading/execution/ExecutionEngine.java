@@ -50,6 +50,9 @@ public class ExecutionEngine {
     // Enhanced order management with partial profits and trailing stops
     private final Map<String, EnhancedOrderLevels> orderLevels;
 
+    // Track last prices for live PnL calculations
+    private final Map<String, Double> lastPrices;
+
     // Execution listener for external notifications
     private ExecutionListener executionListener;
 
@@ -59,6 +62,7 @@ public class ExecutionEngine {
         this.completedTrades = new ArrayList<>();
         this.tickValues = new HashMap<>();
         this.orderLevels = new HashMap<>();
+        this.lastPrices = new HashMap<>();
 
         // Set default tick values
         initializeTickValues();
@@ -152,6 +156,9 @@ public class ExecutionEngine {
      * Process a new candle - check for fills and update PnL.
      */
     public void onNewCandle(Candle candle) {
+        // CRITICAL: Track last price for live PnL display
+        lastPrices.put(candle.getSymbol(), candle.getClose());
+
         // Check for entry fills
         checkOrderFills(candle);
 
@@ -166,6 +173,14 @@ public class ExecutionEngine {
 
         // Update unrealized PnL
         updateUnrealizedPnl(candle);
+    }
+
+    /**
+     * Get the last known price for a symbol.
+     * Used for live PnL calculations in the dashboard.
+     */
+    public double getLastPrice(String symbol) {
+        return lastPrices.getOrDefault(symbol, 0.0);
     }
 
     /**
