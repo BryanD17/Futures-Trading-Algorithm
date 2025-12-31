@@ -143,7 +143,39 @@ public class LiveEngineRunner {
             @Override
             public void onPositionOpened(String symbol, OrderSide side, double entryPrice, int quantity) {
                 System.out.println("[LIVE] Position opened: " + symbol + " " + side + " x" + quantity + " @ " + entryPrice);
-                // Note: For live mode, we track via connector callbacks, so this is for logging only
+                // If exchange callbacks are delayed or unavailable (e.g., order search 4xx), create
+                // a protective bracket immediately using the strategy's recorded stop/target levels
+                // so the position is never left naked.
+                if (bracketManager != null && !bracketManager.hasBracket(symbol)) {
+                    ExecutionEngine.EnhancedOrderLevels levels = executionEngine.getOrderLevels(symbol);
+                    if (levels != null && levels.getCurrentStopPrice() > 0 && levels.getFinalTargetPrice() > 0) {
+                        double stop = levels.getCurrentStopPrice();
+                        double target = levels.getFinalTargetPrice();
+
+                        boolean isLong = side == OrderSide.BUY;
+                        boolean validLong = isLong && stop < entryPrice && target > entryPrice;
+                        boolean validShort = !isLong && stop > entryPrice && target < entryPrice;
+
+                        if (validLong || validShort) {
+                            String fallbackOrderId = symbol + "-bracket-" + System.currentTimeMillis();
+                            bracketManager.createBracket(
+                                symbol,
+                                fallbackOrderId,
+                                entryPrice,
+                                quantity,
+                                side,
+                                stop,
+                                target
+                            );
+                        } else {
+                            System.err.println("  ❌ Skipping fallback bracket for " + symbol +
+                                " due to invalid prices (stop=" + stop + ", target=" + target +
+                                ", entry=" + entryPrice + ")");
+                        }
+                    } else {
+                        System.err.println("  ❌ No levels available to build fallback bracket for " + symbol);
+                    }
+                }
             }
 
             @Override
@@ -467,11 +499,15 @@ public class LiveEngineRunner {
         // CRITICAL: Update order status FIRST to prevent ExecutionEngine from double-filling
         order.updateStatus(status);
 
-        if (status == OrderStatus.FILLED && fillPrice != null && fillQty != null) {
-            System.out.println("  Filled at $" + String.format("%.2f", fillPrice) + " x " + fillQty);
+        if (status == OrderStatus.FILLED && fillQty != null) {
+            double effectiveFill = (fillPrice != null && fillPrice > 0)
+                ? fillPrice
+                : (order.getLimitPrice() != null && order.getLimitPrice() > 0 ? order.getLimitPrice() : signal.getEntryPrice());
+
+            System.out.println("  Filled at $" + String.format("%.5f", effectiveFill) + " x " + fillQty);
 
             // CRITICAL: Record the fill on the order to mark it as not active
-            order.recordFill(fillQty, fillPrice);
+            order.recordFill(fillQty, effectiveFill);
 
             // Remove order from ExecutionEngine's active orders to prevent double-processing
             executionEngine.removeOrderById(order.getSymbol(), orderId);
@@ -485,7 +521,7 @@ public class LiveEngineRunner {
 
             // FIX: Apply signed quantity - Position expects positive for BUY, negative for SELL
             int signedFillQty = (order.getSide() == OrderSide.BUY) ? fillQty : -fillQty;
-            position.updateWithFill(signedFillQty, fillPrice);
+            position.updateWithFill(signedFillQty, effectiveFill);
             System.out.println("  Position updated: " + position);
 
             // Record position opened in TradingRiskManager (NOW that order is actually filled)
@@ -499,7 +535,7 @@ public class LiveEngineRunner {
             // CRITICAL: Submit stop loss and take profit orders to the exchange
             // This provides protection even if the bot crashes
             if (signal != null && connector instanceof TopstepConnector) {
-                submitProtectiveOrders(signal, fillQty, fillPrice, orderId);
+                submitProtectiveOrders(signal, fillQty, effectiveFill, orderId);
             }
         }
 
@@ -533,6 +569,13 @@ public class LiveEngineRunner {
         String symbol = signal.getSymbol();
         double stopPrice = signal.getStopPrice();
         double targetPrice = signal.getTargetPrice();
+
+        // Fallback: if strategy prices are missing (should not happen), pull from execution engine
+        ExecutionEngine.EnhancedOrderLevels levels = executionEngine.getOrderLevels(symbol);
+        if ((stopPrice <= 0 || targetPrice <= 0) && levels != null) {
+            stopPrice = levels.getCurrentStopPrice();
+            targetPrice = levels.getFinalTargetPrice();
+        }
 
         if (stopPrice <= 0 || targetPrice <= 0) {
             System.err.println("  ❌ Invalid bracket prices for " + symbol + " (stop=" + stopPrice + ", target=" + targetPrice + ")");

@@ -203,6 +203,7 @@ public class TopstepConnector implements TradingConnector {
             Request request = new Request.Builder()
                 .url(searchUrl)
                 .header("Authorization", "Bearer " + authToken)
+                .header("Content-Type", "application/json")
                 .post(RequestBody.create(requestBody, MediaType.parse("application/json")))
                 .build();
 
