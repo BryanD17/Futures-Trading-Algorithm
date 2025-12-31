@@ -29,6 +29,7 @@ public class BarAggregationManager {
         M3(3, "3m"),
         M5(5, "5m"),
         M15(15, "15m"),
+        M30(30, "30m"),
         H1(60, "1h");
 
         private final int minutes;
@@ -84,7 +85,7 @@ public class BarAggregationManager {
         completedCandles.put(Timeframe.M1, candle);
 
         // Aggregate into higher timeframes
-        for (Timeframe tf : Arrays.asList(Timeframe.M3, Timeframe.M5, Timeframe.M15, Timeframe.H1)) {
+        for (Timeframe tf : Arrays.asList(Timeframe.M3, Timeframe.M5, Timeframe.M15, Timeframe.M30, Timeframe.H1)) {
             AggregationBuffer buffer = buffers.get(tf);
             Candle completed = buffer.addCandle(candle);
 
