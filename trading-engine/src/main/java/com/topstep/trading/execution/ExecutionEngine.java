@@ -56,6 +56,9 @@ public class ExecutionEngine {
     // Execution listener for external notifications
     private ExecutionListener executionListener;
 
+    // Controls whether this engine simulates fills (true for backtest/sim, false for live)
+    private boolean simulationEnabled = true;
+
     public ExecutionEngine(AccountState accountState) {
         this.accountState = accountState;
         this.activeOrders = new HashMap<>();
@@ -101,6 +104,13 @@ public class ExecutionEngine {
      */
     public void setExecutionListener(ExecutionListener listener) {
         this.executionListener = listener;
+    }
+
+    /**
+     * Enable/disable simulation behaviors (limit fills, stop/target checks, trailing) for live mode.
+     */
+    public void setSimulationEnabled(boolean simulationEnabled) {
+        this.simulationEnabled = simulationEnabled;
     }
 
     /**
@@ -159,17 +169,19 @@ public class ExecutionEngine {
         // CRITICAL: Track last price for live PnL display
         lastPrices.put(candle.getSymbol(), candle.getClose());
 
-        // Check for entry fills
-        checkOrderFills(candle);
+        if (simulationEnabled) {
+            // Check for entry fills
+            checkOrderFills(candle);
 
-        // Check for partial profit targets
-        checkPartialProfitTargets(candle);
+            // Check for partial profit targets
+            checkPartialProfitTargets(candle);
 
-        // Check for trailing stop updates
-        updateTrailingStops(candle);
+            // Check for trailing stop updates
+            updateTrailingStops(candle);
 
-        // Check for stop/target hits on existing positions
-        checkStopTargetHits(candle);
+            // Check for stop/target hits on existing positions
+            checkStopTargetHits(candle);
+        }
 
         // Update unrealized PnL
         updateUnrealizedPnl(candle);
