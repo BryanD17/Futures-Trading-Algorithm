@@ -49,17 +49,20 @@ public class PositionsController {
                 if (execEngine != null) {
                     double tickValue = execEngine.getTickValue(position.getSymbol());
 
+                    // CRITICAL: Get live market price for real-time PnL display
+                    double livePrice = execEngine.getLastPrice(position.getSymbol());
+                    if (livePrice > 0) {
+                        currentPrice = livePrice;
+                    }
+
                     // Try to get order levels for stop/target info
                     ExecutionEngine.EnhancedOrderLevels levels = execEngine.getOrderLevels(position.getSymbol());
                     if (levels != null) {
                         stopPrice = levels.getCurrentStopPrice();
                         targetPrice = levels.getFinalTargetPrice();
-                        // Use entry price from levels if available (more accurate)
-                        if (levels.getEntryPrice() > 0) {
-                            currentPrice = levels.getEntryPrice();
-                        }
                     }
 
+                    // Calculate unrealized PnL with live price
                     unrealizedPnl = position.getUnrealizedPnL(currentPrice, tickValue);
                 }
 

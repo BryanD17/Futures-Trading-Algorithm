@@ -482,7 +482,11 @@ public class LiveEngineRunner {
                 position = new Position(order.getSymbol(), order.getSide());
                 accountState.addPosition(position);
             }
-            position.addFill(fillPrice, fillQty);
+
+            // FIX: Apply signed quantity - Position expects positive for BUY, negative for SELL
+            int signedFillQty = (order.getSide() == OrderSide.BUY) ? fillQty : -fillQty;
+            position.updateWithFill(signedFillQty, fillPrice);
+            System.out.println("  Position updated: " + position);
 
             // Record position opened in TradingRiskManager (NOW that order is actually filled)
             if (MULTI_INSTRUMENT_MODE && multiEngine != null && signal != null) {
@@ -529,6 +533,34 @@ public class LiveEngineRunner {
         String symbol = signal.getSymbol();
         double stopPrice = signal.getStopPrice();
         double targetPrice = signal.getTargetPrice();
+
+        // Validate bracket order prices based on direction
+        boolean isLong = signal.getSide() == OrderSide.BUY;
+
+        if (isLong) {
+            // LONG: stopPrice < fillPrice < targetPrice
+            if (stopPrice >= fillPrice) {
+                System.err.println("  ❌ Invalid LONG bracket: stop (" + stopPrice + ") >= fill (" + fillPrice + ")");
+                return;
+            }
+            if (targetPrice <= fillPrice) {
+                System.err.println("  ❌ Invalid LONG bracket: target (" + targetPrice + ") <= fill (" + fillPrice + ")");
+                return;
+            }
+        } else {
+            // SHORT: targetPrice < fillPrice < stopPrice
+            if (stopPrice <= fillPrice) {
+                System.err.println("  ❌ Invalid SHORT bracket: stop (" + stopPrice + ") <= fill (" + fillPrice + ")");
+                return;
+            }
+            if (targetPrice >= fillPrice) {
+                System.err.println("  ❌ Invalid SHORT bracket: target (" + targetPrice + ") >= fill (" + fillPrice + ")");
+                return;
+            }
+        }
+
+        System.out.println("  Bracket validated: " + (isLong ? "LONG" : "SHORT") +
+            " | Stop: " + stopPrice + " | Entry: " + fillPrice + " | Target: " + targetPrice);
 
         // Create the OCO bracket - BracketOrderManager handles all the details
         bracketManager.createBracket(
