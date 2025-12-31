@@ -535,65 +535,111 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         hasPower3Confirmation = power3Detector.isInDistribution() &&
                 power3Detector.confirmsDirection(isBullish);
 
-        // 8. Look for entry zones by tier (adjusted by instrument reliability)
+        // 8. Look for entry zones by tier (STRICT requirements for higher win rate)
 
-        // TIER 3: Breaker Block (if reliable for this instrument) OR full confluence
+        // Find all potential entry structures
         currentBreaker = breakerBlockDetector.findNearestBreaker(candle.getClose(), isBullish, maxPriceDistance);
         FairValueGap ifvg = fvgDetector.findNearestIfvg(candle.getClose(), isBullish);
         currentOrderBlock = orderBlockDetector.findNearestValidOb(candle.getClose(), isBullish, maxPriceDistance);
+        FairValueGap unfilledFvg = fvgDetector.findNearestUnfilledFvg(candle.getClose(), isBullish, maxPriceDistance);
+        FairValueGap anyFvg = fvgDetector.findNearestFvg(candle.getClose(), isBullish, maxPriceDistance);
+        currentMitigationBlock = mitigationBlockDetector.findBestMitigationZone(candle.getClose(), isBullish, maxPriceDistance);
 
-        // Breaker reliability threshold based on instrument profile
-        boolean breakerIsReliable = profile.getBreakerReliability() >= 0.80;
-
-        if (currentBreaker != null && breakerIsReliable) {
-            currentTier = TradeTier.TIER_3;
-            printTier3Signal(candle, bias, sweep, "Breaker Block", hasSmtDivergence);
+        // ═══════════════════════════════════════════════════════════════════════
+        // TIER 4 (Elite): Must have ALL of these:
+        //   ✓ Breaker Block
+        //   ✓ Power of 3 Confirmation
+        //   ✓ SMT Divergence
+        //   ✓ Displacement
+        // ═══════════════════════════════════════════════════════════════════════
+        if (currentBreaker != null && hasPower3Confirmation && hasSmtDivergence && hasDisplacement) {
+            currentTier = TradeTier.TIER_4;
+            printTier4Signal(candle, bias, sweep, "Breaker+Power3+SMT+Displacement");
             return true;
         }
 
-        // Full confluence + Power3 (especially strong for Gold)
-        boolean power3IsReliable = profile.getPower3Reliability() >= 0.75;
-        if (ifvg != null && currentOrderBlock != null && hasDisplacement &&
-            hasPower3Confirmation && power3IsReliable) {
+        // ═══════════════════════════════════════════════════════════════════════
+        // TIER 3 (Premium): One of these combinations:
+        //   • Breaker + (SMT OR Displacement OR Power3)
+        //   • IFVG + OB + Displacement + Power3
+        // ═══════════════════════════════════════════════════════════════════════
+        if (currentBreaker != null && (hasSmtDivergence || hasDisplacement || hasPower3Confirmation)) {
+            currentTier = TradeTier.TIER_3;
+            String combo = "Breaker+" + (hasSmtDivergence ? "SMT" : (hasDisplacement ? "Displacement" : "Power3"));
+            printTier3Signal(candle, bias, sweep, combo, hasSmtDivergence);
+            return true;
+        }
+
+        if (ifvg != null && currentOrderBlock != null && hasDisplacement && hasPower3Confirmation) {
             currentTier = TradeTier.TIER_3;
             currentFvg = ifvg;
             printTier3Signal(candle, bias, sweep, "IFVG+OB+Displacement+Power3", hasSmtDivergence);
             return true;
         }
 
-        // TIER 2: OB + Displacement OR Unfilled FVG + SMT
-        FairValueGap unfilledFvg = fvgDetector.findNearestUnfilledFvg(candle.getClose(), isBullish, maxPriceDistance);
-
-        // OB reliability based on profile
-        boolean obIsReliable = profile.getObRespectRate() >= 0.70;
-        if (currentOrderBlock != null && hasDisplacement && obIsReliable) {
+        // ═══════════════════════════════════════════════════════════════════════
+        // TIER 2 (Standard): One of these combinations:
+        //   • Order Block + Displacement + SMT (all 3 required)
+        //   • Unfilled FVG + SMT + Displacement (all 3 required)
+        //   • Fresh Mitigation Zone + SMT
+        // ═══════════════════════════════════════════════════════════════════════
+        if (currentOrderBlock != null && hasDisplacement && hasSmtDivergence) {
             currentTier = TradeTier.TIER_2;
-            printTier2Signal(candle, bias, sweep, "OB+Displacement", hasSmtDivergence);
+            printTier2Signal(candle, bias, sweep, "OB+Displacement+SMT", hasSmtDivergence);
             return true;
         }
 
-        if (unfilledFvg != null && hasSmtDivergence) {
+        if (unfilledFvg != null && hasSmtDivergence && hasDisplacement) {
             currentTier = TradeTier.TIER_2;
             currentFvg = unfilledFvg;
-            printTier2Signal(candle, bias, sweep, "FVG+SMT", hasSmtDivergence);
+            printTier2Signal(candle, bias, sweep, "FVG+SMT+Displacement", hasSmtDivergence);
             return true;
         }
 
-        // Mitigation zone for Tier 2
-        currentMitigationBlock = mitigationBlockDetector.findBestMitigationZone(candle.getClose(), isBullish, maxPriceDistance);
-        if (currentMitigationBlock != null && currentMitigationBlock.isFresh()) {
+        if (currentMitigationBlock != null && currentMitigationBlock.isFresh() && hasSmtDivergence) {
             currentTier = TradeTier.TIER_2;
-            printTier2Signal(candle, bias, sweep, "Fresh Mitigation", hasSmtDivergence);
+            printTier2Signal(candle, bias, sweep, "Mitigation+SMT", hasSmtDivergence);
             return true;
         }
 
-        // TIER 1: Any FVG OR SMT OR Displacement at OTE
-        FairValueGap anyFvg = fvgDetector.findNearestFvg(candle.getClose(), isBullish, maxPriceDistance);
+        // ═══════════════════════════════════════════════════════════════════════
+        // TIER 1 (Confirmed): Any TWO of these:
+        //   • FVG + SMT
+        //   • FVG + Displacement
+        //   • SMT + Displacement
+        //   • Order Block + any confirmation (SMT or Displacement)
+        // ═══════════════════════════════════════════════════════════════════════
+        boolean hasFvg = anyFvg != null;
+        boolean hasOb = currentOrderBlock != null;
 
-        if (anyFvg != null || hasSmtDivergence || hasDisplacement) {
+        // FVG + SMT
+        if (hasFvg && hasSmtDivergence) {
             currentTier = TradeTier.TIER_1;
             currentFvg = anyFvg;
-            printTier1Signal(candle, bias, sweep, hasSmtDivergence);
+            printTier1Signal(candle, bias, sweep, hasSmtDivergence, "FVG+SMT");
+            return true;
+        }
+
+        // FVG + Displacement
+        if (hasFvg && hasDisplacement) {
+            currentTier = TradeTier.TIER_1;
+            currentFvg = anyFvg;
+            printTier1Signal(candle, bias, sweep, hasSmtDivergence, "FVG+Displacement");
+            return true;
+        }
+
+        // SMT + Displacement
+        if (hasSmtDivergence && hasDisplacement) {
+            currentTier = TradeTier.TIER_1;
+            printTier1Signal(candle, bias, sweep, hasSmtDivergence, "SMT+Displacement");
+            return true;
+        }
+
+        // Order Block + any confirmation
+        if (hasOb && (hasSmtDivergence || hasDisplacement)) {
+            currentTier = TradeTier.TIER_1;
+            String combo = "OB+" + (hasSmtDivergence ? "SMT" : "Displacement");
+            printTier1Signal(candle, bias, sweep, hasSmtDivergence, combo);
             return true;
         }
 
@@ -626,6 +672,13 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         return false;
     }
 
+    private void printTier4Signal(Candle candle, MarketBias bias, LiquiditySweep sweep,
+                                   String entryType) {
+        System.out.println("\n[" + profile.getSymbol() + "] ★★★★ TIER 4 CONFLUENCE - ELITE SETUP ★★★★");
+        System.out.println("[" + profile.getSymbol() + "] Entry Type: " + entryType);
+        printCommonInfo(candle, bias, sweep, true);  // Tier 4 always has SMT
+    }
+
     private void printTier3Signal(Candle candle, MarketBias bias, LiquiditySweep sweep,
                                    String entryType, boolean hasSmt) {
         System.out.println("\n[" + profile.getSymbol() + "] ★★★ TIER 3 CONFLUENCE - PREMIUM SETUP ★★★");
@@ -640,8 +693,9 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         printCommonInfo(candle, bias, sweep, hasSmt);
     }
 
-    private void printTier1Signal(Candle candle, MarketBias bias, LiquiditySweep sweep, boolean hasSmt) {
-        System.out.println("\n[" + profile.getSymbol() + "] ★ TIER 1 CONFLUENCE - SCALP SETUP ★");
+    private void printTier1Signal(Candle candle, MarketBias bias, LiquiditySweep sweep, boolean hasSmt, String entryType) {
+        System.out.println("\n[" + profile.getSymbol() + "] ★ TIER 1 CONFLUENCE - CONFIRMED SETUP ★");
+        System.out.println("[" + profile.getSymbol() + "] Entry Type: " + entryType);
         printCommonInfo(candle, bias, sweep, hasSmt);
     }
 
