@@ -2,7 +2,9 @@ package com.topstep.trading.strategy;
 
 import com.topstep.trading.domain.Candle;
 import com.topstep.trading.domain.OrderSide;
+import com.topstep.trading.event.EventBus;
 import com.topstep.trading.event.StrategySignalEvent;
+import com.topstep.trading.event.StrategySignalEvent.SignalType;
 
 import java.time.Instant;
 import java.util.List;
@@ -36,6 +38,7 @@ import java.util.List;
 public class SilverBulletStrategy implements TradingStrategy {
 
     private final String symbol;
+    private final EventBus eventBus;
     private final SilverBulletClock sbClock;
     private final BarAggregationManager barManager;
     private final MarketStructureShiftDetector mssDetector;
@@ -67,10 +70,15 @@ public class SilverBulletStrategy implements TradingStrategy {
     private double targetPrice;
 
     public SilverBulletStrategy(String symbol, double tickSize, double tickValue) {
+        this(symbol, tickSize, tickValue, null);
+    }
+
+    public SilverBulletStrategy(String symbol, double tickSize, double tickValue, EventBus eventBus) {
         this.symbol = symbol;
         this.tickSize = tickSize;
         this.tickValue = tickValue;
         this.maxCandleLookback = 100;
+        this.eventBus = eventBus;
 
         // Initialize components
         this.sbClock = new SilverBulletClock();
@@ -78,9 +86,9 @@ public class SilverBulletStrategy implements TradingStrategy {
         this.mssDetector = new MarketStructureShiftDetector(50, 2);  // 50 lookback, 2 candle swing confirmation
         this.liquidityDetector = new LiquidityDetector(30);
         this.fvgDetector = new FvgDetector(20);
-        this.obDetector = new OrderBlockDetector(30);
-        this.breakerDetector = new BreakerBlockDetector(30);
-        this.displacementDetector = new DisplacementDetector(14, 1.5);  // 14 period ATR, 1.5x threshold
+        this.obDetector = new OrderBlockDetector(30, 10);
+        this.breakerDetector = new BreakerBlockDetector(obDetector, 10);
+        this.displacementDetector = new DisplacementDetector(14);  // 14 period ATR, 1.5x threshold
         this.liquidityTargets = new SilverBulletClock.LiquidityTargets();
 
         this.isActive = false;
@@ -90,7 +98,7 @@ public class SilverBulletStrategy implements TradingStrategy {
     }
 
     @Override
-    public void onNewCandle(Candle candle, StrategyContext context) {
+    public void onCandle(Candle candle, StrategyContext context) {
         // Process candle through bar aggregation
         barManager.processCandle(candle);
 
@@ -122,6 +130,16 @@ public class SilverBulletStrategy implements TradingStrategy {
 
         // Check for liquidity raid
         checkForLiquidityRaid(candle);
+
+        // Evaluate entry conditions and publish a signal if configured
+        StrategySignalEvent signal = evaluateEntry(candle, context);
+        if (signal != null) {
+            if (eventBus != null) {
+                eventBus.publish(signal);
+            } else {
+                System.out.println("[SB] Signal generated (no EventBus attached): " + signal);
+            }
+        }
     }
 
     /**
@@ -156,8 +174,7 @@ public class SilverBulletStrategy implements TradingStrategy {
         }
     }
 
-    @Override
-    public StrategySignalEvent evaluateEntry(Candle candle, StrategyContext context) {
+    private StrategySignalEvent evaluateEntry(Candle candle, StrategyContext context) {
         Instant now = candle.getTimestamp();
 
         // FILTER 1: Must be in a Silver Bullet window
@@ -230,7 +247,11 @@ public class SilverBulletStrategy implements TradingStrategy {
         OrderSide side = expectedMssDirection ? OrderSide.BUY : OrderSide.SELL;
         double entry = calculateEntryPrice(fvg, expectedMssDirection);
         double stop = calculateStopPrice(mss, expectedMssDirection);
-        double target = calculateTargetPrice(expectedMssDirection, entry);
+        double target = calculateTargetPrice(expectedMssDirection, entry, stop);
+
+        this.entryPrice = entry;
+        this.stopPrice = stop;
+        this.targetPrice = target;
 
         // Validate stop distance
         double stopDistance = Math.abs(entry - stop);
@@ -262,15 +283,17 @@ public class SilverBulletStrategy implements TradingStrategy {
         // Reset state after generating signal
         resetRaidState();
 
+        SignalType signalType = side == OrderSide.BUY ? SignalType.LONG_ENTRY : SignalType.SHORT_ENTRY;
         return new StrategySignalEvent(
+                signalType,
                 symbol,
                 side,
-                tier,
                 entry,
                 stop,
                 target,
                 "Silver Bullet " + tier + " - " + sbClock.getCurrentWindow(now).getName(),
-                now
+                tier,
+                1
         );
     }
 
@@ -328,20 +351,20 @@ public class SilverBulletStrategy implements TradingStrategy {
     /**
      * Calculate target price (opposing liquidity).
      */
-    private double calculateTargetPrice(boolean bullish, double entry) {
+    private double calculateTargetPrice(boolean bullish, double entry, double stop) {
         if (bullish) {
             // Target buy-side liquidity (session high, previous highs)
             double target = liquidityTargets.currentSessionHigh;
             if (target <= entry) {
                 // Use 3R minimum if no clear target
-                target = entry + (entry - stopPrice) * 3;
+                target = entry + (entry - stop) * 3;
             }
             return target;
         } else {
             // Target sell-side liquidity (session low, previous lows)
             double target = liquidityTargets.currentSessionLow;
             if (target >= entry) {
-                target = entry - (stopPrice - entry) * 3;
+                target = entry - (stop - entry) * 3;
             }
             return target;
         }
@@ -354,13 +377,13 @@ public class SilverBulletStrategy implements TradingStrategy {
         int confluenceScore = 0;
 
         // Check for Order Block alignment (use 5m/15m from bar manager)
-        OrderBlock ob = obDetector.findNearestOrderBlock(fvg.getMidpoint(), fvg.isBullish(), 10);
+        OrderBlock ob = obDetector.findNearestValidOb(fvg.getMidpoint(), fvg.isBullish(), 10);
         if (ob != null) {
             confluenceScore += 2;
         }
 
         // Check for Breaker Block alignment
-        BreakerBlock breaker = breakerDetector.findNearestBreakerBlock(fvg.getMidpoint(), fvg.isBullish(), 10);
+        BreakerBlock breaker = breakerDetector.findNearestBreaker(fvg.getMidpoint(), fvg.isBullish(), 10);
         if (breaker != null) {
             confluenceScore += 3;  // Breakers are higher quality
         }
@@ -404,18 +427,15 @@ public class SilverBulletStrategy implements TradingStrategy {
         entryFvg = null;
     }
 
-    @Override
     public boolean shouldExit(Candle candle, StrategyContext context) {
         // Exit logic is handled by bracket orders (SL/TP on exchange)
         return false;
     }
 
-    @Override
     public String getSymbol() {
         return symbol;
     }
 
-    @Override
     public void reset() {
         barManager.reset();
         mssDetector.reset();
@@ -433,6 +453,11 @@ public class SilverBulletStrategy implements TradingStrategy {
     @Override
     public void shutdown() {
         reset();
+    }
+
+    @Override
+    public String getName() {
+        return "ICT Silver Bullet Strategy";
     }
 
     /**
