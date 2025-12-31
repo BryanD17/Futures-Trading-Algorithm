@@ -275,6 +275,15 @@ public class BracketOrderManager {
     }
 
     /**
+     * Cancel all active brackets (used when shutting down without flattening).
+     */
+    public void cancelAllBrackets(String reason) {
+        for (String symbol : activeBrackets.keySet()) {
+            cancelBracket(symbol, reason);
+        }
+    }
+
+    /**
      * Get the active bracket for a symbol.
      */
     public BracketOrder getBracket(String symbol) {

@@ -197,12 +197,15 @@ public class TopstepConnector implements TradingConnector {
             String searchUrl = apiUrl + "/Order/search";
             Map<String, Object> searchRequest = new HashMap<>();
             searchRequest.put("accountId", Integer.parseInt(numericAccountId));
+            searchRequest.put("startTimestamp", Instant.now().minusSeconds(24 * 60 * 60).toString());
+            searchRequest.put("endTimestamp", Instant.now().toString());
 
             String requestBody = objectMapper.writeValueAsString(searchRequest);
 
             Request request = new Request.Builder()
                 .url(searchUrl)
                 .header("Authorization", "Bearer " + authToken)
+                .header("Content-Type", "application/json")
                 .post(RequestBody.create(requestBody, MediaType.parse("application/json")))
                 .build();
 
@@ -236,13 +239,19 @@ public class TopstepConnector implements TradingConnector {
                     int status = orderNode.has("status") ? orderNode.get("status").asInt() : 0;
 
                     if (status == 2) { // Filled
-                        double fillPrice = orderNode.has("avgFillPrice")
-                            ? orderNode.get("avgFillPrice").asDouble()
-                            : (orderNode.has("fillPrice") ? orderNode.get("fillPrice").asDouble() : pending.limitPrice);
+                        double fillPrice = orderNode.has("filledPrice")
+                            ? orderNode.get("filledPrice").asDouble()
+                            : (orderNode.has("fillPrice")
+                                ? orderNode.get("fillPrice").asDouble()
+                                : (orderNode.has("avgFillPrice")
+                                    ? orderNode.get("avgFillPrice").asDouble()
+                                    : pending.limitPrice));
 
-                        int fillQty = orderNode.has("filledSize")
-                            ? orderNode.get("filledSize").asInt()
-                            : pending.quantity;
+                        int fillQty = orderNode.has("fillVolume")
+                            ? orderNode.get("fillVolume").asInt()
+                            : (orderNode.has("filledSize")
+                                ? orderNode.get("filledSize").asInt()
+                                : pending.quantity);
 
                         logger.info("Order {} FILLED: {} {} @ {}",
                             orderId, pending.symbol, fillQty, fillPrice);

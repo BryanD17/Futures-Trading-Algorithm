@@ -100,6 +100,7 @@ public class LiveEngineRunner {
         // Initialize trading components
         this.connector = createConnector();
         this.executionEngine = new ExecutionEngine(accountState);
+        this.executionEngine.setSimulationEnabled(false); // live mode relies on broker fills only
         this.riskEngine = new PropFirmRiskEngine();
         this.eventBus = new EventBus();
 
@@ -143,7 +144,39 @@ public class LiveEngineRunner {
             @Override
             public void onPositionOpened(String symbol, OrderSide side, double entryPrice, int quantity) {
                 System.out.println("[LIVE] Position opened: " + symbol + " " + side + " x" + quantity + " @ " + entryPrice);
-                // Note: For live mode, we track via connector callbacks, so this is for logging only
+                // If exchange callbacks are delayed or unavailable (e.g., order search 4xx), create
+                // a protective bracket immediately using the strategy's recorded stop/target levels
+                // so the position is never left naked.
+                if (bracketManager != null && !bracketManager.hasBracket(symbol)) {
+                    ExecutionEngine.EnhancedOrderLevels levels = executionEngine.getOrderLevels(symbol);
+                    if (levels != null && levels.getCurrentStopPrice() > 0 && levels.getFinalTargetPrice() > 0) {
+                        double stop = levels.getCurrentStopPrice();
+                        double target = levels.getFinalTargetPrice();
+
+                        boolean isLong = side == OrderSide.BUY;
+                        boolean validLong = isLong && stop < entryPrice && target > entryPrice;
+                        boolean validShort = !isLong && stop > entryPrice && target < entryPrice;
+
+                        if (validLong || validShort) {
+                            String fallbackOrderId = symbol + "-bracket-" + System.currentTimeMillis();
+                            bracketManager.createBracket(
+                                symbol,
+                                fallbackOrderId,
+                                entryPrice,
+                                quantity,
+                                side,
+                                stop,
+                                target
+                            );
+                        } else {
+                            System.err.println("  ❌ Skipping fallback bracket for " + symbol +
+                                " due to invalid prices (stop=" + stop + ", target=" + target +
+                                ", entry=" + entryPrice + ")");
+                        }
+                    } else {
+                        System.err.println("  ❌ No levels available to build fallback bracket for " + symbol);
+                    }
+                }
             }
 
             @Override
@@ -467,11 +500,15 @@ public class LiveEngineRunner {
         // CRITICAL: Update order status FIRST to prevent ExecutionEngine from double-filling
         order.updateStatus(status);
 
-        if (status == OrderStatus.FILLED && fillPrice != null && fillQty != null) {
-            System.out.println("  Filled at $" + String.format("%.2f", fillPrice) + " x " + fillQty);
+        if (status == OrderStatus.FILLED && fillQty != null) {
+            double effectiveFill = (fillPrice != null && fillPrice > 0)
+                ? fillPrice
+                : (order.getLimitPrice() != null && order.getLimitPrice() > 0 ? order.getLimitPrice() : signal.getEntryPrice());
+
+            System.out.println("  Filled at $" + String.format("%.5f", effectiveFill) + " x " + fillQty);
 
             // CRITICAL: Record the fill on the order to mark it as not active
-            order.recordFill(fillQty, fillPrice);
+            order.recordFill(fillQty, effectiveFill);
 
             // Remove order from ExecutionEngine's active orders to prevent double-processing
             executionEngine.removeOrderById(order.getSymbol(), orderId);
@@ -485,7 +522,7 @@ public class LiveEngineRunner {
 
             // FIX: Apply signed quantity - Position expects positive for BUY, negative for SELL
             int signedFillQty = (order.getSide() == OrderSide.BUY) ? fillQty : -fillQty;
-            position.updateWithFill(signedFillQty, fillPrice);
+            position.updateWithFill(signedFillQty, effectiveFill);
             System.out.println("  Position updated: " + position);
 
             // Record position opened in TradingRiskManager (NOW that order is actually filled)
@@ -499,7 +536,7 @@ public class LiveEngineRunner {
             // CRITICAL: Submit stop loss and take profit orders to the exchange
             // This provides protection even if the bot crashes
             if (signal != null && connector instanceof TopstepConnector) {
-                submitProtectiveOrders(signal, fillQty, fillPrice, orderId);
+                submitProtectiveOrders(signal, fillQty, effectiveFill, orderId);
             }
         }
 
@@ -533,6 +570,31 @@ public class LiveEngineRunner {
         String symbol = signal.getSymbol();
         double stopPrice = signal.getStopPrice();
         double targetPrice = signal.getTargetPrice();
+
+        // Fallback: if strategy prices are missing (should not happen), pull from execution engine
+        ExecutionEngine.EnhancedOrderLevels levels = executionEngine.getOrderLevels(symbol);
+        if ((stopPrice <= 0 || targetPrice <= 0) && levels != null) {
+            stopPrice = levels.getCurrentStopPrice();
+            targetPrice = levels.getFinalTargetPrice();
+        }
+
+        if (stopPrice <= 0 || targetPrice <= 0) {
+            System.err.println("  ❌ Invalid bracket prices for " + symbol + " (stop=" + stopPrice + ", target=" + targetPrice + ")");
+            return;
+        }
+
+        double tickSize = getTickSize(symbol);
+
+        double roundedStop = roundToTick(stopPrice, tickSize);
+        double roundedTarget = roundToTick(targetPrice, tickSize);
+
+        if (Math.abs(stopPrice - roundedStop) > 1e-9 || Math.abs(targetPrice - roundedTarget) > 1e-9) {
+            System.out.println("  [TICK ALIGN] " + symbol + " stop " + stopPrice + " -> " + roundedStop +
+                ", target " + targetPrice + " -> " + roundedTarget + " (tick=" + tickSize + ")");
+        }
+
+        stopPrice = roundedStop;
+        targetPrice = roundedTarget;
 
         // Validate bracket order prices based on direction
         boolean isLong = signal.getSide() == OrderSide.BUY;
@@ -597,6 +659,61 @@ public class LiveEngineRunner {
             case "SI": return 25.00;
             default: return 12.50;
         }
+    }
+
+    /**
+     * Get the tick size (minimum price increment) for a symbol.
+     */
+    private double getTickSize(String symbol) {
+        switch (symbol.toUpperCase()) {
+            case "ES":
+            case "MES":
+                return 0.25;
+            case "NQ":
+            case "MNQ":
+                return 0.25;
+            case "6E":
+                return 0.00005;
+            case "6J":
+                return 0.0000005;
+            case "6B":
+                return 0.0001;
+            case "CL":
+                return 0.01;
+            case "GC":
+                return 0.10;
+            case "NG":
+                return 0.001;
+            case "SI":
+                return 0.005;
+            default:
+                return 0.25;
+        }
+    }
+
+    /**
+     * Round a price to the nearest valid tick increment to satisfy exchange requirements.
+     */
+    private double roundToTick(double price, double tickSize) {
+        double ticks = Math.round(price / tickSize);
+        double rounded = ticks * tickSize;
+
+        int decimals = getDecimalPlaces(tickSize);
+        double multiplier = Math.pow(10, decimals);
+        return Math.round(rounded * multiplier) / multiplier;
+    }
+
+    /**
+     * Determine decimal places for rounding based on tick size (e.g., 0.00005 -> 5 decimals).
+     */
+    private int getDecimalPlaces(double tickSize) {
+        String tickStr = String.valueOf(tickSize);
+        int index = tickStr.indexOf('.') >= 0 ? tickStr.length() - tickStr.indexOf('.') - 1 : 0;
+        while (index > 0 && tickStr.endsWith("0")) {
+            tickStr = tickStr.substring(0, tickStr.length() - 1);
+            index--;
+        }
+        return Math.max(index, 0);
     }
 
     /**
@@ -865,10 +982,14 @@ public class LiveEngineRunner {
         System.out.println("Cancelling pending orders...");
         cancelPendingOrders();
 
-        // Flatten positions if any remain
+        // Cancel any working brackets and clear tracked positions instead of
+        // submitting new market orders during shutdown.
         if (!accountState.getPositions().isEmpty()) {
-            System.out.println("⚠️  Positions still open - flattening...");
-            flattenAllPositions("Engine shutdown");
+            System.out.println("⚠️  Positions still open - cancelling protection and clearing state (no flatten orders)");
+            if (bracketManager != null) {
+                bracketManager.cancelAllBrackets("Engine shutdown");
+            }
+            accountState.clearAllPositions();
         }
 
         // Shutdown scheduler
