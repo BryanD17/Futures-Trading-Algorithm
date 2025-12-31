@@ -79,6 +79,15 @@ public class AccountState {
         return positions.get(symbol);
     }
 
+    /**
+     * Clear all tracked positions (used during controlled shutdowns when we are not
+     * actively flattening on the exchange).
+     */
+    public void clearAllPositions() {
+        positions.clear();
+        this.lastUpdated = Instant.now();
+    }
+
     public boolean hasPosition(String symbol) {
         Position pos = positions.get(symbol);
         return pos != null && !pos.isFlat();
