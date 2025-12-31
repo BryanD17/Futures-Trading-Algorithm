@@ -534,6 +534,11 @@ public class LiveEngineRunner {
         double stopPrice = signal.getStopPrice();
         double targetPrice = signal.getTargetPrice();
 
+        if (stopPrice <= 0 || targetPrice <= 0) {
+            System.err.println("  ❌ Invalid bracket prices for " + symbol + " (stop=" + stopPrice + ", target=" + targetPrice + ")");
+            return;
+        }
+
         // Validate bracket order prices based on direction
         boolean isLong = signal.getSide() == OrderSide.BUY;
 
@@ -865,10 +870,14 @@ public class LiveEngineRunner {
         System.out.println("Cancelling pending orders...");
         cancelPendingOrders();
 
-        // Flatten positions if any remain
+        // Cancel any working brackets and clear tracked positions instead of
+        // submitting new market orders during shutdown.
         if (!accountState.getPositions().isEmpty()) {
-            System.out.println("⚠️  Positions still open - flattening...");
-            flattenAllPositions("Engine shutdown");
+            System.out.println("⚠️  Positions still open - cancelling protection and clearing state (no flatten orders)");
+            if (bracketManager != null) {
+                bracketManager.cancelAllBrackets("Engine shutdown");
+            }
+            accountState.clearAllPositions();
         }
 
         // Shutdown scheduler
