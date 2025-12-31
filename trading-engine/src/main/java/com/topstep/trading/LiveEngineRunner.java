@@ -583,6 +583,19 @@ public class LiveEngineRunner {
             return;
         }
 
+        double tickSize = getTickSize(symbol);
+
+        double roundedStop = roundToTick(stopPrice, tickSize);
+        double roundedTarget = roundToTick(targetPrice, tickSize);
+
+        if (Math.abs(stopPrice - roundedStop) > 1e-9 || Math.abs(targetPrice - roundedTarget) > 1e-9) {
+            System.out.println("  [TICK ALIGN] " + symbol + " stop " + stopPrice + " -> " + roundedStop +
+                ", target " + targetPrice + " -> " + roundedTarget + " (tick=" + tickSize + ")");
+        }
+
+        stopPrice = roundedStop;
+        targetPrice = roundedTarget;
+
         // Validate bracket order prices based on direction
         boolean isLong = signal.getSide() == OrderSide.BUY;
 
@@ -646,6 +659,61 @@ public class LiveEngineRunner {
             case "SI": return 25.00;
             default: return 12.50;
         }
+    }
+
+    /**
+     * Get the tick size (minimum price increment) for a symbol.
+     */
+    private double getTickSize(String symbol) {
+        switch (symbol.toUpperCase()) {
+            case "ES":
+            case "MES":
+                return 0.25;
+            case "NQ":
+            case "MNQ":
+                return 0.25;
+            case "6E":
+                return 0.00005;
+            case "6J":
+                return 0.0000005;
+            case "6B":
+                return 0.0001;
+            case "CL":
+                return 0.01;
+            case "GC":
+                return 0.10;
+            case "NG":
+                return 0.001;
+            case "SI":
+                return 0.005;
+            default:
+                return 0.25;
+        }
+    }
+
+    /**
+     * Round a price to the nearest valid tick increment to satisfy exchange requirements.
+     */
+    private double roundToTick(double price, double tickSize) {
+        double ticks = Math.round(price / tickSize);
+        double rounded = ticks * tickSize;
+
+        int decimals = getDecimalPlaces(tickSize);
+        double multiplier = Math.pow(10, decimals);
+        return Math.round(rounded * multiplier) / multiplier;
+    }
+
+    /**
+     * Determine decimal places for rounding based on tick size (e.g., 0.00005 -> 5 decimals).
+     */
+    private int getDecimalPlaces(double tickSize) {
+        String tickStr = String.valueOf(tickSize);
+        int index = tickStr.indexOf('.') >= 0 ? tickStr.length() - tickStr.indexOf('.') - 1 : 0;
+        while (index > 0 && tickStr.endsWith("0")) {
+            tickStr = tickStr.substring(0, tickStr.length() - 1);
+            index--;
+        }
+        return Math.max(index, 0);
     }
 
     /**
