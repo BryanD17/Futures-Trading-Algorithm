@@ -5,6 +5,7 @@
 1. **Protective orders skipped after fills.** When a signal filled, the engine attempted to place stop loss and take profit brackets without validating the prices. If an upstream calculation produced an invalid stop/target (e.g., stop above a long entry or target above a short entry), the code proceeded and the protective orders were silently rejected by the broker, leaving positions unprotected.
 2. **No fallback brackets when fills arrived before order-search callbacks.** If Topstep's order-search API returned 400s or arrived late, the fill callback could appear without any bracket being created from the order-status path. The trade then sat naked while polling retried.
 3. **Shutdown flattened positions instead of canceling open work.** Stopping live mode always tried to flatten anything still tracked in the account, even when those positions were already closed on the exchange or had missing bracket state. This caused extra market orders to be sent when the user only wanted to cancel outstanding orders and exit cleanly.
+2. **Shutdown flattened positions instead of canceling open work.** Stopping live mode always tried to flatten anything still tracked in the account, even when those positions were already closed on the exchange or had missing bracket state. This caused extra market orders to be sent when the user only wanted to cancel outstanding orders and exit cleanly.
 
 ## What Changed
 
@@ -20,3 +21,6 @@
 3. Stopping live mode cancels pending orders, cancels any active brackets, clears tracked positions, and disconnects—without sending new flatten orders. Emergency shutdown still activates the kill switch but leverages the same cancellation flow.
 
 These changes ensure every live fill either receives a sane SL/TP pair or is clearly flagged, that fills remain protected even when Topstep callbacks lag, and that stopping the engine no longer creates unexpected close-out orders.
+2. Stopping live mode cancels pending orders, cancels any active brackets, clears tracked positions, and disconnects—without sending new flatten orders. Emergency shutdown still activates the kill switch but leverages the same cancellation flow.
+
+These changes ensure every live fill either receives a sane SL/TP pair or is clearly flagged, and that stopping the engine no longer creates unexpected close-out orders.
