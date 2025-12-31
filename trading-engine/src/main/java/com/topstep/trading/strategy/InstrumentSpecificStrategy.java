@@ -5,6 +5,8 @@ import com.topstep.trading.domain.OrderSide;
 import com.topstep.trading.event.EventBus;
 import com.topstep.trading.event.StrategySignalEvent;
 
+import java.time.Instant;
+
 /**
  * Instrument-specific ICT strategy that adapts parameters based on instrument characteristics.
  *
@@ -37,6 +39,11 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     private final ATRCalculator atrCalculator;
     private final CorrelationTracker correlationTracker;
 
+    // Silver Bullet components
+    private final SilverBulletClock silverBulletClock;
+    private final MarketStructureShiftDetector mssDetector;
+    private final BarAggregationManager barManager;
+
     // Configuration from profile
     private final double oteLow;
     private final double oteHigh;
@@ -59,6 +66,13 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     private boolean hasDisplacement = false;
     private boolean hasPower3Confirmation = false;
     private int recommendedQuantity = 1;
+
+    // Silver Bullet state tracking
+    private boolean sbHasLiquidityRaid = false;
+    private boolean sbRaidIsBullish = false;
+    private double sbRaidLevel = 0;
+    private int sbCandlesSinceRaid = 0;
+    private MarketStructureShiftDetector.MSS lastSBMss = null;
 
     public InstrumentSpecificStrategy(InstrumentProfile profile, EventBus eventBus,
                                        CorrelationTracker sharedCorrelationTracker) {
@@ -90,6 +104,11 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         this.correlationTracker = sharedCorrelationTracker != null
             ? sharedCorrelationTracker
             : new CorrelationTracker(50);
+
+        // Initialize Silver Bullet components
+        this.silverBulletClock = new SilverBulletClock();
+        this.mssDetector = new MarketStructureShiftDetector(50, 2);
+        this.barManager = new BarAggregationManager(profile.getSymbol(), 100);
     }
 
     /**
@@ -162,6 +181,253 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         mitigationBlockDetector.update(candle);
         power3Detector.update(candle);
         atrCalculator.update(candle);
+
+        // Silver Bullet: Update MSS detector and bar aggregation
+        MarketStructureShiftDetector.MSS mss = mssDetector.update(candle);
+        if (mss != null) {
+            lastSBMss = mss;
+        }
+        barManager.processCandle(candle);
+
+        // Silver Bullet: Track liquidity raids
+        updateSilverBulletRaidTracking(candle);
+    }
+
+    /**
+     * Track liquidity raids for Silver Bullet setups.
+     */
+    private void updateSilverBulletRaidTracking(Candle candle) {
+        // Track time since raid
+        if (sbHasLiquidityRaid) {
+            sbCandlesSinceRaid++;
+            // Reset if too long since raid (15 candles = 15 minutes on 1m chart)
+            if (sbCandlesSinceRaid > 15) {
+                resetSilverBulletState();
+            }
+        }
+
+        // Check for new liquidity raid
+        LiquiditySweep sweep = liquidityDetector.getLastSweep();
+        if (sweep != null && liquidityDetector.hasRecentSweep(3)) {
+            sbHasLiquidityRaid = true;
+            sbRaidIsBullish = sweep.isBullish();
+            sbRaidLevel = sweep.getSweptLevel();
+            sbCandlesSinceRaid = 0;
+        }
+    }
+
+    /**
+     * Reset Silver Bullet state.
+     */
+    private void resetSilverBulletState() {
+        sbHasLiquidityRaid = false;
+        sbCandlesSinceRaid = 0;
+        sbRaidLevel = 0;
+        lastSBMss = null;
+    }
+
+    /**
+     * Check for Silver Bullet setup during SB time windows.
+     *
+     * ICT Silver Bullet Requirements:
+     * 1. Must be within an SB time window (3-4am, 10-11am, or 2-3pm ET)
+     * 2. Price must raid a known liquidity level
+     * 3. MSS (Market Structure Shift) must occur in direction of next draw
+     * 4. Displacement creates entry FVG associated with MSS leg
+     * 5. Entry on FVG retrace with defined invalidation
+     *
+     * @return true if a valid Silver Bullet setup is detected
+     */
+    private boolean checkSilverBulletSetup(Candle candle, Instant now, boolean shouldLog) {
+        // 1. Must be in a Silver Bullet time window
+        SilverBulletClock.SilverBulletWindow sbWindow = silverBulletClock.getCurrentWindow(now);
+        if (!sbWindow.isActive()) {
+            return false;
+        }
+
+        // 2. Check if this is an optimal symbol for the current SB window
+        boolean isOptimal = silverBulletClock.isOptimalSymbol(profile.getSymbol(), now);
+
+        // 3. Must have enough time remaining for a trade (at least 15 minutes)
+        if (!silverBulletClock.hasEnoughTimeForTrade(now)) {
+            if (shouldLog) {
+                System.out.println("[" + profile.getSymbol() + "] Silver Bullet: Time running low in " + sbWindow.getName());
+            }
+            return false;
+        }
+
+        // 4. Must have a liquidity raid (sweep) within the window
+        if (!sbHasLiquidityRaid) {
+            if (shouldLog && candleCount % 30 == 0) {
+                System.out.println("[" + profile.getSymbol() + "] Silver Bullet (" + sbWindow.getName() + "): Waiting for liquidity raid");
+            }
+            return false;
+        }
+
+        // 5. Must have MSS (Market Structure Shift) after the raid
+        if (lastSBMss == null) {
+            if (shouldLog) {
+                System.out.println("[" + profile.getSymbol() + "] Silver Bullet: Raid detected, waiting for MSS");
+            }
+            return false;
+        }
+
+        // MSS must be in the direction opposite to the raid (reversal)
+        // If raid was bullish (buy-side raid = swept highs), MSS should be bearish (selling)
+        // If raid was bearish (sell-side raid = swept lows), MSS should be bullish (buying)
+        boolean mssConfirmsReversal = (sbRaidIsBullish && !lastSBMss.isBullish) ||
+                                       (!sbRaidIsBullish && lastSBMss.isBullish);
+
+        if (!mssConfirmsReversal) {
+            if (shouldLog) {
+                System.out.println("[" + profile.getSymbol() + "] Silver Bullet: MSS direction doesn't confirm reversal");
+            }
+            return false;
+        }
+
+        // 6. Look for FVG created during MSS displacement for entry
+        boolean isBullish = lastSBMss.isBullish;
+        FairValueGap sbFvg = fvgDetector.findNearestUnfilledFvg(candle.getClose(), isBullish, maxPriceDistance);
+
+        if (sbFvg == null) {
+            // Also check for any recent FVG
+            sbFvg = fvgDetector.findNearestFvg(candle.getClose(), isBullish, maxPriceDistance);
+        }
+
+        if (sbFvg == null) {
+            if (shouldLog) {
+                System.out.println("[" + profile.getSymbol() + "] Silver Bullet: MSS confirmed, waiting for FVG retrace");
+            }
+            return false;
+        }
+
+        // 7. Price must be retracing INTO the FVG (not just near it)
+        boolean priceInFvg = candle.getClose() >= sbFvg.getBottom() && candle.getClose() <= sbFvg.getTop();
+        boolean priceApproachingFvg = isBullish ?
+            (candle.getClose() <= sbFvg.getTop() && candle.getClose() >= sbFvg.getBottom() - (sbFvg.getTop() - sbFvg.getBottom()) * 0.5) :
+            (candle.getClose() >= sbFvg.getBottom() && candle.getClose() <= sbFvg.getTop() + (sbFvg.getTop() - sbFvg.getBottom()) * 0.5);
+
+        if (!priceInFvg && !priceApproachingFvg) {
+            if (shouldLog) {
+                System.out.println("[" + profile.getSymbol() + "] Silver Bullet: Waiting for price to retrace to FVG");
+            }
+            return false;
+        }
+
+        // ★★★ SILVER BULLET SETUP CONFIRMED ★★★
+        currentFvg = sbFvg;
+        hasDisplacement = true;  // MSS implies displacement
+
+        // Grade the Silver Bullet tier based on confluences
+        currentTier = gradeSilverBulletTier(candle, sbWindow, isOptimal);
+
+        // Print Silver Bullet signal
+        printSilverBulletSignal(candle, sbWindow, isOptimal);
+
+        // Reset SB state after generating signal
+        resetSilverBulletState();
+
+        return true;
+    }
+
+    /**
+     * Grade Silver Bullet setup tier based on confluences.
+     */
+    private TradeTier gradeSilverBulletTier(Candle candle, SilverBulletClock.SilverBulletWindow window, boolean isOptimalSymbol) {
+        int tierScore = 0;
+
+        // Base score: Silver Bullet itself is a premium methodology
+        tierScore += 2;
+
+        // Optimal symbol for the window (+1)
+        if (isOptimalSymbol) {
+            tierScore += 1;
+        }
+
+        // MSS strength bonus (+1 if strong displacement)
+        if (lastSBMss != null && lastSBMss.strength > 1.5) {
+            tierScore += 1;
+        }
+
+        // FVG quality (+1 if unfilled/fresh)
+        if (currentFvg != null && !currentFvg.isFilled()) {
+            tierScore += 1;
+        }
+
+        // Check for additional confluences
+        boolean isBullish = lastSBMss != null && lastSBMss.isBullish;
+
+        // Order Block confluence (+1)
+        OrderBlock ob = orderBlockDetector.findNearestValidOb(candle.getClose(), isBullish, maxPriceDistance);
+        if (ob != null) {
+            currentOrderBlock = ob;
+            tierScore += 1;
+        }
+
+        // Breaker Block confluence (+2 - very strong)
+        BreakerBlock breaker = breakerBlockDetector.findNearestBreaker(candle.getClose(), isBullish, maxPriceDistance);
+        if (breaker != null) {
+            currentBreaker = breaker;
+            tierScore += 2;
+        }
+
+        // SMT divergence (+1)
+        boolean hasSmt = correlationTracker.hasSMTDivergence(profile.getSymbol(), profile.getSmtSymbol(), 10);
+        if (hasSmt) {
+            tierScore += 1;
+        }
+
+        // HTF bias alignment from 15m bars (+1)
+        if (barManager.hasEnoughCandles(BarAggregationManager.Timeframe.M15, 5)) {
+            double htfSwingHigh = barManager.getSwingHigh(BarAggregationManager.Timeframe.M15, 5);
+            double htfSwingLow = barManager.getSwingLow(BarAggregationManager.Timeframe.M15, 5);
+            double htfMid = (htfSwingHigh + htfSwingLow) / 2;
+            boolean htfBullish = candle.getClose() > htfMid;
+            if (htfBullish == isBullish) {
+                tierScore += 1;
+            }
+        }
+
+        // Determine tier based on score
+        if (tierScore >= 7) {
+            return TradeTier.TIER_3;  // Premium Silver Bullet
+        } else if (tierScore >= 4) {
+            return TradeTier.TIER_2;  // Standard Silver Bullet
+        } else {
+            return TradeTier.TIER_1;  // Basic Silver Bullet
+        }
+    }
+
+    /**
+     * Print Silver Bullet signal details.
+     */
+    private void printSilverBulletSignal(Candle candle, SilverBulletClock.SilverBulletWindow window, boolean isOptimalSymbol) {
+        String tierStars = currentTier == TradeTier.TIER_3 ? "★★★" :
+                          (currentTier == TradeTier.TIER_2 ? "★★" : "★");
+        String tierLabel = currentTier == TradeTier.TIER_3 ? "PREMIUM" :
+                          (currentTier == TradeTier.TIER_2 ? "STANDARD" : "BASIC");
+
+        System.out.println("\n[" + profile.getSymbol() + "] " + tierStars + " SILVER BULLET " + tierLabel + " " + tierStars);
+        System.out.println("[" + profile.getSymbol() + "] Window: " + window.getName() +
+                          " | Remaining: " + silverBulletClock.getMinutesRemaining(candle.getTimestamp()) + " min");
+        System.out.println("[" + profile.getSymbol() + "] Optimal Symbol: " + (isOptimalSymbol ? "✓ YES" : "~ no (still valid)"));
+        System.out.println("[" + profile.getSymbol() + "] Raid: " + (sbRaidIsBullish ? "Buy-side (swept highs)" : "Sell-side (swept lows)") +
+                          " @ " + String.format("%.2f", sbRaidLevel));
+        System.out.println("[" + profile.getSymbol() + "] MSS: " + (lastSBMss.isBullish ? "BULLISH" : "BEARISH") +
+                          " | Strength: " + String.format("%.2f", lastSBMss.strength));
+        System.out.println("[" + profile.getSymbol() + "] Entry FVG: " + String.format("%.2f - %.2f", currentFvg.getBottom(), currentFvg.getTop()));
+
+        StringBuilder confluences = new StringBuilder();
+        confluences.append("[" + profile.getSymbol() + "] Confluences: MSS✓, FVG✓");
+        if (currentBreaker != null) confluences.append(", Breaker✓");
+        if (currentOrderBlock != null) confluences.append(", OB✓");
+        if (correlationTracker.hasSMTDivergence(profile.getSymbol(), profile.getSmtSymbol(), 10)) {
+            confluences.append(", SMT✓");
+        }
+        System.out.println(confluences.toString());
+
+        System.out.println("[" + profile.getSymbol() + "] Direction: " + (lastSBMss.isBullish ? "LONG" : "SHORT") +
+                          " | R:R Target: 1:" + currentTier.getRiskRewardRatio());
     }
 
     /**
@@ -179,6 +445,12 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         currentMitigationBlock = null;
         hasDisplacement = false;
         hasPower3Confirmation = false;
+
+        // PRIORITY: Silver Bullet setup check during SB windows
+        Instant now = candle.getTimestamp();
+        if (checkSilverBulletSetup(candle, now, shouldLog)) {
+            return true;
+        }
 
         // 1. Check if this instrument prefers the current killzone/session
         String killzoneName = killzoneClock.getKillzoneName(candle.getTimestamp());
