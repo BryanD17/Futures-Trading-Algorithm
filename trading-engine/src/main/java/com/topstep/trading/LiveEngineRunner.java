@@ -100,6 +100,7 @@ public class LiveEngineRunner {
         // Initialize trading components
         this.connector = createConnector();
         this.executionEngine = new ExecutionEngine(accountState);
+        this.executionEngine.setSimulationEnabled(false); // live mode relies on broker fills only
         this.riskEngine = new PropFirmRiskEngine();
         this.eventBus = new EventBus();
 
