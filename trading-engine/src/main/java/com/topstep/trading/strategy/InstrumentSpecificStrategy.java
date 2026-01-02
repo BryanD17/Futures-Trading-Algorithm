@@ -854,10 +854,26 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         double entry = calculateEntry(candle.getClose(), swingLow, range, true);
 
         // Stop: Below entry zone with instrument-specific buffer
+        // CRITICAL: For LONG, stop MUST be BELOW entry (protect against price falling)
         double stopBuffer = profile.getStopBufferPoints();
         double baseStop = getBaseStopLevel(swingLow, true);
+
+        // BUGFIX: Ensure baseStop is below entry for LONG trades
+        // If baseStop (from FVG/OB) is above entry, use swingLow or entry - buffer instead
+        if (baseStop >= entry) {
+            // Use swingLow as the stop reference since that's where the sweep occurred
+            baseStop = Math.min(swingLow, entry - profile.getMinStopDistance());
+        }
+
         double stop = Math.max(baseStop - stopBuffer, entry - profile.getMaxStopDistance());
         stop = Math.min(stop, entry - profile.getMinStopDistance());
+
+        // FINAL VALIDATION: Stop MUST be below entry for LONG
+        if (stop >= entry) {
+            System.err.println("[" + profile.getSymbol() + "] ❌ Invalid LONG stop calculation: stop=" +
+                stop + " >= entry=" + entry + ", using fallback");
+            stop = entry - profile.getMinStopDistance();
+        }
 
         // Target: Based on tier R:R with instrument multiplier
         double riskDistance = entry - stop;
@@ -894,10 +910,26 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         double entry = calculateEntry(candle.getClose(), swingHigh, range, false);
 
         // Stop: Above entry zone with instrument-specific buffer
+        // CRITICAL FIX: For SHORT, stop MUST be ABOVE entry (protect against price rising)
         double stopBuffer = profile.getStopBufferPoints();
         double baseStop = getBaseStopLevel(swingHigh, false);
+
+        // BUGFIX: Ensure baseStop is above entry for SHORT trades
+        // If baseStop (from FVG/OB) is below entry, use swingHigh or entry + buffer instead
+        if (baseStop <= entry) {
+            // Use swingHigh as the stop reference since that's where the sweep occurred
+            baseStop = Math.max(swingHigh, entry + profile.getMinStopDistance());
+        }
+
         double stop = Math.min(baseStop + stopBuffer, entry + profile.getMaxStopDistance());
         stop = Math.max(stop, entry + profile.getMinStopDistance());
+
+        // FINAL VALIDATION: Stop MUST be above entry for SHORT
+        if (stop <= entry) {
+            System.err.println("[" + profile.getSymbol() + "] ❌ Invalid SHORT stop calculation: stop=" +
+                stop + " <= entry=" + entry + ", using fallback");
+            stop = entry + profile.getMinStopDistance();
+        }
 
         // Target: Based on tier R:R with instrument multiplier
         double riskDistance = stop - entry;

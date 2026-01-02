@@ -121,9 +121,11 @@ public class LiveEngineRunner {
             this.bracketManager.setListener(new BracketOrderManager.BracketListener() {
                 @Override
                 public void onStopLossFilled(BracketOrderManager.BracketOrder bracket, double fillPrice) {
+                    // Calculate PnL based on remaining quantity (after partials)
+                    int qty = bracket.remainingQuantity > 0 ? bracket.remainingQuantity : bracket.totalQuantity;
                     double pnl = calculatePnl(bracket.symbol, bracket.entryPrice, fillPrice,
-                                             bracket.quantity, bracket.entrySide);
-                    System.out.println("  PnL: $" + String.format("%.2f", pnl));
+                                             qty, bracket.entrySide);
+                    System.out.println("  Stop PnL: $" + String.format("%.2f", pnl) + " (" + qty + " contracts)");
                     notifyPositionClosed(bracket.symbol, pnl);
                     // Clear position from account state
                     accountState.closePosition(bracket.symbol);
@@ -131,12 +133,41 @@ public class LiveEngineRunner {
 
                 @Override
                 public void onTakeProfitFilled(BracketOrderManager.BracketOrder bracket, double fillPrice) {
+                    // This is called when ALL take profits are filled (position fully closed)
                     double pnl = calculatePnl(bracket.symbol, bracket.entryPrice, fillPrice,
-                                             bracket.quantity, bracket.entrySide);
-                    System.out.println("  PnL: $" + String.format("%.2f", pnl));
+                                             bracket.totalQuantity, bracket.entrySide);
+                    System.out.println("  Total PnL: $" + String.format("%.2f", pnl));
                     notifyPositionClosed(bracket.symbol, pnl);
                     // Clear position from account state
                     accountState.closePosition(bracket.symbol);
+                }
+
+                @Override
+                public void onPartialTakeProfitFilled(BracketOrderManager.BracketOrder bracket,
+                                                       BracketOrderManager.TakeProfitLevel level, double fillPrice) {
+                    // Partial take profit filled - position still open but reduced
+                    double partialPnl = calculatePnl(bracket.symbol, bracket.entryPrice, fillPrice,
+                                                     level.quantity, bracket.entrySide);
+                    System.out.println("  Partial PnL: $" + String.format("%.2f", partialPnl) +
+                                      " (" + level.quantity + " contracts at " + level.rMultiple + "R)");
+                    // Update realized PnL but don't close position
+                    accountState.addRealizedPnL(partialPnl);
+                    // Update position quantity
+                    if (accountState.hasPosition(bracket.symbol)) {
+                        Position pos = accountState.getPosition(bracket.symbol);
+                        int newQty = bracket.remainingQuantity;
+                        if (bracket.entrySide == OrderSide.BUY) {
+                            pos.updateWithFill(-level.quantity, fillPrice);  // Reduce long
+                        } else {
+                            pos.updateWithFill(level.quantity, fillPrice);   // Reduce short
+                        }
+                    }
+                }
+
+                @Override
+                public void onStopMovedToBreakeven(BracketOrderManager.BracketOrder bracket, double newStopPrice) {
+                    System.out.println("  [RISK FREE] Stop moved to breakeven: " + newStopPrice);
+                    // This is informational - position is now risk-free
                 }
 
                 @Override
@@ -701,16 +732,56 @@ public class LiveEngineRunner {
         System.out.println("  Bracket validated: " + (isLong ? "LONG" : "SHORT") +
             " | Stop: " + stopPrice + " | Entry: " + fillPrice + " | Target: " + targetPrice);
 
-        // Create the OCO bracket - BracketOrderManager handles all the details
-        bracketManager.createBracket(
-            symbol,
-            entryOrderId,
-            fillPrice,
-            quantity,
-            signal.getSide(),
-            stopPrice,
-            targetPrice
-        );
+        // Get tick size for breakeven calculation
+        double tickSize = getTickSize(symbol);
+
+        // Use enhanced tiered bracket if quantity > 1 (multiple contracts enable partial profits)
+        // Otherwise use legacy single-level bracket
+        TradeTier tier = signal.getTier();
+
+        if (quantity > 1 && tier != null) {
+            // ENHANCED: Multi-level take profits with breakeven after first partial
+            System.out.println("  Using TIERED bracket: " + tier + " with " + quantity + " contracts");
+            bracketManager.createBracketWithPartials(
+                symbol,
+                entryOrderId,
+                fillPrice,
+                quantity,
+                signal.getSide(),
+                stopPrice,
+                targetPrice,
+                tier,
+                tickSize
+            );
+        } else {
+            // LEGACY: Single take profit level (for 1 contract or no tier)
+            bracketManager.createBracket(
+                symbol,
+                entryOrderId,
+                fillPrice,
+                quantity,
+                signal.getSide(),
+                stopPrice,
+                targetPrice
+            );
+        }
+    }
+
+    /**
+     * Get tick size for a symbol.
+     */
+    private double getTickSize(String symbol) {
+        switch (symbol.toUpperCase()) {
+            case "ES": case "NQ": return 0.25;
+            case "6E": return 0.00005;
+            case "6J": return 0.0000005;
+            case "6B": return 0.0001;
+            case "CL": return 0.01;
+            case "GC": return 0.10;
+            case "SI": return 0.005;
+            case "NG": return 0.001;
+            default: return 0.25;
+        }
     }
 
     /**
