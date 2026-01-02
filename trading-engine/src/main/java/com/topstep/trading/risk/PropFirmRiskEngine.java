@@ -276,6 +276,7 @@ public class PropFirmRiskEngine {
 
     /**
      * Get the number of decimal places in a tick size.
+     * FIXED: Properly returns count based on significant decimal places needed for rounding.
      */
     private int getDecimalPlaces(double tickSize) {
         String tickStr = String.valueOf(tickSize);
@@ -283,9 +284,21 @@ public class PropFirmRiskEngine {
         if (decimalIndex < 0) {
             return 0;
         }
-        // Remove trailing zeros for proper count
-        String decimals = tickStr.substring(decimalIndex + 1).replaceAll("0+$", "");
-        return decimals.length() > 0 ? tickStr.substring(decimalIndex + 1).length() : 0;
+
+        String afterDecimal = tickStr.substring(decimalIndex + 1);
+
+        // Handle scientific notation (e.g., 5.0E-5 for 0.00005, or 5.0E-7 for 0.0000005)
+        int eIndex = afterDecimal.toUpperCase().indexOf('E');
+        if (eIndex >= 0) {
+            int exp = Integer.parseInt(afterDecimal.substring(eIndex + 1));
+            // For 5.0E-5, exp = -5, we need 5 decimal places
+            // For 5.0E-7, exp = -7, we need 7 decimal places
+            return Math.abs(exp);
+        }
+
+        // For regular notation (e.g., "0.25", "0.10", "0.001")
+        // Return the length of the decimal portion to preserve precision
+        return afterDecimal.length();
     }
 
     /**

@@ -36,6 +36,37 @@ public class TopstepConnector implements TradingConnector {
     private static final int BAR_UNIT_HOUR = 3;
     private static final int BAR_UNIT_DAY = 4;
 
+    // TICK SIZE MAP - CRITICAL for proper price alignment
+    // Prices MUST be aligned to tick size or orders will be rejected
+    private static final Map<String, Double> TICK_SIZES = new ConcurrentHashMap<>();
+    static {
+        // Index futures - tick size 0.25
+        TICK_SIZES.put("ES", 0.25);
+        TICK_SIZES.put("NQ", 0.25);
+        TICK_SIZES.put("YM", 1.0);
+        TICK_SIZES.put("RTY", 0.10);
+
+        // Micro index futures
+        TICK_SIZES.put("MES", 0.25);
+        TICK_SIZES.put("MNQ", 0.25);
+
+        // Metals - Gold tick size 0.10, Silver tick size 0.005
+        TICK_SIZES.put("GC", 0.10);
+        TICK_SIZES.put("SI", 0.005);
+
+        // Energy - Crude Oil tick size 0.01, Natural Gas tick size 0.001
+        TICK_SIZES.put("CL", 0.01);
+        TICK_SIZES.put("NG", 0.001);
+        TICK_SIZES.put("HO", 0.0001);
+
+        // Currency futures - Euro FX tick size 0.00005
+        TICK_SIZES.put("6E", 0.00005);
+        TICK_SIZES.put("6J", 0.0000005);
+        TICK_SIZES.put("6B", 0.0001);
+        TICK_SIZES.put("6C", 0.00005);
+        TICK_SIZES.put("6A", 0.0001);
+    }
+
     // Configuration
     private final String apiUrl;
     private final String username;
@@ -244,37 +275,60 @@ public class TopstepConnector implements TradingConnector {
                             ? orderNode.get("filledSize").asInt()
                             : pending.quantity;
 
+                        // Validate fill data before processing
+                        if (fillPrice <= 0) {
+                            logger.error("Invalid fill price from API: {} for order {}", fillPrice, orderId);
+                            continue;
+                        }
+                        if (fillQty <= 0 || fillQty > pending.quantity) {
+                            logger.error("Invalid fill quantity: {} (expected <= {}) for order {}",
+                                fillQty, pending.quantity, orderId);
+                            continue;
+                        }
+
                         logger.info("Order {} FILLED: {} {} @ {}",
                             orderId, pending.symbol, fillQty, fillPrice);
 
-                        // Notify listener
-                        if (pending.listener != null) {
-                            pending.listener.onOrderUpdate(orderId, OrderStatus.FILLED, fillPrice, fillQty);
+                        // CRITICAL: Use try-finally to ensure order is always removed from pending
+                        // even if listener callback throws an exception
+                        try {
+                            if (pending.listener != null) {
+                                pending.listener.onOrderUpdate(orderId, OrderStatus.FILLED, fillPrice, fillQty);
+                            }
+                        } catch (Exception e) {
+                            logger.error("Exception in fill listener for order {}: {}", orderId, e.getMessage());
+                        } finally {
+                            pendingOrders.remove(orderId);
+                            orderListeners.remove(orderId);
                         }
-
-                        // Remove from pending
-                        pendingOrders.remove(orderId);
-                        orderListeners.remove(orderId);
 
                     } else if (status == 3) { // Cancelled
                         logger.info("Order {} CANCELLED", orderId);
 
-                        if (pending.listener != null) {
-                            pending.listener.onOrderUpdate(orderId, OrderStatus.CANCELED, null, null);
+                        try {
+                            if (pending.listener != null) {
+                                pending.listener.onOrderUpdate(orderId, OrderStatus.CANCELED, null, null);
+                            }
+                        } catch (Exception e) {
+                            logger.error("Exception in cancel listener for order {}: {}", orderId, e.getMessage());
+                        } finally {
+                            pendingOrders.remove(orderId);
+                            orderListeners.remove(orderId);
                         }
-
-                        pendingOrders.remove(orderId);
-                        orderListeners.remove(orderId);
 
                     } else if (status == 5) { // Rejected
                         logger.info("Order {} REJECTED", orderId);
 
-                        if (pending.listener != null) {
-                            pending.listener.onOrderUpdate(orderId, OrderStatus.REJECTED, null, null);
+                        try {
+                            if (pending.listener != null) {
+                                pending.listener.onOrderUpdate(orderId, OrderStatus.REJECTED, null, null);
+                            }
+                        } catch (Exception e) {
+                            logger.error("Exception in reject listener for order {}: {}", orderId, e.getMessage());
+                        } finally {
+                            pendingOrders.remove(orderId);
+                            orderListeners.remove(orderId);
                         }
-
-                        pendingOrders.remove(orderId);
-                        orderListeners.remove(orderId);
                     }
                 }
             }
@@ -807,6 +861,62 @@ public class TopstepConnector implements TradingConnector {
     }
 
     /**
+     * Round a price to the nearest valid tick size for the given symbol.
+     * CRITICAL: Prices not aligned to tick size will be REJECTED by the exchange.
+     *
+     * @param symbol The trading symbol (e.g., "GC", "6E", "ES")
+     * @param price The raw price to round
+     * @return The price rounded to the nearest tick
+     */
+    private double roundToTickSize(String symbol, double price) {
+        Double tickSize = TICK_SIZES.get(symbol.toUpperCase());
+
+        if (tickSize == null) {
+            // Unknown symbol - log warning and return as-is (may fail at exchange)
+            logger.warn("Unknown tick size for symbol: {} - price {} not rounded", symbol, price);
+            return price;
+        }
+
+        // Round to nearest tick
+        // Formula: round(price / tickSize) * tickSize
+        double ticks = Math.round(price / tickSize);
+        double roundedPrice = ticks * tickSize;
+
+        // Handle floating point precision by rounding to appropriate decimal places
+        int decimalPlaces = getDecimalPlaces(tickSize);
+        double multiplier = Math.pow(10, decimalPlaces);
+        roundedPrice = Math.round(roundedPrice * multiplier) / multiplier;
+
+        if (Math.abs(roundedPrice - price) > 0.0000001) {
+            logger.info("Price aligned to tick size: {} {} -> {} (tick={})",
+                symbol, price, roundedPrice, tickSize);
+        }
+
+        return roundedPrice;
+    }
+
+    /**
+     * Get the number of decimal places for a tick size.
+     */
+    private int getDecimalPlaces(double tickSize) {
+        String tickStr = String.valueOf(tickSize);
+        int decimalIndex = tickStr.indexOf('.');
+        if (decimalIndex < 0) {
+            return 0;
+        }
+        // Count digits after decimal, excluding trailing zeros in scientific notation
+        String afterDecimal = tickStr.substring(decimalIndex + 1);
+        // Handle scientific notation (e.g., 5.0E-5)
+        if (afterDecimal.contains("E") || afterDecimal.contains("e")) {
+            // Parse the exponent
+            int eIndex = afterDecimal.toUpperCase().indexOf('E');
+            int exp = Integer.parseInt(afterDecimal.substring(eIndex + 1));
+            return Math.abs(exp) + eIndex;
+        }
+        return afterDecimal.length();
+    }
+
+    /**
      * Start heartbeat to periodically refresh token if needed.
      */
     private void startHeartbeat() {
@@ -961,7 +1071,9 @@ public class TopstepConnector implements TradingConnector {
                 orderListeners.remove(clientOrderId);
                 throw new IllegalArgumentException("LIMIT order requires a valid limit price, got: " + order.getLimitPrice());
             }
-            orderMap.put("limitPrice", order.getLimitPrice());
+            // CRITICAL: Round limit price to tick size to prevent rejection
+            double alignedLimitPrice = roundToTickSize(order.getSymbol(), order.getLimitPrice());
+            orderMap.put("limitPrice", alignedLimitPrice);
         }
 
         String orderBody = objectMapper.writeValueAsString(orderMap);
@@ -1053,8 +1165,11 @@ public class TopstepConnector implements TradingConnector {
      */
     public String submitStopOrder(String symbol, OrderSide side, int quantity, double stopPrice,
                                   OrderListener listener) throws Exception {
-        logger.info("Submitting STOP order: {} {} {} @ stop {}",
-            side, quantity, symbol, stopPrice);
+        // CRITICAL: Round stop price to tick size to prevent rejection
+        double alignedStopPrice = roundToTickSize(symbol, stopPrice);
+
+        logger.info("Submitting STOP order: {} {} {} @ stop {} (aligned from {})",
+            side, quantity, symbol, alignedStopPrice, stopPrice);
 
         // Get contract ID for symbol
         String contractId = symbolToContractId.get(symbol);
@@ -1074,7 +1189,7 @@ public class TopstepConnector implements TradingConnector {
         orderMap.put("type", 4);  // Stop Market
         orderMap.put("side", side == OrderSide.BUY ? 0 : 1);
         orderMap.put("size", quantity);
-        orderMap.put("stopPrice", stopPrice);
+        orderMap.put("stopPrice", alignedStopPrice);
 
         String orderBody = objectMapper.writeValueAsString(orderMap);
         logger.info("Stop order request body: {}", orderBody);
@@ -1137,8 +1252,11 @@ public class TopstepConnector implements TradingConnector {
      */
     public String submitTakeProfitOrder(String symbol, OrderSide side, int quantity, double limitPrice,
                                         OrderListener listener) throws Exception {
-        logger.info("Submitting TAKE PROFIT order: {} {} {} @ limit {}",
-            side, quantity, symbol, limitPrice);
+        // CRITICAL: Round limit price to tick size to prevent rejection
+        double alignedLimitPrice = roundToTickSize(symbol, limitPrice);
+
+        logger.info("Submitting TAKE PROFIT order: {} {} {} @ limit {} (aligned from {})",
+            side, quantity, symbol, alignedLimitPrice, limitPrice);
 
         // Get contract ID for symbol
         String contractId = symbolToContractId.get(symbol);
@@ -1157,7 +1275,7 @@ public class TopstepConnector implements TradingConnector {
         orderMap.put("type", 1);  // Limit
         orderMap.put("side", side == OrderSide.BUY ? 0 : 1);
         orderMap.put("size", quantity);
-        orderMap.put("limitPrice", limitPrice);
+        orderMap.put("limitPrice", alignedLimitPrice);
 
         String orderBody = objectMapper.writeValueAsString(orderMap);
         logger.info("Take profit order request body: {}", orderBody);

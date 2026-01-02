@@ -92,27 +92,40 @@ public class Position {
      * Update position with a new fill.
      * @param fillQuantity Quantity filled (positive for buy, negative for sell)
      * @param fillPrice Fill price
+     *
+     * FIXED: Properly distinguishes between adding to position (update avg price)
+     * vs reducing position (keep original avg price).
      */
     public void updateWithFill(int fillQuantity, double fillPrice) {
-        int newQuantity = this.quantity + fillQuantity;
+        int oldQuantity = this.quantity;
+        int newQuantity = oldQuantity + fillQuantity;
 
         if (newQuantity == 0) {
-            // Position closed
+            // Position fully closed - keep avgEntryPrice for PnL calculation
             this.quantity = 0;
-        } else if ((this.quantity > 0 && newQuantity > 0) || (this.quantity < 0 && newQuantity < 0)) {
-            // Adding to position - update average entry price
-            int absOldQty = Math.abs(this.quantity);
+        } else if (oldQuantity == 0) {
+            // Opening a new position from flat
+            this.quantity = newQuantity;
+            this.avgEntryPrice = fillPrice;
+            this.openedAt = Instant.now();
+        } else if (Math.signum(oldQuantity) != Math.signum(newQuantity)) {
+            // Direction flipped (e.g., long 10 -> short 5) - reset entry price to fill price
+            // The remaining position is now a new position at the flip price
+            this.quantity = newQuantity;
+            this.avgEntryPrice = fillPrice;
+            this.openedAt = Instant.now();
+        } else if (Math.abs(newQuantity) > Math.abs(oldQuantity)) {
+            // ADDING to position in the same direction - update weighted average entry price
+            int absOldQty = Math.abs(oldQuantity);
             int absFillQty = Math.abs(fillQuantity);
             this.avgEntryPrice = ((this.avgEntryPrice * absOldQty) + (fillPrice * absFillQty)) /
                                  (absOldQty + absFillQty);
             this.quantity = newQuantity;
         } else {
-            // Reducing position or flipping - keep original avg entry
+            // REDUCING position in the same direction - keep original avg entry price
+            // This is the CRITICAL fix: when reducing, we don't change the entry price
             this.quantity = newQuantity;
-            if (newQuantity != 0 && Math.signum(newQuantity) != Math.signum(this.quantity - fillQuantity)) {
-                // Flipped direction - reset entry price
-                this.avgEntryPrice = fillPrice;
-            }
+            // avgEntryPrice stays the same!
         }
 
         this.updatedAt = Instant.now();

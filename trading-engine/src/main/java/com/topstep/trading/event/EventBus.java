@@ -29,6 +29,9 @@ public class EventBus {
         this(4);
     }
 
+    // Maximum queue size to prevent memory exhaustion
+    private static final int MAX_QUEUE_SIZE = 10000;
+
     public EventBus(int workerThreads) {
         this.handlers = new ConcurrentHashMap<>();
         this.executorService = Executors.newFixedThreadPool(workerThreads,
@@ -41,7 +44,8 @@ public class EventBus {
                         return t;
                     }
                 });
-        this.eventQueue = new LinkedBlockingQueue<>();
+        // CRITICAL: Use bounded queue to prevent memory exhaustion on high event volume
+        this.eventQueue = new LinkedBlockingQueue<>(MAX_QUEUE_SIZE);
         this.eventsProcessed = new AtomicLong(0);
         this.running = false;
 
