@@ -13,11 +13,15 @@ import com.topstep.trading.risk.RiskDecision;
 import com.topstep.trading.risk.TradingRiskManager;
 import com.topstep.trading.strategy.DefaultStrategyContext;
 import com.topstep.trading.strategy.IctHighConfluenceStrategy;
+import com.topstep.trading.strategy.KillzoneClock;
+import com.topstep.trading.strategy.KillzonePhase;
 import com.topstep.trading.strategy.SessionManager;
 import com.topstep.trading.strategy.TradeTier;
 import com.topstep.trading.strategy.TradingStrategy;
 
 import java.time.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -61,6 +65,10 @@ public class LiveEngineRunner {
     // Note: Topstep requires being flat by 3:10 PM CT
     private static final ZoneId CT_ZONE = ZoneId.of("America/Chicago");
 
+    // Order timeout settings (hybrid approach)
+    // Cancel unfilled limit orders after 90 minutes OR when killzone phase is CLOSING
+    private static final long ORDER_TIMEOUT_MINUTES = 90;
+
     private final TradingConnector connector;
     private final AccountState accountState;
     private final RiskLimits riskLimits;
@@ -75,6 +83,9 @@ public class LiveEngineRunner {
 
     // Track subscribed symbols for multi-instrument mode
     private final Set<String> subscribedSymbols = ConcurrentHashMap.newKeySet();
+
+    // Killzone clock for stale order checking
+    private final KillzoneClock killzoneClock = new KillzoneClock();
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
@@ -372,6 +383,13 @@ public class LiveEngineRunner {
                 5, 5, TimeUnit.SECONDS
             );
 
+            // Schedule stale order cleanup (every 30 seconds)
+            // Cancels orders older than 90 minutes OR when killzone is CLOSING
+            scheduler.scheduleAtFixedRate(
+                this::checkStaleOrders,
+                30, 30, TimeUnit.SECONDS
+            );
+
             running.set(true);
 
             System.out.println("\n" + "✓".repeat(60));
@@ -431,18 +449,52 @@ public class LiveEngineRunner {
         }
 
         String symbol = signal.getSymbol();
+        TradeTier newTier = signal.getTier();
 
-        // STEP 0: Check for duplicate orders - prevent multiple orders for the same symbol
-        // This prevents submitting new orders while a pending order exists
+        // STEP 0: Check for duplicate orders - but allow higher-tier signals to replace lower-tier pending orders
         java.util.List<Order> existingOrders = executionEngine.getActiveOrdersList(symbol);
         if (!existingOrders.isEmpty()) {
-            System.out.println("\n⏭ Signal SKIPPED - pending order already exists for " + symbol);
-            System.out.println("  Pending orders: " + existingOrders.size());
-            for (Order pending : existingOrders) {
-                System.out.println("    - " + pending.getSide() + " @ " +
-                    String.format("%.5f", pending.getLimitPrice()) + " (status: " + pending.getStatus() + ")");
+            // Get the tier of the existing pending order
+            ExecutionEngine.EnhancedOrderLevels existingLevels = executionEngine.getOrderLevels(symbol);
+            TradeTier existingTier = (existingLevels != null) ? existingLevels.getTier() : TradeTier.TIER_1;
+
+            // Compare tiers - higher tier level = better quality signal
+            if (newTier.getLevel() > existingTier.getLevel()) {
+                // NEW SIGNAL IS HIGHER TIER - Cancel existing and allow new one
+                System.out.println("\n🔄 TIER UPGRADE: Cancelling " + existingTier + " for " + newTier);
+                System.out.println("  Symbol: " + symbol);
+
+                // Cancel all existing orders for this symbol
+                for (Order pending : existingOrders) {
+                    try {
+                        String orderId = pending.getOrderId();
+                        if (orderId != null && !orderId.isEmpty()) {
+                            connector.cancelOrder(orderId);
+                            System.out.println("  ✓ Cancelled pending order: " + orderId +
+                                " (" + pending.getSide() + " @ " + String.format("%.5f", pending.getLimitPrice()) + ")");
+                        }
+                    } catch (Exception e) {
+                        System.err.println("  ❌ Failed to cancel order: " + e.getMessage());
+                        // Even if cancel fails, we'll continue - the old order may have already filled
+                    }
+                }
+
+                // Remove from execution engine
+                executionEngine.removeOrder(symbol);
+                System.out.println("  Proceeding with higher-tier signal...");
+
+                // Continue to process the new higher-tier signal
+            } else {
+                // EXISTING ORDER IS EQUAL OR HIGHER TIER - Keep it
+                System.out.println("\n⏭ Signal SKIPPED - pending order already exists for " + symbol);
+                System.out.println("  Pending tier: " + existingTier + " | New signal tier: " + newTier);
+                System.out.println("  (Only higher-tier signals can replace lower-tier pending orders)");
+                for (Order pending : existingOrders) {
+                    System.out.println("    - " + pending.getSide() + " @ " +
+                        String.format("%.5f", pending.getLimitPrice()) + " (status: " + pending.getStatus() + ")");
+                }
+                return;
             }
-            return;
         }
 
         // Also check if we already have a position (belt and suspenders)
@@ -822,6 +874,98 @@ public class LiveEngineRunner {
             System.out.println("\n🎉 PROFIT TARGET REACHED!");
             System.out.println("  Total PnL: $" + String.format("%.2f", accountState.getRealizedPnL()));
             // Don't stop - just notify. User can decide to stop.
+        }
+    }
+
+    /**
+     * Check for stale (expired) pending orders and cancel them.
+     *
+     * HYBRID APPROACH:
+     * Cancel unfilled limit orders if EITHER condition is true:
+     * 1. Order is older than ORDER_TIMEOUT_MINUTES (90 minutes by default)
+     * 2. Current killzone phase is CLOSING (end of optimal trading window)
+     *
+     * This ensures signals remain fresh and aligned with ICT methodology.
+     * Stale limit orders tie up capital and may fill at prices no longer valid.
+     */
+    private void checkStaleOrders() {
+        if (!running.get() || flatteningPositions.get()) {
+            return;
+        }
+
+        Instant now = Instant.now();
+        Duration timeoutDuration = Duration.ofMinutes(ORDER_TIMEOUT_MINUTES);
+
+        // Check current killzone phase
+        KillzonePhase currentPhase = killzoneClock.getKillzonePhase(now);
+        boolean isKillzoneClosing = (currentPhase == KillzonePhase.CLOSING);
+        boolean isOutsideKillzone = !killzoneClock.isInKillzone(now);
+
+        // Get all active orders across all symbols
+        Map<String, Order> activeOrders = executionEngine.getActiveOrders();
+        if (activeOrders.isEmpty()) {
+            return;
+        }
+
+        // Collect orders to cancel (avoid concurrent modification)
+        List<Order> ordersToCancel = new ArrayList<>();
+        List<String> cancelReasons = new ArrayList<>();
+
+        for (Order order : activeOrders.values()) {
+            if (!order.isActive()) {
+                continue;
+            }
+
+            Instant orderCreatedAt = order.getCreatedAt();
+            Duration orderAge = Duration.between(orderCreatedAt, now);
+
+            String cancelReason = null;
+
+            // Check timeout (90 minutes)
+            if (orderAge.compareTo(timeoutDuration) > 0) {
+                cancelReason = "TIMEOUT: Order age " + orderAge.toMinutes() + " min > " + ORDER_TIMEOUT_MINUTES + " min limit";
+            }
+            // Check killzone closing
+            else if (isKillzoneClosing) {
+                cancelReason = "KILLZONE CLOSING: Cancelling to avoid late fills outside optimal window";
+            }
+            // Check if we're now outside killzone entirely
+            else if (isOutsideKillzone && orderAge.toMinutes() >= 30) {
+                // Only cancel if order is at least 30 min old and we're outside killzone
+                cancelReason = "OUTSIDE KILLZONE: Order placed during killzone but killzone has ended";
+            }
+
+            if (cancelReason != null) {
+                ordersToCancel.add(order);
+                cancelReasons.add(cancelReason);
+            }
+        }
+
+        // Cancel stale orders
+        for (int i = 0; i < ordersToCancel.size(); i++) {
+            Order order = ordersToCancel.get(i);
+            String reason = cancelReasons.get(i);
+
+            try {
+                String orderId = order.getOrderId();
+                String symbol = order.getSymbol();
+
+                System.out.println("\n⏱ STALE ORDER CANCELLED: " + symbol);
+                System.out.println("  Order: " + order.getSide() + " @ " + String.format("%.5f", order.getLimitPrice()));
+                System.out.println("  Reason: " + reason);
+                System.out.println("  Age: " + Duration.between(order.getCreatedAt(), now).toMinutes() + " minutes");
+
+                if (orderId != null && !orderId.isEmpty()) {
+                    connector.cancelOrder(orderId);
+                    System.out.println("  ✓ Cancelled on exchange: " + orderId);
+                }
+
+                // Remove from execution engine
+                executionEngine.removeOrderById(symbol, orderId);
+
+            } catch (Exception e) {
+                System.err.println("  ❌ Failed to cancel stale order: " + e.getMessage());
+            }
         }
     }
 
