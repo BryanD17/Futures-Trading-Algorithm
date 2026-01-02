@@ -13,11 +13,15 @@ import com.topstep.trading.risk.RiskDecision;
 import com.topstep.trading.risk.TradingRiskManager;
 import com.topstep.trading.strategy.DefaultStrategyContext;
 import com.topstep.trading.strategy.IctHighConfluenceStrategy;
+import com.topstep.trading.strategy.KillzoneClock;
+import com.topstep.trading.strategy.KillzonePhase;
 import com.topstep.trading.strategy.SessionManager;
 import com.topstep.trading.strategy.TradeTier;
 import com.topstep.trading.strategy.TradingStrategy;
 
 import java.time.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -61,6 +65,10 @@ public class LiveEngineRunner {
     // Note: Topstep requires being flat by 3:10 PM CT
     private static final ZoneId CT_ZONE = ZoneId.of("America/Chicago");
 
+    // Order timeout settings (hybrid approach)
+    // Cancel unfilled limit orders after 90 minutes OR when killzone phase is CLOSING
+    private static final long ORDER_TIMEOUT_MINUTES = 90;
+
     private final TradingConnector connector;
     private final AccountState accountState;
     private final RiskLimits riskLimits;
@@ -75,6 +83,9 @@ public class LiveEngineRunner {
 
     // Track subscribed symbols for multi-instrument mode
     private final Set<String> subscribedSymbols = ConcurrentHashMap.newKeySet();
+
+    // Killzone clock for stale order checking
+    private final KillzoneClock killzoneClock = new KillzoneClock();
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
@@ -337,6 +348,13 @@ public class LiveEngineRunner {
             scheduler.scheduleAtFixedRate(
                 this::monitorRisk,
                 5, 5, TimeUnit.SECONDS
+            );
+
+            // Schedule stale order cleanup (every 30 seconds)
+            // Cancels orders older than 90 minutes OR when killzone is CLOSING
+            scheduler.scheduleAtFixedRate(
+                this::checkStaleOrders,
+                30, 30, TimeUnit.SECONDS
             );
 
             running.set(true);
@@ -739,6 +757,98 @@ public class LiveEngineRunner {
             System.out.println("\n🎉 PROFIT TARGET REACHED!");
             System.out.println("  Total PnL: $" + String.format("%.2f", accountState.getRealizedPnL()));
             // Don't stop - just notify. User can decide to stop.
+        }
+    }
+
+    /**
+     * Check for stale (expired) pending orders and cancel them.
+     *
+     * HYBRID APPROACH:
+     * Cancel unfilled limit orders if EITHER condition is true:
+     * 1. Order is older than ORDER_TIMEOUT_MINUTES (90 minutes by default)
+     * 2. Current killzone phase is CLOSING (end of optimal trading window)
+     *
+     * This ensures signals remain fresh and aligned with ICT methodology.
+     * Stale limit orders tie up capital and may fill at prices no longer valid.
+     */
+    private void checkStaleOrders() {
+        if (!running.get() || flatteningPositions.get()) {
+            return;
+        }
+
+        Instant now = Instant.now();
+        Duration timeoutDuration = Duration.ofMinutes(ORDER_TIMEOUT_MINUTES);
+
+        // Check current killzone phase
+        KillzonePhase currentPhase = killzoneClock.getKillzonePhase(now);
+        boolean isKillzoneClosing = (currentPhase == KillzonePhase.CLOSING);
+        boolean isOutsideKillzone = !killzoneClock.isInKillzone(now);
+
+        // Get all active orders across all symbols
+        Map<String, Order> activeOrders = executionEngine.getActiveOrders();
+        if (activeOrders.isEmpty()) {
+            return;
+        }
+
+        // Collect orders to cancel (avoid concurrent modification)
+        List<Order> ordersToCancel = new ArrayList<>();
+        List<String> cancelReasons = new ArrayList<>();
+
+        for (Order order : activeOrders.values()) {
+            if (!order.isActive()) {
+                continue;
+            }
+
+            Instant orderCreatedAt = order.getCreatedAt();
+            Duration orderAge = Duration.between(orderCreatedAt, now);
+
+            String cancelReason = null;
+
+            // Check timeout (90 minutes)
+            if (orderAge.compareTo(timeoutDuration) > 0) {
+                cancelReason = "TIMEOUT: Order age " + orderAge.toMinutes() + " min > " + ORDER_TIMEOUT_MINUTES + " min limit";
+            }
+            // Check killzone closing
+            else if (isKillzoneClosing) {
+                cancelReason = "KILLZONE CLOSING: Cancelling to avoid late fills outside optimal window";
+            }
+            // Check if we're now outside killzone entirely
+            else if (isOutsideKillzone && orderAge.toMinutes() >= 30) {
+                // Only cancel if order is at least 30 min old and we're outside killzone
+                cancelReason = "OUTSIDE KILLZONE: Order placed during killzone but killzone has ended";
+            }
+
+            if (cancelReason != null) {
+                ordersToCancel.add(order);
+                cancelReasons.add(cancelReason);
+            }
+        }
+
+        // Cancel stale orders
+        for (int i = 0; i < ordersToCancel.size(); i++) {
+            Order order = ordersToCancel.get(i);
+            String reason = cancelReasons.get(i);
+
+            try {
+                String orderId = order.getOrderId();
+                String symbol = order.getSymbol();
+
+                System.out.println("\n⏱ STALE ORDER CANCELLED: " + symbol);
+                System.out.println("  Order: " + order.getSide() + " @ " + String.format("%.5f", order.getLimitPrice()));
+                System.out.println("  Reason: " + reason);
+                System.out.println("  Age: " + Duration.between(order.getCreatedAt(), now).toMinutes() + " minutes");
+
+                if (orderId != null && !orderId.isEmpty()) {
+                    connector.cancelOrder(orderId);
+                    System.out.println("  ✓ Cancelled on exchange: " + orderId);
+                }
+
+                // Remove from execution engine
+                executionEngine.removeOrderById(symbol, orderId);
+
+            } catch (Exception e) {
+                System.err.println("  ❌ Failed to cancel stale order: " + e.getMessage());
+            }
         }
     }
 
