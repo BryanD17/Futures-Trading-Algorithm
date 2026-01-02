@@ -430,6 +430,31 @@ public class LiveEngineRunner {
             return;
         }
 
+        String symbol = signal.getSymbol();
+
+        // STEP 0: Check for duplicate orders - prevent multiple orders for the same symbol
+        // This prevents submitting new orders while a pending order exists
+        java.util.List<Order> existingOrders = executionEngine.getActiveOrdersList(symbol);
+        if (!existingOrders.isEmpty()) {
+            System.out.println("\n⏭ Signal SKIPPED - pending order already exists for " + symbol);
+            System.out.println("  Pending orders: " + existingOrders.size());
+            for (Order pending : existingOrders) {
+                System.out.println("    - " + pending.getSide() + " @ " +
+                    String.format("%.5f", pending.getLimitPrice()) + " (status: " + pending.getStatus() + ")");
+            }
+            return;
+        }
+
+        // Also check if we already have a position (belt and suspenders)
+        if (accountState.hasPosition(symbol)) {
+            Position existingPos = accountState.getPosition(symbol);
+            if (!existingPos.isFlat()) {
+                System.out.println("\n⏭ Signal SKIPPED - already have position in " + symbol);
+                System.out.println("  Current: " + existingPos);
+                return;
+            }
+        }
+
         // STEP 1: Validate with TradingRiskManager (correlation, consecutive loss, position limits)
         if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
             RiskDecision riskManagerDecision = multiEngine.validateSignalWithRiskManager(signal);
