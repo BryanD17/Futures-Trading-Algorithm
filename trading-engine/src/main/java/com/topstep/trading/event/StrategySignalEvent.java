@@ -55,9 +55,9 @@ public class StrategySignalEvent extends BaseEvent {
                                TradeTier tier, int quantity, double riskRewardRatio,
                                double[][] partialProfitTargets) {
         super(EventType.STRATEGY_SIGNAL);
-        this.signalType = Objects.requireNonNull(signalType);
-        this.symbol = Objects.requireNonNull(symbol);
-        this.side = side;
+        this.signalType = Objects.requireNonNull(signalType, "signalType cannot be null");
+        this.symbol = Objects.requireNonNull(symbol, "symbol cannot be null");
+        this.side = Objects.requireNonNull(side, "side cannot be null");
         this.entryPrice = entryPrice;
         this.stopPrice = stopPrice;
         this.targetPrice = targetPrice;
