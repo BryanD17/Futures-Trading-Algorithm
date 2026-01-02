@@ -58,7 +58,7 @@ public class TradingRiskManager {
 
     // Position limits
     private static final int MAX_POSITIONS_PER_INSTRUMENT = 1;
-    private static final int MAX_TOTAL_POSITIONS = 3;
+    private static final int MAX_TOTAL_POSITIONS = 5;
 
     // Loss protection
     private static final int MAX_CONSECUTIVE_LOSSES_PER_INSTRUMENT = 2;

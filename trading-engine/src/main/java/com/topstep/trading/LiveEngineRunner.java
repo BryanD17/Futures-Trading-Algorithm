@@ -398,18 +398,52 @@ public class LiveEngineRunner {
         }
 
         String symbol = signal.getSymbol();
+        TradeTier newTier = signal.getTier();
 
-        // STEP 0: Check for duplicate orders - prevent multiple orders for the same symbol
-        // This prevents submitting new orders while a pending order exists
+        // STEP 0: Check for duplicate orders - but allow higher-tier signals to replace lower-tier pending orders
         java.util.List<Order> existingOrders = executionEngine.getActiveOrdersList(symbol);
         if (!existingOrders.isEmpty()) {
-            System.out.println("\n⏭ Signal SKIPPED - pending order already exists for " + symbol);
-            System.out.println("  Pending orders: " + existingOrders.size());
-            for (Order pending : existingOrders) {
-                System.out.println("    - " + pending.getSide() + " @ " +
-                    String.format("%.5f", pending.getLimitPrice()) + " (status: " + pending.getStatus() + ")");
+            // Get the tier of the existing pending order
+            ExecutionEngine.EnhancedOrderLevels existingLevels = executionEngine.getOrderLevels(symbol);
+            TradeTier existingTier = (existingLevels != null) ? existingLevels.getTier() : TradeTier.TIER_1;
+
+            // Compare tiers - higher tier level = better quality signal
+            if (newTier.getLevel() > existingTier.getLevel()) {
+                // NEW SIGNAL IS HIGHER TIER - Cancel existing and allow new one
+                System.out.println("\n🔄 TIER UPGRADE: Cancelling " + existingTier + " for " + newTier);
+                System.out.println("  Symbol: " + symbol);
+
+                // Cancel all existing orders for this symbol
+                for (Order pending : existingOrders) {
+                    try {
+                        String orderId = pending.getOrderId();
+                        if (orderId != null && !orderId.isEmpty()) {
+                            connector.cancelOrder(orderId);
+                            System.out.println("  ✓ Cancelled pending order: " + orderId +
+                                " (" + pending.getSide() + " @ " + String.format("%.5f", pending.getLimitPrice()) + ")");
+                        }
+                    } catch (Exception e) {
+                        System.err.println("  ❌ Failed to cancel order: " + e.getMessage());
+                        // Even if cancel fails, we'll continue - the old order may have already filled
+                    }
+                }
+
+                // Remove from execution engine
+                executionEngine.removeOrder(symbol);
+                System.out.println("  Proceeding with higher-tier signal...");
+
+                // Continue to process the new higher-tier signal
+            } else {
+                // EXISTING ORDER IS EQUAL OR HIGHER TIER - Keep it
+                System.out.println("\n⏭ Signal SKIPPED - pending order already exists for " + symbol);
+                System.out.println("  Pending tier: " + existingTier + " | New signal tier: " + newTier);
+                System.out.println("  (Only higher-tier signals can replace lower-tier pending orders)");
+                for (Order pending : existingOrders) {
+                    System.out.println("    - " + pending.getSide() + " @ " +
+                        String.format("%.5f", pending.getLimitPrice()) + " (status: " + pending.getStatus() + ")");
+                }
+                return;
             }
-            return;
         }
 
         // Also check if we already have a position (belt and suspenders)
