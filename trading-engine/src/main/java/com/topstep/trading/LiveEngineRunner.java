@@ -69,6 +69,10 @@ public class LiveEngineRunner {
     // Cancel unfilled limit orders after 90 minutes OR when killzone phase is CLOSING
     private static final long ORDER_TIMEOUT_MINUTES = 90;
 
+    // Balance sync interval (sync with Topstep every 5 minutes)
+    // This ensures local state stays aligned with actual account balance
+    private static final long BALANCE_SYNC_INTERVAL_MINUTES = 5;
+
     private final TradingConnector connector;
     private final AccountState accountState;
     private final RiskLimits riskLimits;
@@ -387,6 +391,14 @@ public class LiveEngineRunner {
                 this::checkStaleOrders,
                 30, 30, TimeUnit.SECONDS
             );
+
+            // Schedule account balance sync with Topstep (every 5 minutes)
+            // Ensures local state stays aligned with actual account balance
+            scheduler.scheduleAtFixedRate(
+                this::syncAccountBalance,
+                BALANCE_SYNC_INTERVAL_MINUTES, BALANCE_SYNC_INTERVAL_MINUTES, TimeUnit.MINUTES
+            );
+            System.out.println("✓ Account balance sync scheduled (every " + BALANCE_SYNC_INTERVAL_MINUTES + " minutes)");
 
             running.set(true);
 
@@ -828,6 +840,51 @@ public class LiveEngineRunner {
             System.out.println("\n🎉 PROFIT TARGET REACHED!");
             System.out.println("  Total PnL: $" + String.format("%.2f", accountState.getRealizedPnL()));
             // Don't stop - just notify. User can decide to stop.
+        }
+    }
+
+    /**
+     * Sync account balance with Topstep.
+     *
+     * This method periodically fetches the actual account balance from Topstep
+     * to ensure our local state stays aligned. This catches:
+     * - Manual trades made outside the bot
+     * - Commission fees
+     * - Any discrepancies from order execution
+     *
+     * If a significant discrepancy is found (> $50), it logs a warning.
+     */
+    private void syncAccountBalance() {
+        if (!running.get() || killSwitchActive.get()) {
+            return;
+        }
+
+        try {
+            // Fetch live balance from Topstep
+            double liveBalance = connector.getAccountBalance();
+            double localBalance = accountState.getCurrentBalance();
+            double discrepancy = Math.abs(liveBalance - localBalance);
+
+            // Log sync result
+            if (discrepancy > 50.0) {
+                // Significant discrepancy detected
+                System.out.println("\n⚠️  BALANCE DISCREPANCY DETECTED");
+                System.out.println("  Topstep Balance: $" + String.format("%.2f", liveBalance));
+                System.out.println("  Local Balance:   $" + String.format("%.2f", localBalance));
+                System.out.println("  Discrepancy:     $" + String.format("%.2f", discrepancy));
+
+                // Update local state to match Topstep (source of truth)
+                accountState.setCurrentBalance(liveBalance);
+                System.out.println("  ✓ Local balance updated to match Topstep");
+            } else if (discrepancy > 10.0) {
+                // Minor discrepancy - just sync silently
+                accountState.setCurrentBalance(liveBalance);
+            }
+            // If discrepancy <= $10, no action needed (likely just unrealized PnL timing)
+
+        } catch (Exception e) {
+            // Don't crash on sync failure - just log and continue
+            System.err.println("[BALANCE SYNC] Failed to sync balance: " + e.getMessage());
         }
     }
 
