@@ -745,8 +745,8 @@ public class LiveEngineRunner {
         System.out.println("  Bracket validated: " + (isLong ? "LONG" : "SHORT") +
             " | Stop: " + stopPrice + " | Entry: " + fillPrice + " | Target: " + targetPrice);
 
-        // Get tick size for breakeven calculation
-        double tickSize = getTickSize(symbol);
+        // Get tick size for breakeven calculation is on line 707
+        
 
         // Use enhanced tiered bracket if quantity > 1 (multiple contracts enable partial profits)
         // Otherwise use legacy single-level bracket
@@ -782,7 +782,7 @@ public class LiveEngineRunner {
 
     /**
      * Get tick size for a symbol.
-     */
+     
     private double getTickSize(String symbol) {
         switch (symbol.toUpperCase()) {
             case "ES": case "NQ": return 0.25;
@@ -796,7 +796,7 @@ public class LiveEngineRunner {
             default: return 0.25;
         }
     }
-
+    */
     /**
      * Calculate PnL for a closed position.
      */
@@ -823,7 +823,7 @@ public class LiveEngineRunner {
     }
 
     /**
-     * Get the tick size (minimum price increment) for a symbol.
+     * Get the tick size (minimum price increment) for a symbol. (Other in on line 786)
      */
     private double getTickSize(String symbol) {
         switch (symbol.toUpperCase()) {
