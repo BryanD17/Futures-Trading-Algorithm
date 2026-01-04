@@ -155,7 +155,7 @@ public class LiveEngineRunner {
                     System.out.println("  Partial PnL: $" + String.format("%.2f", partialPnl) +
                                       " (" + level.quantity + " contracts at " + level.rMultiple + "R)");
                     // Update realized PnL but don't close position
-                    accountState.addRealizedPnL(partialPnl);
+                    accountState.recordRealizedPnL(partialPnl);
                     // Update position quantity
                     if (accountState.hasPosition(bracket.symbol)) {
                         Position pos = accountState.getPosition(bracket.symbol);
