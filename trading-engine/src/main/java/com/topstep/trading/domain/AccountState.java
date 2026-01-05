@@ -66,6 +66,17 @@ public class AccountState {
     }
 
     /**
+     * Update the highest end-of-day balance (used for Express accounts on startup).
+     * This allows syncing with the actual highest balance from the API.
+     * Only updates if the new value is higher than the current value.
+     */
+    public void updateHighestEndOfDayBalance(double balance) {
+        if (balance > this.highestEndOfDayBalance) {
+            this.highestEndOfDayBalance = balance;
+        }
+    }
+
+    /**
      * Add a position to the account.
      */
     public void addPosition(Position position) {

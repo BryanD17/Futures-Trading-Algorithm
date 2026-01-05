@@ -1452,7 +1452,11 @@ public class TopstepConnector implements TradingConnector {
             logger.debug("Account response: {}", responseBody);
             JsonNode json = objectMapper.readTree(responseBody);
 
-            double balance = 0;
+            // Check if this is an Express Funded Account
+            // EXPRESS accounts start at $0 balance, not $50K - profits accumulate from zero
+            boolean isExpressAccount = accountId != null && accountId.toUpperCase().contains("EXPRESS");
+
+            Double balance = null;  // Use null to track if we found a value
             JsonNode accountsArray = json.has("accounts") ? json.get("accounts") : json;
 
             if (accountsArray.isArray()) {
@@ -1464,48 +1468,58 @@ public class TopstepConnector implements TradingConnector {
                         accountId.contains(accId) || accountId.contains(accName) || accountsArray.size() == 1) {
 
                         // Log all available fields for debugging
-                        logger.debug("Account fields for {}: {}", accName, account.toString());
+                        logger.info("Account fields for {}: {}", accName, account.toString());
 
-                        // Try different field names for balance (API may vary)
-                        // Priority: accountBalance > balance > startingBalance > equity
-                        if (account.has("accountBalance")) {
-                            double val = account.get("accountBalance").asDouble();
-                            if (val >= 1000) balance = val;
-                        }
-                        if (balance == 0 && account.has("balance")) {
-                            double val = account.get("balance").asDouble();
-                            if (val >= 1000) balance = val;
-                        }
-                        if (balance == 0 && account.has("startingBalance")) {
-                            double val = account.get("startingBalance").asDouble();
-                            if (val >= 1000) balance = val;
-                        }
-                        if (balance == 0 && account.has("equity")) {
-                            double val = account.get("equity").asDouble();
-                            if (val >= 1000) balance = val;
+                        // For EXPRESS accounts: balance field contains actual P&L (starts at $0)
+                        // For regular accounts: balance field contains full account value
+                        if (account.has("balance")) {
+                            balance = account.get("balance").asDouble();
+                            logger.info("Found balance field: ${}", balance);
+                        } else if (account.has("accountBalance")) {
+                            balance = account.get("accountBalance").asDouble();
+                            logger.info("Found accountBalance field: ${}", balance);
+                        } else if (account.has("equity")) {
+                            balance = account.get("equity").asDouble();
+                            logger.info("Found equity field: ${}", balance);
                         }
 
-                        if (balance >= 1000) {
-                            logger.info("Found account: {} with balance: ${}", accName, balance);
-                            break;
-                        } else {
-                            // Log what values we found but rejected
-                            logger.warn("Account {} has no valid balance field (values may be PnL, not balance). " +
-                                "Available: balance={}, accountBalance={}, equity={}",
-                                accName,
-                                account.has("balance") ? account.get("balance").asDouble() : "N/A",
-                                account.has("accountBalance") ? account.get("accountBalance").asDouble() : "N/A",
-                                account.has("equity") ? account.get("equity").asDouble() : "N/A");
+                        if (balance != null) {
+                            if (isExpressAccount) {
+                                // EXPRESS accounts: balance is P&L starting from $0
+                                // Valid range: -$2500 (below MLL buffer) to any positive
+                                if (balance >= -2500) {
+                                    logger.info("EXPRESS account {} balance (P&L): ${}", accName, String.format("%.2f", balance));
+                                    break;
+                                }
+                            } else {
+                                // Regular accounts: balance should be >= $1000
+                                if (balance >= 1000) {
+                                    logger.info("Found account: {} with balance: ${}", accName, balance);
+                                    break;
+                                }
+                            }
                         }
+
+                        // Log what we found
+                        logger.info("Account {} - balance={}, accountBalance={}, equity={}, isExpress={}",
+                            accName,
+                            account.has("balance") ? account.get("balance").asDouble() : "N/A",
+                            account.has("accountBalance") ? account.get("accountBalance").asDouble() : "N/A",
+                            account.has("equity") ? account.get("equity").asDouble() : "N/A",
+                            isExpressAccount);
                     }
                 }
             }
 
-            // CRITICAL: Only accept balance values >= $1000 (minimum for any funded account)
-            // Values like -1.62 are PnL values, not balance values
-            if (balance < 1000) {
-                logger.warn("Could not find valid balance in response (got {}), using default $50000", balance);
-                balance = 50000;
+            // Handle missing or invalid balance
+            if (balance == null) {
+                if (isExpressAccount) {
+                    logger.warn("Could not find balance for EXPRESS account, using $0 (starting balance)");
+                    balance = 0.0;
+                } else {
+                    logger.warn("Could not find balance in response, using default $50000");
+                    balance = 50000.0;
+                }
             }
 
             logger.info("Account balance: ${}", String.format("%.2f", balance));

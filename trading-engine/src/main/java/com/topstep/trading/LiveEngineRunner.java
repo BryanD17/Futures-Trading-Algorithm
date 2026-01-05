@@ -98,6 +98,10 @@ public class LiveEngineRunner {
     private final AtomicBoolean flatteningPositions = new AtomicBoolean(false);
     private final CountDownLatch shutdownLatch = new CountDownLatch(1);
 
+    // EXPRESS Funded Account flag - these accounts start at $0 balance (not $50K)
+    // Balance represents P&L accumulated since account creation
+    private final boolean isExpressAccount;
+
     /**
      * Create a new LIVE engine with Topstep 50K configuration.
      */
@@ -109,9 +113,25 @@ public class LiveEngineRunner {
      * Create a new LIVE engine with custom configuration.
      */
     public LiveEngineRunner(double startingBalance, RiskLimits riskLimits) {
+        // Check if this is an Express Funded Account (balance starts at $0)
+        String accountId = System.getenv("TOPSTEP_ACCOUNT_ID");
+        this.isExpressAccount = accountId != null && accountId.toUpperCase().contains("EXPRESS");
+
+        // For Express accounts, override starting balance to $0
+        // Express accounts track P&L from zero, not from a funded amount
+        double effectiveStartingBalance = isExpressAccount ? 0.0 : startingBalance;
+
         // Initialize account
-        this.accountState = new AccountState(startingBalance);
+        this.accountState = new AccountState(effectiveStartingBalance);
         this.riskLimits = riskLimits;
+
+        if (isExpressAccount) {
+            System.out.println("═══════════════════════════════════════════════════════════════");
+            System.out.println("  EXPRESS FUNDED ACCOUNT DETECTED");
+            System.out.println("  Balance starts at $0 (tracks P&L, not funded amount)");
+            System.out.println("  Max Loss Limit: -$" + riskLimits.getMaxLossLimit());
+            System.out.println("═══════════════════════════════════════════════════════════════");
+        }
 
         // Initialize trading components
         this.connector = createConnector();
@@ -366,7 +386,20 @@ public class LiveEngineRunner {
             // Sync account balance
             double liveBalance = connector.getAccountBalance();
             accountState.setCurrentBalance(liveBalance);
-            System.out.println("✓ Account balance synced: $" + String.format("%.2f", liveBalance));
+
+            // For EXPRESS accounts: The live balance represents P&L accumulated since account creation.
+            // We need to set highestEndOfDayBalance to this value so MLL calculates correctly.
+            // Without this, we'd compare against $0 which would give wrong drawdown calculations.
+            if (isExpressAccount && liveBalance > 0) {
+                accountState.updateHighestEndOfDayBalance(liveBalance);
+                System.out.println("✓ EXPRESS account P&L synced: $" + String.format("%.2f", liveBalance));
+                System.out.println("  Highest EOD balance set to: $" + String.format("%.2f", liveBalance));
+                System.out.println("  MLL threshold: -$" + String.format("%.2f", riskLimits.getMaxLossLimit()));
+                System.out.println("  Max drawdown to: -$" + String.format("%.2f",
+                    riskLimits.getMaxLossLimit() - liveBalance));
+            } else {
+                System.out.println("✓ Account balance synced: $" + String.format("%.2f", liveBalance));
+            }
 
             // Start the EventBus to process trading signals
             eventBus.start();
@@ -972,8 +1005,10 @@ public class LiveEngineRunner {
      *
      * If a significant discrepancy is found (> $50), it logs a warning.
      *
-     * IMPORTANT: We validate that the balance is reasonable before updating.
-     * Values < $1000 are likely API errors (e.g., returning PnL instead of balance).
+     * EXPRESS ACCOUNTS: Balance represents P&L starting from $0 (not $50K).
+     * Valid range: -$2500 (below MLL buffer) to any positive amount.
+     *
+     * REGULAR ACCOUNTS: Balance should be >= $1000.
      */
     private void syncAccountBalance() {
         if (!running.get() || killSwitchActive.get()) {
@@ -985,31 +1020,27 @@ public class LiveEngineRunner {
             double liveBalance = connector.getAccountBalance();
             double localBalance = accountState.getCurrentBalance();
 
-            // CRITICAL SAFETY CHECK: Reject obviously invalid balance values
-            // A funded account should never have balance < $1000 (minimum is typically $25K-50K)
-            // Values like -1.62 are PnL values being incorrectly parsed, not actual balance
-            if (liveBalance < 1000) {
-                System.err.println("[BALANCE SYNC] Rejected invalid balance from API: $" +
-                    String.format("%.2f", liveBalance) + " (keeping local: $" +
-                    String.format("%.2f", localBalance) + ")");
-                return;  // Don't update with invalid value
+            // Validate balance based on account type
+            if (isExpressAccount) {
+                // EXPRESS accounts: balance is P&L from $0, can be negative down to MLL
+                // Valid range: >= -$2500 (buffer below $2000 MLL for $50K account)
+                if (liveBalance < -2500) {
+                    System.err.println("[BALANCE SYNC] EXPRESS: Rejected invalid balance from API: $" +
+                        String.format("%.2f", liveBalance) + " (below MLL threshold)");
+                    return;
+                }
+                System.out.println("[BALANCE SYNC] EXPRESS account P&L: $" + String.format("%.2f", liveBalance));
+            } else {
+                // Regular accounts: balance should be >= $1000
+                if (liveBalance < 1000) {
+                    System.err.println("[BALANCE SYNC] Rejected invalid balance from API: $" +
+                        String.format("%.2f", liveBalance) + " (keeping local: $" +
+                        String.format("%.2f", localBalance) + ")");
+                    return;
+                }
             }
 
             double discrepancy = Math.abs(liveBalance - localBalance);
-
-            // Additional safety: If the discrepancy would trigger MLL, verify it's real
-            // A sudden drop of more than $2000 (MLL) without any trades is suspicious
-            double startingBalance = accountState.getStartingBalance();
-            double potentialDrawdown = startingBalance - liveBalance;
-            if (potentialDrawdown > riskLimits.getMaxLossLimit() &&
-                accountState.getPositions().isEmpty() &&
-                Math.abs(accountState.getRealizedPnL()) < 100) {
-                System.err.println("[BALANCE SYNC] Rejected suspicious balance - would trigger MLL without trades");
-                System.err.println("  API Balance: $" + String.format("%.2f", liveBalance));
-                System.err.println("  Starting: $" + String.format("%.2f", startingBalance));
-                System.err.println("  Realized PnL: $" + String.format("%.2f", accountState.getRealizedPnL()));
-                return;  // Don't update with suspicious value
-            }
 
             // Log sync result
             if (discrepancy > 50.0) {
