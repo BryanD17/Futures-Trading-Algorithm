@@ -971,6 +971,9 @@ public class LiveEngineRunner {
      * - Any discrepancies from order execution
      *
      * If a significant discrepancy is found (> $50), it logs a warning.
+     *
+     * IMPORTANT: We validate that the balance is reasonable before updating.
+     * Values < $1000 are likely API errors (e.g., returning PnL instead of balance).
      */
     private void syncAccountBalance() {
         if (!running.get() || killSwitchActive.get()) {
@@ -981,7 +984,32 @@ public class LiveEngineRunner {
             // Fetch live balance from Topstep
             double liveBalance = connector.getAccountBalance();
             double localBalance = accountState.getCurrentBalance();
+
+            // CRITICAL SAFETY CHECK: Reject obviously invalid balance values
+            // A funded account should never have balance < $1000 (minimum is typically $25K-50K)
+            // Values like -1.62 are PnL values being incorrectly parsed, not actual balance
+            if (liveBalance < 1000) {
+                System.err.println("[BALANCE SYNC] Rejected invalid balance from API: $" +
+                    String.format("%.2f", liveBalance) + " (keeping local: $" +
+                    String.format("%.2f", localBalance) + ")");
+                return;  // Don't update with invalid value
+            }
+
             double discrepancy = Math.abs(liveBalance - localBalance);
+
+            // Additional safety: If the discrepancy would trigger MLL, verify it's real
+            // A sudden drop of more than $2000 (MLL) without any trades is suspicious
+            double startingBalance = accountState.getStartingBalance();
+            double potentialDrawdown = startingBalance - liveBalance;
+            if (potentialDrawdown > riskLimits.getMaxLossLimit() &&
+                accountState.getPositions().isEmpty() &&
+                Math.abs(accountState.getRealizedPnL()) < 100) {
+                System.err.println("[BALANCE SYNC] Rejected suspicious balance - would trigger MLL without trades");
+                System.err.println("  API Balance: $" + String.format("%.2f", liveBalance));
+                System.err.println("  Starting: $" + String.format("%.2f", startingBalance));
+                System.err.println("  Realized PnL: $" + String.format("%.2f", accountState.getRealizedPnL()));
+                return;  // Don't update with suspicious value
+            }
 
             // Log sync result
             if (discrepancy > 50.0) {

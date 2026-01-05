@@ -1463,24 +1463,48 @@ public class TopstepConnector implements TradingConnector {
                     if (accId.equals(accountId) || accName.contains(accountId) ||
                         accountId.contains(accId) || accountId.contains(accName) || accountsArray.size() == 1) {
 
-                        if (account.has("balance")) {
-                            balance = account.get("balance").asDouble();
-                        } else if (account.has("accountBalance")) {
-                            balance = account.get("accountBalance").asDouble();
-                        } else if (account.has("equity")) {
-                            balance = account.get("equity").asDouble();
+                        // Log all available fields for debugging
+                        logger.debug("Account fields for {}: {}", accName, account.toString());
+
+                        // Try different field names for balance (API may vary)
+                        // Priority: accountBalance > balance > startingBalance > equity
+                        if (account.has("accountBalance")) {
+                            double val = account.get("accountBalance").asDouble();
+                            if (val >= 1000) balance = val;
+                        }
+                        if (balance == 0 && account.has("balance")) {
+                            double val = account.get("balance").asDouble();
+                            if (val >= 1000) balance = val;
+                        }
+                        if (balance == 0 && account.has("startingBalance")) {
+                            double val = account.get("startingBalance").asDouble();
+                            if (val >= 1000) balance = val;
+                        }
+                        if (balance == 0 && account.has("equity")) {
+                            double val = account.get("equity").asDouble();
+                            if (val >= 1000) balance = val;
                         }
 
-                        if (balance > 0) {
+                        if (balance >= 1000) {
                             logger.info("Found account: {} with balance: ${}", accName, balance);
                             break;
+                        } else {
+                            // Log what values we found but rejected
+                            logger.warn("Account {} has no valid balance field (values may be PnL, not balance). " +
+                                "Available: balance={}, accountBalance={}, equity={}",
+                                accName,
+                                account.has("balance") ? account.get("balance").asDouble() : "N/A",
+                                account.has("accountBalance") ? account.get("accountBalance").asDouble() : "N/A",
+                                account.has("equity") ? account.get("equity").asDouble() : "N/A");
                         }
                     }
                 }
             }
 
-            if (balance == 0) {
-                logger.warn("Could not find balance in response, using default");
+            // CRITICAL: Only accept balance values >= $1000 (minimum for any funded account)
+            // Values like -1.62 are PnL values, not balance values
+            if (balance < 1000) {
+                logger.warn("Could not find valid balance in response (got {}), using default $50000", balance);
                 balance = 50000;
             }
 
