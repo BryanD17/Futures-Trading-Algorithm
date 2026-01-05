@@ -4,6 +4,7 @@ import com.topstep.trading.strategy.ATRCalculator;
 import com.topstep.trading.strategy.InstrumentProfile;
 import com.topstep.trading.strategy.KillzoneClock;
 import com.topstep.trading.strategy.KillzonePhase;
+import com.topstep.trading.strategy.SilverBulletClock;
 
 import java.time.*;
 import java.util.*;
@@ -61,9 +62,11 @@ public class MarketConditionFilter {
     private static final LocalTime OIL_INVENTORY_TIME = LocalTime.of(9, 30);
 
     private final KillzoneClock killzoneClock;
+    private final SilverBulletClock silverBulletClock;
 
     public MarketConditionFilter() {
         this.killzoneClock = new KillzoneClock();
+        this.silverBulletClock = new SilverBulletClock();
     }
 
     /**
@@ -79,11 +82,15 @@ public class MarketConditionFilter {
 
         MarketCondition condition = new MarketCondition();
 
-        // 1. Check day of week quality
-        condition.addFactor(evaluateDayOfWeek(dayOfWeek, time));
+        // Check if we're in a Silver Bullet window (premium trading time)
+        boolean inSilverBulletWindow = silverBulletClock.isInSilverBulletWindow(timestamp);
+        SilverBulletClock.SilverBulletWindow sbWindow = silverBulletClock.getCurrentWindow(timestamp);
 
-        // 2. Check session timing
-        condition.addFactor(evaluateSessionTiming(timestamp, time));
+        // 1. Check day of week quality (with SB exemption)
+        condition.addFactor(evaluateDayOfWeek(dayOfWeek, time, inSilverBulletWindow));
+
+        // 2. Check session timing (with SB exemption)
+        condition.addFactor(evaluateSessionTiming(timestamp, time, inSilverBulletWindow, sbWindow));
 
         // 3. Check volatility
         condition.addFactor(evaluateVolatility(atrCalculator, profile));
@@ -91,8 +98,8 @@ public class MarketConditionFilter {
         // 4. Check news events
         condition.addFactor(evaluateNewsEvents(zdt, symbol));
 
-        // 5. Check killzone phase
-        condition.addFactor(evaluateKillzonePhase(timestamp));
+        // 5. Check killzone phase OR Silver Bullet window
+        condition.addFactor(evaluateKillzoneOrSilverBullet(timestamp, inSilverBulletWindow, sbWindow));
 
         // Calculate overall recommendation
         condition.calculate();
@@ -102,12 +109,18 @@ public class MarketConditionFilter {
 
     /**
      * Evaluate day of week quality.
+     * Silver Bullet windows are exempt from Monday morning penalties.
      */
-    private ConditionFactor evaluateDayOfWeek(DayOfWeek day, LocalTime time) {
+    private ConditionFactor evaluateDayOfWeek(DayOfWeek day, LocalTime time, boolean inSilverBulletWindow) {
         switch (day) {
             case MONDAY:
-                // Monday morning is risky (gaps, whipsaws)
+                // Monday morning is risky (gaps, whipsaws) - BUT exempt during Silver Bullet windows
                 if (time.isBefore(LocalTime.of(9, 0))) {
+                    if (inSilverBulletWindow) {
+                        // Silver Bullet windows are valid even on Monday morning
+                        return new ConditionFactor("Day/Time", 0,
+                                "Monday morning - Silver Bullet window active (exempt)");
+                    }
                     return new ConditionFactor("Day/Time", -2,
                             "Monday morning - higher whipsaw risk");
                 }
@@ -140,14 +153,23 @@ public class MarketConditionFilter {
 
     /**
      * Evaluate session timing (avoid transitions).
+     * Silver Bullet windows are exempt from session transition penalties.
      */
-    private ConditionFactor evaluateSessionTiming(Instant timestamp, LocalTime time) {
+    private ConditionFactor evaluateSessionTiming(Instant timestamp, LocalTime time,
+                                                   boolean inSilverBulletWindow,
+                                                   SilverBulletClock.SilverBulletWindow sbWindow) {
         String killzone = killzoneClock.getKillzoneName(timestamp);
 
         // Session overlaps are premium
         if (killzone.contains("OVERLAP")) {
             return new ConditionFactor("Session", 2,
                     "Session overlap - maximum liquidity");
+        }
+
+        // Silver Bullet windows are PREMIUM trading times - give bonus
+        if (inSilverBulletWindow && sbWindow != null && sbWindow.isActive()) {
+            return new ConditionFactor("Session", 2,
+                    "Silver Bullet window: " + sbWindow.getName() + " - premium ICT setup time");
         }
 
         // Check if we're in a killzone
@@ -167,21 +189,24 @@ public class MarketConditionFilter {
         }
 
         // Check session transitions (first/last 15 min of major opens)
+        // BUT exempt during Silver Bullet windows - these ARE the setup times
+
         // NY Open (9:30 ET = 8:30 CT)
         LocalTime nyOpen = LocalTime.of(8, 30);
-        if (isNearTime(time, nyOpen, SESSION_BUFFER_MINUTES)) {
+        if (isNearTime(time, nyOpen, SESSION_BUFFER_MINUTES) && !inSilverBulletWindow) {
             return new ConditionFactor("Session", -1,
                     "Near NY open - high volatility transition");
         }
 
         // London Open (3:00 AM ET = 2:00 AM CT)
+        // The London SB window IS 2-3 AM CT, so don't penalize during SB
         LocalTime londonOpen = LocalTime.of(2, 0);
-        if (isNearTime(time, londonOpen, SESSION_BUFFER_MINUTES)) {
+        if (isNearTime(time, londonOpen, SESSION_BUFFER_MINUTES) && !inSilverBulletWindow) {
             return new ConditionFactor("Session", -1,
                     "Near London open - transition period");
         }
 
-        if (!inKillzone) {
+        if (!inKillzone && !inSilverBulletWindow) {
             return new ConditionFactor("Session", -1,
                     "Outside killzones");
         }
@@ -260,27 +285,49 @@ public class MarketConditionFilter {
     }
 
     /**
-     * Evaluate killzone phase quality.
+     * Evaluate killzone phase OR Silver Bullet window quality.
+     * Silver Bullet windows are treated as premium trading windows.
      */
-    private ConditionFactor evaluateKillzonePhase(Instant timestamp) {
+    private ConditionFactor evaluateKillzoneOrSilverBullet(Instant timestamp,
+                                                           boolean inSilverBulletWindow,
+                                                           SilverBulletClock.SilverBulletWindow sbWindow) {
+        // Silver Bullet windows are PREMIUM - give significant bonus
+        if (inSilverBulletWindow && sbWindow != null && sbWindow.isActive()) {
+            int minutesRemaining = silverBulletClock.getMinutesRemaining(timestamp);
+            if (minutesRemaining >= 30) {
+                // Plenty of time in SB window - optimal
+                return new ConditionFactor("Killzone/SB", 2,
+                        "Silver Bullet PRIME - " + minutesRemaining + " min remaining");
+            } else if (minutesRemaining >= 15) {
+                // Still good time
+                return new ConditionFactor("Killzone/SB", 1,
+                        "Silver Bullet active - " + minutesRemaining + " min remaining");
+            } else {
+                // Running low on time
+                return new ConditionFactor("Killzone/SB", 0,
+                        "Silver Bullet closing - " + minutesRemaining + " min remaining");
+            }
+        }
+
+        // Fall back to traditional killzone evaluation
         if (!killzoneClock.isInKillzone(timestamp)) {
-            return new ConditionFactor("Killzone", -1, "Outside killzone");
+            return new ConditionFactor("Killzone/SB", -1, "Outside killzone and SB window");
         }
 
         KillzonePhase phase = killzoneClock.getKillzonePhase(timestamp);
         // CRITICAL: Null check for phase to avoid NPE
         if (phase == null) {
-            return new ConditionFactor("Killzone", 0, "Killzone phase unavailable");
+            return new ConditionFactor("Killzone/SB", 0, "Killzone phase unavailable");
         }
         switch (phase) {
             case PRIME:
-                return new ConditionFactor("Killzone", 2, "PRIME phase - optimal");
+                return new ConditionFactor("Killzone/SB", 2, "PRIME phase - optimal");
             case OPENING:
-                return new ConditionFactor("Killzone", 0, "Opening phase - wait for sweep");
+                return new ConditionFactor("Killzone/SB", 0, "Opening phase - wait for sweep");
             case CLOSING:
-                return new ConditionFactor("Killzone", -1, "Closing phase - no new entries");
+                return new ConditionFactor("Killzone/SB", -1, "Closing phase - no new entries");
             default:
-                return new ConditionFactor("Killzone", 0, "Unknown phase");
+                return new ConditionFactor("Killzone/SB", 0, "Unknown phase");
         }
     }
 
