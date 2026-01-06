@@ -1,0 +1,326 @@
+================================================================================
+           COMPLETE TRADE ENTRY REQUIREMENTS - SILVER BULLET ICT BOT
+================================================================================
+
+OVERVIEW
+--------
+Before any trade is placed, ALL of the following must align in sequence.
+
+
+================================================================================
+1. TIME WINDOWS (Silver Bullet)
+================================================================================
+
++---------------+------------------+---------------------------+
+| Window        | Time (ET)        | Optimal Instruments       |
++---------------+------------------+---------------------------+
+| London SB     | 3:00 - 4:00 AM   | 6E, 6B, 6J, GC, SI        |
+| NY AM SB      | 10:00 - 11:00 AM | ES, NQ, CL, GC, NG        |
+| NY PM SB      | 2:00 - 3:00 PM   | ES, NQ, RTY, YM           |
++---------------+------------------+---------------------------+
+
+Requirements:
+  * Must be within an active Silver Bullet window
+  * Minimum 15 minutes remaining in window
+  * Must be a trading day (Mon-Fri)
+  * Killzone phase must be PRIME (not OPENING or CLOSING)
+
+
+================================================================================
+2. SILVER BULLET SETUP SEQUENCE
+================================================================================
+
+The following must occur IN ORDER:
+
+1. LIQUIDITY RAID (sweep of known level)
+   - Asia High/Low, London High/Low
+   - Previous Day High/Low (PDH/PDL)
+   - Session High/Low or Equal Highs/Lows
+   - Tolerance: within 2% of level
+   - Max 10 candles since raid
+
+2. MARKET STRUCTURE SHIFT (MSS)
+   - Break of swing high/low
+   - 2-candle confirmation
+   - Direction must match reversal
+
+3. DISPLACEMENT
+   - Strong impulse move creating the MSS
+   - Threshold: 1.5x normal ATR
+
+4. FAIR VALUE GAP (FVG)
+   - Created by displacement leg
+   - Must be unfilled or partially filled
+   - Price must retrace into FVG zone
+   - Max distance: 0.5% from current price
+
+
+================================================================================
+3. ICT CONFLUENCE REQUIREMENTS
+================================================================================
+
+MANDATORY CHECKS (ALL must pass):
+
+  [x] Inside killzone window
+  [x] Volatility within range (not extreme)
+  [x] Higher-timeframe bias is BULLISH or BEARISH (not neutral)
+  [x] Recent liquidity sweep (within 15 candles)
+  [x] Sweep direction matches bias direction
+
+
+================================================================================
+4. TIER SYSTEM & CONFLUENCES
+================================================================================
+
+--------------------------------------------------------------------------------
+TIER 4 - ELITE SETUP
+--------------------------------------------------------------------------------
+Required: ALL of these:
+  - Breaker Block
+  - Power of 3 (AMD pattern)
+  - SMT Divergence
+  - Displacement
+
+  Min Confluences:    4
+  R:R Target:         1:5
+  Effective Min R:R:  4.25:1
+  Partials:           40% @ 1R, 20% @ 2R, 20% @ 3R, 20% @ 5R
+
+--------------------------------------------------------------------------------
+TIER 3 - PREMIUM SETUP
+--------------------------------------------------------------------------------
+Required: ONE of:
+  - Breaker Block + (SMT OR Displacement OR Power3)
+  - IFVG + Order Block + Displacement + Power3
+
+  Min Confluences:    3
+  R:R Target:         1:4
+  Effective Min R:R:  3.6:1
+  Partials:           40% @ 1R, 30% @ 2R, 30% @ 4R
+
+--------------------------------------------------------------------------------
+TIER 2 - STANDARD SETUP
+--------------------------------------------------------------------------------
+Required: ONE of:
+  - Order Block + Displacement + SMT
+  - Unfilled FVG + SMT + Displacement
+  - Fresh Mitigation Block + SMT
+
+  Min Confluences:    3
+  R:R Target:         1:3
+  Effective Min R:R:  2.85:1
+  Partials:           50% @ 1R, 25% @ 2R, 25% @ 3R
+
+--------------------------------------------------------------------------------
+TIER 1 - CONFIRMED SETUP
+--------------------------------------------------------------------------------
+Required: Any 2 of:
+  - FVG + SMT
+  - FVG + Displacement
+  - FVG + Order Block
+  - SMT + Displacement
+  - Order Block + any other
+
+  Min Confluences:    2
+  R:R Target:         1:2
+  Effective Min R:R:  2.0:1
+  Partials:           50% @ 1R, 50% @ 2R
+
+
+================================================================================
+5. MARKET CONDITION FILTER
+================================================================================
+
+Score determines trade authorization:
+
++---------+-------------+------+
+| Score   | Decision    | Size |
++---------+-------------+------+
+| >= 4    | OPTIMAL     | 100% |
+| >= 2    | FAVORABLE   | 100% |
+| >= 0    | NORMAL      | 100% |
+| >= -2   | CAUTION     | 75%  |
+| >= -4   | HIGH RISK   | 50%  |
+| < -4    | SKIP        | 0%   |
++---------+-------------+------+
+
+SCORING FACTORS:
+
++------------+------------------------------+-------+
+| Factor     | Condition                    | Score |
++------------+------------------------------+-------+
+| Day        | Tue/Wed/Thu                  | +1    |
+| Day        | Monday before 9 AM (no SB)   | -2    |
+| Day        | Friday after 12 PM           | -1    |
+| Session    | Silver Bullet active         | +2    |
+| Session    | Killzone PRIME               | +2    |
+| Session    | Outside killzone             | -1    |
+| Volatility | Normal (0.8-1.2x ATR)        | +1    |
+| Volatility | High (1.5-2.0x ATR)          | -1    |
+| Volatility | Extreme (>2.0x ATR)          | -3    |
+| News       | High-impact within 15 min    | -2    |
++------------+------------------------------+-------+
+
+
+================================================================================
+6. RISK MANAGEMENT GATES
+================================================================================
+
+Sequential checks (ALL must pass):
+
++-------------------+------------------------------+----------------+
+| Check             | Rule                         | Your Limits    |
++-------------------+------------------------------+----------------+
+| Daily Loss Limit  | Net daily P&L > -DLL         | -$1,000        |
+| Max Loss Limit    | Drawdown from peak < MLL     | -$2,000        |
+| Daily Room        | Must have room remaining     | DLL + curr P&L |
+| Stop Distance     | Must be valid (> 0)          | Calculated     |
+| R:R Ratio         | Between 2.0 and 10.0         | Min 2:1        |
+| Position Size     | Based on risk per trade      | ~$250 (25% DLL)|
+| Max Contracts     | Per trade limit              | 2 contracts    |
+| Total Contracts   | Account-wide limit           | 5 contracts    |
++-------------------+------------------------------+----------------+
+
+
+================================================================================
+7. INSTRUMENT SPECIFICATIONS
+================================================================================
+
++--------+-----------+------------+---------------------+
+| Symbol | Tick Size | Tick Value | Max Risk Multiplier |
++--------+-----------+------------+---------------------+
+| ES     | 0.25      | $12.50     | 2.0x                |
+| NQ     | 0.25      | $5.00      | 4.0x                |
+| 6E     | 0.00005   | $6.25      | 2.0x                |
+| 6J     | 0.0000005 | $6.25      | 5.0x                |
+| 6B     | 0.0001    | $6.25      | 2.0x                |
+| CL     | 0.01      | $10.00     | 3.0x                |
+| GC     | 0.10      | $10.00     | 3.0x                |
+| NG     | 0.001     | $10.00     | 3.0x                |
+| SI     | 0.005     | $25.00     | 4.0x                |
++--------+-----------+------------+---------------------+
+
+
+================================================================================
+8. COMPLETE ENTRY FLOW
+================================================================================
+
+  +-------------------------------------------+
+  |  1. NEW CANDLE RECEIVED                   |
+  +---------------------+---------------------+
+                        |
+                        v
+  +-------------------------------------------+
+  |  2. No existing position?                 |---No---> SKIP
+  +---------------------+---------------------+
+                        | Yes
+                        v
+  +-------------------------------------------+
+  |  3. In Silver Bullet window?              |---No---> SKIP
+  +---------------------+---------------------+
+                        | Yes
+                        v
+  +-------------------------------------------+
+  |  4. Killzone PRIME phase?                 |---No---> SKIP
+  +---------------------+---------------------+
+                        | Yes
+                        v
+  +-------------------------------------------+
+  |  5. Volatility acceptable?                |---No---> SKIP
+  +---------------------+---------------------+
+                        | Yes
+                        v
+  +-------------------------------------------+
+  |  6. Clear directional bias?               |---No---> SKIP
+  +---------------------+---------------------+
+                        | Yes
+                        v
+  +-------------------------------------------+
+  |  7. Recent liquidity sweep?               |---No---> SKIP
+  +---------------------+---------------------+
+                        | Yes
+                        v
+  +-------------------------------------------+
+  |  8. Sweep matches bias?                   |---No---> SKIP
+  +---------------------+---------------------+
+                        | Yes
+                        v
+  +-------------------------------------------+
+  |  9. Count ICT Confluences                 |
+  |     - Breaker Block                       |
+  |     - Displacement                        |
+  |     - SMT Divergence                      |
+  |     - Power of 3                          |
+  |     - FVG / IFVG                          |
+  |     - Order Block                         |
+  +---------------------+---------------------+
+                        |
+                        v
+  +-------------------------------------------+
+  |  10. Minimum 2 confluences?               |---No---> SKIP
+  +---------------------+---------------------+
+                        | Yes
+                        v
+  +-------------------------------------------+
+  |  11. Assign Tier (4 -> 3 -> 2 -> 1)       |
+  +---------------------+---------------------+
+                        |
+                        v
+  +-------------------------------------------+
+  |  12. Market Condition Score >= -4?        |---No---> SKIP
+  +---------------------+---------------------+
+                        | Yes
+                        v
+  +-------------------------------------------+
+  |  13. RISK ENGINE VALIDATION               |
+  |     - DLL check                           |
+  |     - MLL check                           |
+  |     - Position sizing                     |
+  |     - R:R validation (min 2:1)            |
+  +---------------------+---------------------+
+                        | Pass
+                        v
+  +-------------------------------------------+
+  |  14. TRADE EXECUTED                       |
+  |     - Entry order placed                  |
+  |     - Stop loss set                       |
+  |     - Take profit targets set             |
+  |     - Breakeven after 1st partial         |
+  +-------------------------------------------+
+
+
+================================================================================
+9. POST-ENTRY MANAGEMENT
+================================================================================
+
+ON FIRST PARTIAL TP FILL:
+  - Cancel original stop loss
+  - Place new stop at entry +/- 2 ticks (breakeven)
+  - Remaining partials continue to targets
+
+TRAILING STOP (after breakeven):
+  - Trails based on tier and R multiple achieved
+  - Locks in profit as price moves favorably
+
+
+================================================================================
+10. YOUR EXPRESS FUNDED ACCOUNT DETAILS
+================================================================================
+
+  Account ID:         EXPRESS-V2-304501-59645239
+  Account Type:       Express Funded (starts at $0)
+  Current P&L:        $543.52
+  Daily Loss Limit:   -$1,000
+  Max Loss Limit:     -$2,000
+  Max Drawdown To:    -$1,456.48 (from current balance)
+
+
+================================================================================
+                         END OF TRADE ENTRY REQUIREMENTS
+================================================================================
+
+This document outlines every condition that must pass before the bot places
+a trade. Every single gate must be satisfied for trade execution.
+
+Generated: January 2026
+Bot: Silver Bullet ICT Trading Algorithm
