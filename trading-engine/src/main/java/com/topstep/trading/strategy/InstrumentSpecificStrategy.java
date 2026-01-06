@@ -562,7 +562,8 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         }
 
         // 5. Check for recent liquidity sweep
-        boolean hasRecentSweep = liquidityDetector.hasRecentSweep(15);
+        // TIGHTENED: Sweep must be within 5 candles (was 15) for fresher setups
+        boolean hasRecentSweep = liquidityDetector.hasRecentSweep(5);
         if (!hasRecentSweep) {
             if (phase == KillzonePhase.OPENING) {
                 return false;
@@ -703,58 +704,57 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         }
 
         // ═══════════════════════════════════════════════════════════════════════
-        // TIER 1 (Confirmed): Any TWO of these:
-        //   • FVG + SMT
-        //   • FVG + Displacement
-        //   • SMT + Displacement
-        //   • Order Block + any confirmation (SMT or Displacement)
-        //   ✓ HTF: 15m bias NOT opposing (no trading against HTF trend)
+        // TIER 1 DISABLED - MINIMUM TIER 2 REQUIRED (3 confluences + displacement)
         // ═══════════════════════════════════════════════════════════════════════
+        // After losing trades, we've tightened requirements:
+        // - Tier 1 (2 confluences) is NO LONGER accepted
+        // - ALL trades must have displacement (institutional move)
+        // - Minimum 3 confluences required (Tier 2+)
+        // This drastically reduces trade frequency but improves win rate.
+        // ═══════════════════════════════════════════════════════════════════════
+
         if (!htf15mNotOpposing) {
             if (shouldLog) {
-                System.out.println("[" + profile.getSymbol() + "] ✓ LTF Confluence | ✗ HTF 15m opposing direction");
+                System.out.println("[" + profile.getSymbol() + "] REJECTED: HTF 15m opposing direction");
             }
             return false;
         }
 
         boolean hasFvg = anyFvg != null || htfFvg5m != null;
         boolean hasOb = currentOrderBlock != null || htfOb5m != null;
+        boolean hasDispAny = hasDisplacement || htfDisplacement;
         FairValueGap fvgToUse = htfFvg5m != null ? htfFvg5m : anyFvg;
 
-        // FVG + SMT
-        if (hasFvg && hasSmtDivergence) {
-            currentTier = TradeTier.TIER_1;
+        // Count confluences
+        int confluenceCount = 0;
+        if (hasFvg) confluenceCount++;
+        if (hasSmtDivergence) confluenceCount++;
+        if (hasDispAny) confluenceCount++;
+        if (hasOb) confluenceCount++;
+
+        // TIGHTENED: Require 3+ confluences AND displacement for ANY entry
+        if (confluenceCount >= 3 && hasDispAny) {
+            // Triple confluence with displacement - promoted to Tier 2
+            currentTier = TradeTier.TIER_2;
             currentFvg = fvgToUse;
-            printTier1Signal(candle, bias, sweep, hasSmtDivergence, "FVG+SMT [HTF:OK]");
+            String entryType = "";
+            if (hasFvg) entryType += "FVG";
+            if (hasSmtDivergence) entryType += (entryType.isEmpty() ? "" : "+") + "SMT";
+            entryType += (entryType.isEmpty() ? "" : "+") + "Disp";
+            if (hasOb) entryType += "+OB";
+            printTier2Signal(candle, bias, sweep, entryType + " [PROMOTED]", hasSmtDivergence);
             return true;
         }
 
-        // FVG + Displacement
-        if (hasFvg && (hasDisplacement || htfDisplacement)) {
-            currentTier = TradeTier.TIER_1;
-            currentFvg = fvgToUse;
-            printTier1Signal(candle, bias, sweep, hasSmtDivergence, "FVG+Disp [HTF:OK]");
-            return true;
+        // REJECTED: Less than 3 confluences OR missing displacement
+        if (confluenceCount >= 2 && !hasDispAny) {
+            System.out.println("[" + profile.getSymbol() + "] REJECTED: Had " + confluenceCount +
+                " confluences but NO DISPLACEMENT (required for all entries)");
+        } else if (confluenceCount < 3) {
+            System.out.println("[" + profile.getSymbol() + "] REJECTED: Only " + confluenceCount +
+                " confluences (minimum 3 required, Tier 1 disabled)");
         }
 
-        // SMT + Displacement
-        if (hasSmtDivergence && (hasDisplacement || htfDisplacement)) {
-            currentTier = TradeTier.TIER_1;
-            printTier1Signal(candle, bias, sweep, hasSmtDivergence, "SMT+Disp [HTF:OK]");
-            return true;
-        }
-
-        // Order Block + any confirmation
-        if (hasOb && (hasSmtDivergence || hasDisplacement || htfDisplacement)) {
-            currentTier = TradeTier.TIER_1;
-            String combo = "OB+" + (hasSmtDivergence ? "SMT" : "Disp") + " [HTF:OK]";
-            printTier1Signal(candle, bias, sweep, hasSmtDivergence, combo);
-            return true;
-        }
-
-        if (shouldLog) {
-            System.out.println("[" + profile.getSymbol() + "] ✓ Session | ✓ Bias | ✓ Sweep | ✗ No entry zone");
-        }
         return false;
     }
 

@@ -211,7 +211,8 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         }
 
         // 4. Check for recent liquidity sweep
-        boolean hasRecentSweep = liquidityDetector.hasRecentSweep(15);
+        // TIGHTENED: Sweep must be within 5 candles (was 15) for fresher setups
+        boolean hasRecentSweep = liquidityDetector.hasRecentSweep(5);
         if (!hasRecentSweep) {
             noSweep++;
             return false;
@@ -259,20 +260,19 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
             return true;
         }
 
-        // TIER 3: Breaker Block + (SMT OR Displacement OR Power3)
+        // TIER 3: Breaker Block + Displacement + (SMT OR Power3)
         //     OR: (IFVG + OB + Displacement + Power3)
-        if (currentBreaker != null) {
-            confluenceCount = 1;  // Breaker counts as 1
+        // TIGHTENED: Displacement is now REQUIRED for Tier 3
+        if (currentBreaker != null && hasDisplacement) {
+            confluenceCount = 2;  // Breaker + Displacement counts as 2
             if (hasSmtDivergence) confluenceCount++;
-            if (hasDisplacement) confluenceCount++;
             if (hasPower3Confirmation) confluenceCount++;
 
-            if (confluenceCount >= 2) {
-                // Breaker + at least 1 confirmation = Tier 3
+            if (confluenceCount >= 3) {
+                // Breaker + Displacement + at least 1 more confirmation = Tier 3
                 currentTier = TradeTier.TIER_3;
-                String entryType = "Breaker";
+                String entryType = "Breaker+Displacement";
                 if (hasSmtDivergence) entryType += "+SMT";
-                if (hasDisplacement) entryType += "+Displacement";
                 if (hasPower3Confirmation) entryType += "+Power3";
                 printTier3Signal(candle, bias, sweep, entryType, hasSmtDivergence);
                 return true;
@@ -308,15 +308,23 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         }
 
         currentMitigationBlock = mitigationBlockDetector.findBestMitigationZone(candle.getClose(), isBullish, maxPriceDistance);
-        if (currentMitigationBlock != null && currentMitigationBlock.isFresh() && hasSmtDivergence) {
-            // Fresh mitigation + SMT confirmation
+        if (currentMitigationBlock != null && currentMitigationBlock.isFresh() && hasSmtDivergence && hasDisplacement) {
+            // Fresh mitigation + SMT + Displacement (TIGHTENED: displacement now required)
             currentTier = TradeTier.TIER_2;
-            printTier2Signal(candle, bias, sweep, "Fresh Mitigation+SMT", hasSmtDivergence);
+            printTier2Signal(candle, bias, sweep, "Fresh Mitigation+SMT+Displacement", hasSmtDivergence);
             return true;
         }
 
-        // TIER 1: Double confluence required (minimum 2 of: FVG, SMT, Displacement, OB)
-        // Single confluence is NO LONGER accepted - must have confirmation
+        // ═══════════════════════════════════════════════════════════════════════════
+        // TIER 1 DISABLED - MINIMUM TIER 2 REQUIRED (3 confluences + displacement)
+        // ═══════════════════════════════════════════════════════════════════════════
+        // After losing trades, we've tightened requirements:
+        // - Tier 1 (2 confluences) is NO LONGER accepted
+        // - ALL trades must have displacement (institutional move)
+        // - Minimum 3 confluences required (Tier 2+)
+        // This drastically reduces trade frequency but improves win rate.
+        // ═══════════════════════════════════════════════════════════════════════════
+
         FairValueGap anyFvg = fvgDetector.findNearestFvg(candle.getClose(), isBullish, maxPriceDistance);
 
         confluenceCount = 0;
@@ -325,20 +333,30 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         if (hasDisplacement) confluenceCount++;
         if (currentOrderBlock != null) confluenceCount++;
 
-        if (confluenceCount >= 2) {
-            // Double confluence achieved - Tier 1 is valid
-            currentTier = TradeTier.TIER_1;
+        // TIGHTENED: Require 3+ confluences AND displacement for ANY entry
+        if (confluenceCount >= 3 && hasDisplacement) {
+            // Triple confluence with displacement - promoted to Tier 2
+            currentTier = TradeTier.TIER_2;
             currentFvg = anyFvg;
             String entryType = "";
             if (anyFvg != null) entryType += "FVG";
             if (hasSmtDivergence) entryType += (entryType.isEmpty() ? "" : "+") + "SMT";
-            if (hasDisplacement) entryType += (entryType.isEmpty() ? "" : "+") + "Displacement";
-            if (currentOrderBlock != null) entryType += (entryType.isEmpty() ? "" : "+") + "OB";
-            printTier1Signal(candle, bias, sweep, entryType, hasSmtDivergence);
+            entryType += (entryType.isEmpty() ? "" : "+") + "Displacement";
+            if (currentOrderBlock != null) entryType += "+OB";
+            printTier2Signal(candle, bias, sweep, entryType + " [PROMOTED]", hasSmtDivergence);
             return true;
         }
 
-        // No valid confluence (single confluence rejected)
+        // REJECTED: Less than 3 confluences OR missing displacement
+        // Log rejection reason for debugging
+        if (confluenceCount >= 2 && !hasDisplacement) {
+            System.out.println("[" + primarySymbol + "] REJECTED: Had " + confluenceCount +
+                " confluences but NO DISPLACEMENT (required for all entries)");
+        } else if (confluenceCount < 3) {
+            System.out.println("[" + primarySymbol + "] REJECTED: Only " + confluenceCount +
+                " confluences (minimum 3 required, Tier 1 disabled)");
+        }
+
         noEntryZone++;
         return false;
     }

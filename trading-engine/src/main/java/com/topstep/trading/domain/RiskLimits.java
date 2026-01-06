@@ -70,8 +70,8 @@ public final class RiskLimits {
                 .maxContracts(5)
                 .maxTotalContracts(10)
                 .riskPerTrade(250.0)           // 25% of DLL per trade
-                .minRiskRewardRatio(2.0)       // Minimum 2:1 R:R
-                .maxRiskRewardRatio(5.0)       // Maximum 5:1 R:R
+                .minRiskRewardRatio(3.0)       // TIGHTENED: Minimum 3:1 R:R (was 2:1)
+                .maxRiskRewardRatio(6.0)       // Maximum 6:1 R:R
                 .flattenByTime(LocalTime.of(15, 10)) // 3:10 PM CT (Topstep rule)
                 .allowWeekendTrading(false)
                 .build();
@@ -94,8 +94,8 @@ public final class RiskLimits {
                 .maxContracts(10)
                 .maxTotalContracts(20)
                 .riskPerTrade(500.0)           // 25% of DLL per trade
-                .minRiskRewardRatio(2.0)       // Minimum 2:1 R:R
-                .maxRiskRewardRatio(5.0)       // Maximum 5:1 R:R
+                .minRiskRewardRatio(3.0)       // TIGHTENED: Minimum 3:1 R:R (was 2:1)
+                .maxRiskRewardRatio(6.0)       // Maximum 6:1 R:R
                 .flattenByTime(LocalTime.of(15, 10)) // 3:10 PM CT
                 .allowWeekendTrading(false)
                 .build();
@@ -118,8 +118,8 @@ public final class RiskLimits {
                 .maxContracts(15)
                 .maxTotalContracts(30)
                 .riskPerTrade(750.0)           // 25% of DLL per trade
-                .minRiskRewardRatio(2.0)       // Minimum 2:1 R:R
-                .maxRiskRewardRatio(5.0)       // Maximum 5:1 R:R
+                .minRiskRewardRatio(3.0)       // TIGHTENED: Minimum 3:1 R:R (was 2:1)
+                .maxRiskRewardRatio(6.0)       // Maximum 6:1 R:R
                 .flattenByTime(LocalTime.of(15, 10)) // 3:10 PM CT
                 .allowWeekendTrading(false)
                 .build();

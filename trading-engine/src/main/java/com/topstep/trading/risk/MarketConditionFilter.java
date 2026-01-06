@@ -85,6 +85,21 @@ public class MarketConditionFilter {
         // Check if we're in a Silver Bullet window (premium trading time)
         boolean inSilverBulletWindow = silverBulletClock.isInSilverBulletWindow(timestamp);
         SilverBulletClock.SilverBulletWindow sbWindow = silverBulletClock.getCurrentWindow(timestamp);
+        int minutesRemaining = silverBulletClock.getMinutesRemaining(timestamp);
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // TIGHTENED FILTERS (added after losing trades to improve win rate)
+        // ═══════════════════════════════════════════════════════════════════════════
+
+        // TIGHTENED CHECK 1: Only trade optimal symbols for each session
+        // Non-optimal symbols get -10 penalty (automatic SKIP)
+        condition.addFactor(evaluateOptimalSymbol(timestamp, symbol, inSilverBulletWindow, sbWindow));
+
+        // TIGHTENED CHECK 2: Only trade in first 30 minutes of SB window
+        // After 30 min, the setup window quality decreases
+        condition.addFactor(evaluateSBWindowTiming(inSilverBulletWindow, minutesRemaining));
+
+        // ═══════════════════════════════════════════════════════════════════════════
 
         // 1. Check day of week quality (with SB exemption)
         condition.addFactor(evaluateDayOfWeek(dayOfWeek, time, inSilverBulletWindow));
@@ -330,6 +345,70 @@ public class MarketConditionFilter {
                 return new ConditionFactor("Killzone/SB", 0, "Unknown phase");
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TIGHTENED FILTERS - Added to improve win rate after losing trades
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * TIGHTENED: Only trade OPTIMAL symbols for each Silver Bullet window.
+     * Non-optimal symbols get -10 penalty (automatic SKIP).
+     *
+     * Optimal symbols per window:
+     * - London SB (3-4 AM ET): 6E, 6B, 6J, GC, SI (Forex & Metals)
+     * - NY AM SB (10-11 AM ET): ES, NQ, CL, GC, NG (Indices & Energy)
+     * - NY PM SB (2-3 PM ET): ES, NQ, RTY, YM (Indices only)
+     */
+    private ConditionFactor evaluateOptimalSymbol(Instant timestamp, String symbol,
+                                                   boolean inSilverBulletWindow,
+                                                   SilverBulletClock.SilverBulletWindow sbWindow) {
+        if (!inSilverBulletWindow || sbWindow == null || !sbWindow.isActive()) {
+            // Not in SB window - this check doesn't apply
+            return new ConditionFactor("Symbol Fit", 0, "Outside SB window");
+        }
+
+        boolean isOptimal = silverBulletClock.isOptimalSymbol(symbol, timestamp);
+
+        if (isOptimal) {
+            return new ConditionFactor("Symbol Fit", 1,
+                    symbol + " is OPTIMAL for " + sbWindow.getName());
+        } else {
+            // NON-OPTIMAL SYMBOL - SKIP TRADE
+            // This is a hard rejection (-10 guarantees SKIP recommendation)
+            return new ConditionFactor("Symbol Fit", -10,
+                    symbol + " is NOT optimal for " + sbWindow.getName() + " - SKIP");
+        }
+    }
+
+    /**
+     * TIGHTENED: Only trade in FIRST 30 MINUTES of Silver Bullet window.
+     * After 30 min, the setup window quality decreases significantly.
+     *
+     * Reasoning:
+     * - First 30 min: Fresh liquidity, cleaner setups, higher probability
+     * - Last 30 min: Fading momentum, choppier price action, lower win rate
+     */
+    private ConditionFactor evaluateSBWindowTiming(boolean inSilverBulletWindow, int minutesRemaining) {
+        if (!inSilverBulletWindow) {
+            return new ConditionFactor("SB Timing", 0, "Outside SB window");
+        }
+
+        // SB windows are 60 minutes
+        // If 30+ minutes remain, we're in the first 30 minutes (optimal)
+        // If < 30 minutes remain, we're in the last 30 minutes (skip)
+
+        if (minutesRemaining >= 30) {
+            return new ConditionFactor("SB Timing", 1,
+                    "First 30 min of SB window - OPTIMAL (" + minutesRemaining + " min left)");
+        } else {
+            // LATE IN SB WINDOW - SKIP TRADE
+            // This is a hard rejection (-10 guarantees SKIP recommendation)
+            return new ConditionFactor("SB Timing", -10,
+                    "Last 30 min of SB window - SKIP (" + minutesRemaining + " min left)");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
 
     /**
      * Check if time is within minutes of target time.
