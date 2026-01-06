@@ -1,0 +1,209 @@
+package com.topstep.trading.chartstate;
+
+import java.time.Instant;
+import java.util.Objects;
+
+/**
+ * Represents a known liquidity level that smart money may target.
+ *
+ * These levels are where stop losses cluster (buy stops above highs,
+ * sell stops below lows) and where institutional traders hunt for
+ * liquidity before initiating major moves.
+ */
+public class KnownLevel {
+
+    private final String id;                    // Unique identifier
+    private final String instrument;            // Symbol (ES, NQ, GC, etc.)
+    private final LevelType type;               // Type of level
+    private final double price;                 // Exact price of the level
+    private final Instant createdAt;            // When this level was detected
+    private final Instant expiresAt;            // When this level expires (null = never)
+
+    // For equal highs/lows - cluster information
+    private final int clusterSize;              // Number of swing points in cluster
+    private final double clusterSpread;         // Price spread of the cluster
+
+    // State tracking
+    private int touchCount;                     // How many times price approached this level
+    private boolean raided;                     // Has this level been swept
+    private Instant raidedAt;                   // When was it raided
+    private int barsSinceCreation;              // Updated each candle
+
+    /**
+     * Create a standard level (PDH/PDL, session levels, etc.)
+     */
+    public KnownLevel(String instrument, LevelType type, double price,
+                      Instant createdAt, Instant expiresAt) {
+        this.id = generateId(instrument, type, price, createdAt);
+        this.instrument = instrument;
+        this.type = type;
+        this.price = price;
+        this.createdAt = createdAt;
+        this.expiresAt = expiresAt;
+        this.clusterSize = 1;
+        this.clusterSpread = 0;
+        this.touchCount = 0;
+        this.raided = false;
+        this.barsSinceCreation = 0;
+    }
+
+    /**
+     * Create an equal highs/lows level with cluster information.
+     */
+    public KnownLevel(String instrument, LevelType type, double price,
+                      Instant createdAt, Instant expiresAt,
+                      int clusterSize, double clusterSpread) {
+        this.id = generateId(instrument, type, price, createdAt);
+        this.instrument = instrument;
+        this.type = type;
+        this.price = price;
+        this.createdAt = createdAt;
+        this.expiresAt = expiresAt;
+        this.clusterSize = clusterSize;
+        this.clusterSpread = clusterSpread;
+        this.touchCount = 0;
+        this.raided = false;
+        this.barsSinceCreation = 0;
+    }
+
+    private static String generateId(String instrument, LevelType type, double price, Instant createdAt) {
+        return String.format("%s_%s_%.5f_%d", instrument, type.name(), price, createdAt.toEpochMilli());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // GETTERS
+    // ═══════════════════════════════════════════════════════════════════
+
+    public String getId() {
+        return id;
+    }
+
+    public String getInstrument() {
+        return instrument;
+    }
+
+    public LevelType getType() {
+        return type;
+    }
+
+    public double getPrice() {
+        return price;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public Instant getExpiresAt() {
+        return expiresAt;
+    }
+
+    public int getClusterSize() {
+        return clusterSize;
+    }
+
+    public double getClusterSpread() {
+        return clusterSpread;
+    }
+
+    public int getTouchCount() {
+        return touchCount;
+    }
+
+    public boolean isRaided() {
+        return raided;
+    }
+
+    public Instant getRaidedAt() {
+        return raidedAt;
+    }
+
+    public int getBarsSinceCreation() {
+        return barsSinceCreation;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STATE MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Mark this level as raided (swept).
+     */
+    public void markRaided(Instant timestamp) {
+        this.raided = true;
+        this.raidedAt = timestamp;
+    }
+
+    /**
+     * Increment touch count when price approaches this level.
+     */
+    public void incrementTouchCount() {
+        this.touchCount++;
+    }
+
+    /**
+     * Increment bars since creation (called each candle).
+     */
+    public void incrementBarsSinceCreation() {
+        this.barsSinceCreation++;
+    }
+
+    /**
+     * Check if this level has expired.
+     */
+    public boolean isExpired(Instant now) {
+        return expiresAt != null && now.isAfter(expiresAt);
+    }
+
+    /**
+     * Check if this level is still active (not raided and not expired).
+     */
+    public boolean isActive(Instant now) {
+        return !raided && !isExpired(now);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // UTILITY METHODS
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Calculate distance from a price to this level (in price units).
+     */
+    public double distanceFrom(double currentPrice) {
+        return Math.abs(currentPrice - price);
+    }
+
+    /**
+     * Calculate distance from a price to this level (as percentage).
+     */
+    public double distanceFromPct(double currentPrice) {
+        return Math.abs(currentPrice - price) / price * 100;
+    }
+
+    /**
+     * Check if price is within tolerance of this level.
+     */
+    public boolean isPriceNear(double currentPrice, double toleranceTicks, double tickSize) {
+        double tolerancePrice = toleranceTicks * tickSize;
+        return Math.abs(currentPrice - price) <= tolerancePrice;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        KnownLevel that = (KnownLevel) o;
+        return Objects.equals(id, that.id);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(id);
+    }
+
+    @Override
+    public String toString() {
+        return String.format("KnownLevel{%s %s @ %.5f, raided=%s, touches=%d}",
+                instrument, type.getDisplayName(), price, raided, touchCount);
+    }
+}

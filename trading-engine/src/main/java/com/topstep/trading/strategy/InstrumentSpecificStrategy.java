@@ -1,11 +1,15 @@
 package com.topstep.trading.strategy;
 
+import com.topstep.trading.chartstate.ChartStateIntegration;
+import com.topstep.trading.chartstate.ChartStateManager;
+import com.topstep.trading.chartstate.LiquidityRaid;
 import com.topstep.trading.domain.Candle;
 import com.topstep.trading.domain.OrderSide;
 import com.topstep.trading.event.EventBus;
 import com.topstep.trading.event.StrategySignalEvent;
 
 import java.time.Instant;
+import java.util.Optional;
 
 /**
  * Instrument-specific ICT strategy that adapts parameters based on instrument characteristics.
@@ -47,6 +51,9 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     // Multi-Timeframe Analysis (15m/30m bias, 5m/15m FVGs, 3m/5m OBs)
     private final MultiTimeframeAnalyzer mtfAnalyzer;
 
+    // Enhanced Liquidity Raid Detection System
+    private final ChartStateIntegration chartStateIntegration;
+
     // Configuration from profile
     private final double oteLow;
     private final double oteHigh;
@@ -76,6 +83,9 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     private double sbRaidLevel = 0;
     private int sbCandlesSinceRaid = 0;
     private MarketStructureShiftDetector.MSS lastSBMss = null;
+
+    // Active raid from ChartStateManager (for enhanced quality scoring)
+    private LiquidityRaid currentActiveRaid = null;
 
     public InstrumentSpecificStrategy(InstrumentProfile profile, EventBus eventBus,
                                        CorrelationTracker sharedCorrelationTracker) {
@@ -115,6 +125,10 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
 
         // Initialize Multi-Timeframe Analyzer
         this.mtfAnalyzer = new MultiTimeframeAnalyzer(profile.getSymbol(), barManager);
+
+        // Initialize Enhanced Liquidity Raid Detection System
+        this.chartStateIntegration = new ChartStateIntegration(
+                profile.getSymbol(), profile.getSmtSymbol());
     }
 
     /**
@@ -200,6 +214,13 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
 
         // Silver Bullet: Track liquidity raids
         updateSilverBulletRaidTracking(candle);
+
+        // Enhanced Liquidity Raid Detection: Feed candle to ChartStateManager
+        // This tracks PDH/PDL, session levels, equal H/L, and detects quality-scored raids
+        boolean hasSmt = correlationTracker.hasSMTDivergence(profile.getSymbol(), profile.getSmtSymbol(), 10);
+        MarketBias bias = structureDetector.getBias();
+        Boolean htfBullish = bias == MarketBias.BULLISH ? true : (bias == MarketBias.BEARISH ? false : null);
+        chartStateIntegration.processCandle(candle, hasSmt, htfBullish);
     }
 
     /**
@@ -564,29 +585,75 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         // 5. Check for recent liquidity sweep
         // TIGHTENED: Sweep must be within 5 candles (was 15) for fresher setups
         boolean hasRecentSweep = liquidityDetector.hasRecentSweep(5);
-        if (!hasRecentSweep) {
+
+        boolean isBullish = bias == MarketBias.BULLISH;
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // ENHANCED: Check for quality-scored liquidity raids from ChartStateManager
+        // ═══════════════════════════════════════════════════════════════════════
+        Optional<LiquidityRaid> activeRaid = isBullish ?
+                chartStateIntegration.getActiveBullishRaid() :
+                chartStateIntegration.getActiveBearishRaid();
+
+        if (activeRaid.isPresent()) {
+            currentActiveRaid = activeRaid.get();
+            int raidScore = currentActiveRaid.getQualityScore();
+
+            // Log raid detection
+            if (shouldLog) {
+                System.out.println("[" + profile.getSymbol() + "] ★ RAID DETECTED: " +
+                    currentActiveRaid.getDirection().getDisplayName() + " @ " +
+                    currentActiveRaid.getTargetLevel().getType().getDisplayName() +
+                    " [Score=" + raidScore + " " + currentActiveRaid.getQualityClassification() + "]");
+            }
+
+            // If raid is low quality (score < 4), consider skipping
+            if (chartStateIntegration.shouldSkipDueToLowQuality(isBullish)) {
+                if (shouldLog) {
+                    System.out.println("[" + profile.getSymbol() + "] ✗ Raid score too low (" + raidScore + ") - SKIPPING");
+                }
+                return false;
+            }
+        } else {
+            currentActiveRaid = null;
+        }
+
+        // Use original sweep detection if no ChartState raid (backward compat)
+        if (!hasRecentSweep && currentActiveRaid == null) {
             if (phase == KillzonePhase.OPENING) {
                 return false;
             }
             if (shouldLog) {
-                System.out.println("[" + profile.getSymbol() + "] ✓ Session | ✓ Bias: " + bias + " | ✗ No sweep");
+                System.out.println("[" + profile.getSymbol() + "] ✓ Session | ✓ Bias: " + bias + " | ✗ No sweep/raid");
             }
             return false;
         }
 
         LiquiditySweep sweep = liquidityDetector.getLastSweep();
-        if (sweep == null) return false;
+        // If we have an active raid from ChartState, we can proceed even without legacy sweep
+        if (sweep == null && currentActiveRaid == null) return false;
 
-        // 6. Ensure sweep matches bias
-        if (bias == MarketBias.BULLISH && !sweep.isBullish()) return false;
-        if (bias == MarketBias.BEARISH && !sweep.isBearish()) return false;
-
-        boolean isBullish = bias == MarketBias.BULLISH;
+        // 6. Ensure sweep matches bias (only check if we have a sweep)
+        if (sweep != null) {
+            if (bias == MarketBias.BULLISH && !sweep.isBullish()) {
+                // Unless we have an active raid that matches
+                if (currentActiveRaid == null || !currentActiveRaid.expectsBullish()) return false;
+            }
+            if (bias == MarketBias.BEARISH && !sweep.isBearish()) {
+                if (currentActiveRaid == null || currentActiveRaid.expectsBullish()) return false;
+            }
+        }
 
         // 7. Check for additional confluences
-        boolean hasSmtDivergence = sweep.hasSmtDivergence() ||
-                correlationTracker.hasSMTDivergence(profile.getSymbol(), profile.getSmtSymbol(), 10);
+        boolean hasSmtDivergence = (sweep != null && sweep.hasSmtDivergence()) ||
+                correlationTracker.hasSMTDivergence(profile.getSymbol(), profile.getSmtSymbol(), 10) ||
+                (currentActiveRaid != null && currentActiveRaid.hasSmtConfirmation());
         hasDisplacement = displacementDetector.hasRecentDisplacement(10, isBullish);
+
+        // If we have displacement and an active raid, confirm it
+        if (hasDisplacement && currentActiveRaid != null) {
+            chartStateIntegration.confirmRaidWithDisplacement(isBullish);
+        }
 
         // Power of 3 is especially reliable for Gold
         hasPower3Confirmation = power3Detector.isInDistribution() &&
@@ -810,10 +877,19 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
 
     private void printCommonInfo(Candle candle, MarketBias bias, LiquiditySweep sweep, boolean hasSmt) {
         System.out.println("[" + profile.getSymbol() + "] Session: " + killzoneClock.getKillzoneName(candle.getTimestamp()));
-        System.out.println("[" + profile.getSymbol() + "] Bias: " + bias + " | Sweep: " + (sweep.isBullish() ? "BULLISH" : "BEARISH"));
+        String sweepInfo = sweep != null ? (sweep.isBullish() ? "BULLISH" : "BEARISH") : "N/A";
+        System.out.println("[" + profile.getSymbol() + "] Bias: " + bias + " | Sweep: " + sweepInfo);
         System.out.println("[" + profile.getSymbol() + "] SMT: " + (hasSmt ? "✓" : "~") +
                           " | Displacement: " + (hasDisplacement ? "✓" : "~") +
                           " | Power3: " + (hasPower3Confirmation ? "✓" : "~"));
+
+        // Print raid quality info if available
+        if (currentActiveRaid != null) {
+            System.out.println("[" + profile.getSymbol() + "] ★ Raid Quality: " +
+                    currentActiveRaid.getQualityScore() + "/10 (" + currentActiveRaid.getQualityClassification() + ") @ " +
+                    currentActiveRaid.getTargetLevel().getType().getDisplayName());
+        }
+
         System.out.println("[" + profile.getSymbol() + "] R:R Target: 1:" + currentTier.getRiskRewardRatio() +
                           " (adjusted by tier multiplier: " + profile.getTierMultiplier(currentTier) + ")");
     }
@@ -1039,6 +1115,7 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
                           ", OB=" + profile.getObRespectRate() +
                           ", Power3=" + profile.getPower3Reliability());
         System.out.println("  Position Sizing: Base=" + basePositionSize + ", Max=" + maxPositionSize);
+        System.out.println("  Enhanced Raid Detection: ENABLED (quality scoring active)");
     }
 
     @Override
@@ -1052,11 +1129,14 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     public ATRCalculator getAtrCalculator() { return atrCalculator; }
     public KillzoneClock getKillzoneClock() { return killzoneClock; }
     public CorrelationTracker getCorrelationTracker() { return correlationTracker; }
+    public ChartStateIntegration getChartStateIntegration() { return chartStateIntegration; }
+    public LiquidityRaid getCurrentActiveRaid() { return currentActiveRaid; }
 
     /**
      * Reset signal pending state (called when switching instruments).
      */
     public void resetSignalPending() {
         signalPending = false;
+        currentActiveRaid = null;
     }
 }
