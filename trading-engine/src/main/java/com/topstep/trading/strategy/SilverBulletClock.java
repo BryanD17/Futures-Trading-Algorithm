@@ -124,6 +124,13 @@ public class SilverBulletClock {
     }
 
     /**
+     * Get the current Silver Bullet window name for compatibility with RaidDetector.
+     */
+    public String getCurrentWindowName(Instant instant) {
+        return getCurrentWindow(instant).getName();
+    }
+
+    /**
      * Check if a symbol is optimal for the current SB window.
      */
     public boolean isOptimalSymbol(String symbol, Instant instant) {

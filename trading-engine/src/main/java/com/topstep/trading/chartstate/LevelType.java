@@ -42,11 +42,19 @@ public enum LevelType {
     EQUAL_LOW("Equal Lows", false, 6),
 
     // ═══════════════════════════════════════════════════════════════════
+    // NY FULL SESSION LEVELS (computed at end of full NY session)
+    // ═══════════════════════════════════════════════════════════════════
+    NY_HIGH("NY Session High", true, 7),
+    NY_LOW("NY Session Low", false, 7),
+
+    // ═══════════════════════════════════════════════════════════════════
     // OPENING PRICES (for gap analysis)
     // ═══════════════════════════════════════════════════════════════════
-    NY_OPEN("NY Open Price", true, 4),      // Can be swept either way
-    LONDON_OPEN("London Open Price", true, 4),
-    ASIA_OPEN("Asia Open Price", true, 3);
+    DAILY_OPEN("Daily Open Price", false, 4),    // Neutral - not a high or low
+    WEEKLY_OPEN("Weekly Open Price", false, 4),  // Neutral - not a high or low
+    NY_OPEN("NY Open Price", false, 4),          // Neutral - can be swept either way
+    LONDON_OPEN("London Open Price", false, 4),
+    ASIA_OPEN("Asia Open Price", false, 3);
 
     private final String displayName;
     private final boolean isHighLevel;  // true = high, false = low
@@ -67,6 +75,20 @@ public enum LevelType {
     }
 
     public boolean isLowLevel() {
+        return !isHighLevel;
+    }
+
+    /**
+     * Alias for isHighLevel() for compatibility.
+     */
+    public boolean isHigh() {
+        return isHighLevel;
+    }
+
+    /**
+     * Alias for isLowLevel() for compatibility.
+     */
+    public boolean isLow() {
         return !isHighLevel;
     }
 
