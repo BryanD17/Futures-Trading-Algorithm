@@ -223,7 +223,15 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         // This tracks PDH/PDL, session levels, equal H/L, and detects quality-scored raids
         boolean hasSmt = correlationTracker.hasSMTDivergence(profile.getSymbol(), profile.getSmtSymbol(), 10);
         MarketBias bias = structureDetector.getBias();
-        Boolean htfBullish = bias == MarketBias.BULLISH ? true : (bias == MarketBias.BEARISH ? false : null);
+        // Use explicit Boolean objects to avoid autoboxing NPE with null in ternary
+        Boolean htfBullish;
+        if (bias == MarketBias.BULLISH) {
+            htfBullish = Boolean.TRUE;
+        } else if (bias == MarketBias.BEARISH) {
+            htfBullish = Boolean.FALSE;
+        } else {
+            htfBullish = null;  // NEUTRAL
+        }
         chartStateIntegration.processCandle(candle, hasSmt, htfBullish);
     }
 
