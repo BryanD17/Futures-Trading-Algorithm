@@ -36,6 +36,10 @@ public class InstrumentCharacteristics {
             .symbol("NQ")
             .contractId("CON.F.US.ENQ.H26")
             .name("E-mini NASDAQ 100")
+            // Micro contract support: MNQ = Micro E-mini NASDAQ
+            .microSymbol("MNQ")
+            .microTickValue(0.50)     // $0.50/tick (1/10th of NQ's $5.00)
+            .microContracts(2)        // 2 micro contracts for Standard quality
             .tickSize(0.25)
             .tickValue(5.00)
             .pointValue(20.00)
@@ -88,6 +92,10 @@ public class InstrumentCharacteristics {
             .symbol("ES")
             .contractId("CON.F.US.EP.H26")
             .name("E-mini S&P 500")
+            // Micro contract support: MES = Micro E-mini S&P 500
+            .microSymbol("MES")
+            .microTickValue(1.25)     // $1.25/tick (1/10th of ES's $12.50)
+            .microContracts(2)        // 2 micro contracts for Standard quality
             .tickSize(0.25)
             .tickValue(12.50)
             .pointValue(50.00)
@@ -141,6 +149,10 @@ public class InstrumentCharacteristics {
             .symbol("GC")
             .contractId("CON.F.US.GC.G26")
             .name("Gold Futures")
+            // Micro contract support: MGC = Micro Gold
+            .microSymbol("MGC")
+            .microTickValue(1.00)     // $1.00/tick (1/10th of GC's $10.00)
+            .microContracts(2)        // 2 micro contracts for Standard quality
             .tickSize(0.10)
             .tickValue(10.00)
             .pointValue(100.00)
@@ -198,6 +210,10 @@ public class InstrumentCharacteristics {
             .symbol("CL")
             .contractId("CON.F.US.CL.G26")
             .name("Crude Oil Futures")
+            // Micro contract support: MCL = Micro Crude Oil
+            .microSymbol("MCL")
+            .microTickValue(1.00)     // $1.00/tick (1/10th of CL's $10.00)
+            .microContracts(2)        // 2 micro contracts for Standard quality
             .tickSize(0.01)
             .tickValue(10.00)
             .pointValue(1000.00)
@@ -259,6 +275,10 @@ public class InstrumentCharacteristics {
             .symbol("6E")
             .contractId("CON.F.US.6E.H26")
             .name("Euro FX Futures")
+            // Micro contract support: M6E = Micro Euro
+            .microSymbol("M6E")
+            .microTickValue(0.625)    // $0.625/tick (1/10th of 6E's $6.25)
+            .microContracts(2)        // 2 micro contracts for Standard quality
             .tickSize(0.00005)
             .tickValue(6.25)
             .pointValue(125000.00)
@@ -315,6 +335,10 @@ public class InstrumentCharacteristics {
             .symbol("6J")
             .contractId("CON.F.US.6J.H26")
             .name("Japanese Yen Futures")
+            // Micro contract support: MJY = E-micro Japanese Yen
+            .microSymbol("MJY")
+            .microTickValue(0.625)    // $0.625/tick (1/10th of 6J's $6.25)
+            .microContracts(2)        // 2 micro contracts for Standard quality
             .tickSize(0.0000005)
             .tickValue(6.25)
             .pointValue(12500000.00)

@@ -21,6 +21,12 @@ public class InstrumentProfile {
     private final String contractId;
     private final String name;
 
+    // Micro contract support (for quality-based sizing)
+    private final String microSymbol;         // Micro version (e.g., MES for ES)
+    private final double microTickValue;      // Tick value for micro (1/10th of full)
+    private final int microContracts;         // Number of micro contracts for Standard quality
+    private final boolean hasMicroContract;   // Whether micro version exists
+
     // Tick/Point values
     private final double tickSize;
     private final double tickValue;
@@ -77,6 +83,10 @@ public class InstrumentProfile {
         this.symbol = builder.symbol;
         this.contractId = builder.contractId;
         this.name = builder.name;
+        this.microSymbol = builder.microSymbol;
+        this.microTickValue = builder.microTickValue;
+        this.microContracts = builder.microContracts;
+        this.hasMicroContract = builder.microSymbol != null && !builder.microSymbol.isEmpty();
         this.tickSize = builder.tickSize;
         this.tickValue = builder.tickValue;
         this.pointValue = builder.pointValue;
@@ -115,6 +125,10 @@ public class InstrumentProfile {
     public String getSymbol() { return symbol; }
     public String getContractId() { return contractId; }
     public String getName() { return name; }
+    public String getMicroSymbol() { return microSymbol; }
+    public double getMicroTickValue() { return microTickValue; }
+    public int getMicroContracts() { return microContracts; }
+    public boolean hasMicroContract() { return hasMicroContract; }
     public double getTickSize() { return tickSize; }
     public double getTickValue() { return tickValue; }
     public double getPointValue() { return pointValue; }
@@ -200,6 +214,71 @@ public class InstrumentProfile {
         return false;
     }
 
+    /**
+     * Determine if we should use micro contracts based on raid quality score.
+     *
+     * Score 4-5 (Standard): Use MICRO contracts (lower risk)
+     * Score 6-7 (Premium): Use FULL contracts
+     * Score 8-10 (Elite): Use FULL contracts
+     *
+     * @param raidQualityScore The quality score (1-10)
+     * @return true if micro contracts should be used
+     */
+    public boolean shouldUseMicro(int raidQualityScore) {
+        // Only use micro for Standard quality (4-5) and if micro exists
+        return hasMicroContract && raidQualityScore >= 4 && raidQualityScore <= 5;
+    }
+
+    /**
+     * Get the appropriate symbol based on raid quality score.
+     *
+     * @param raidQualityScore The quality score (1-10), or -1 if no raid
+     * @return Micro symbol for Standard quality (4-5), full symbol otherwise
+     */
+    public String getSymbolForQuality(int raidQualityScore) {
+        if (shouldUseMicro(raidQualityScore)) {
+            return microSymbol;
+        }
+        return symbol;
+    }
+
+    /**
+     * Get the appropriate quantity based on raid quality score.
+     *
+     * Score 4-5 (Standard): Use micro contracts (microContracts field, default 2)
+     * Score 6-7 (Premium): Use full contracts (baseContracts)
+     * Score 8-10 (Elite): Use full contracts (baseContracts)
+     *
+     * @param raidQualityScore The quality score (1-10), or -1 if no raid
+     * @return Number of contracts to trade
+     */
+    public int getQuantityForQuality(int raidQualityScore) {
+        if (shouldUseMicro(raidQualityScore)) {
+            return microContracts;
+        }
+        return baseContracts;
+    }
+
+    /**
+     * Get tick value for the symbol being used based on quality.
+     */
+    public double getTickValueForQuality(int raidQualityScore) {
+        if (shouldUseMicro(raidQualityScore)) {
+            return microTickValue;
+        }
+        return tickValue;
+    }
+
+    /**
+     * Get a description of the contract sizing for logging.
+     */
+    public String getContractSizingDescription(int raidQualityScore) {
+        if (shouldUseMicro(raidQualityScore)) {
+            return String.format("MICRO (%s x%d @ $%.2f/tick)", microSymbol, microContracts, microTickValue);
+        }
+        return String.format("FULL (%s x%d @ $%.2f/tick)", symbol, baseContracts, tickValue);
+    }
+
     @Override
     public String toString() {
         return String.format("%s (%s) - $%.2f/tick, ATR: %.2f, OTE: %.2f-%.2f",
@@ -214,6 +293,9 @@ public class InstrumentProfile {
         private String symbol;
         private String contractId;
         private String name;
+        private String microSymbol;
+        private double microTickValue;
+        private int microContracts = 2;  // Default: 2 micro contracts for Standard quality
         private double tickSize;
         private double tickValue;
         private double pointValue;
@@ -250,6 +332,9 @@ public class InstrumentProfile {
         public Builder symbol(String symbol) { this.symbol = symbol; return this; }
         public Builder contractId(String contractId) { this.contractId = contractId; return this; }
         public Builder name(String name) { this.name = name; return this; }
+        public Builder microSymbol(String microSymbol) { this.microSymbol = microSymbol; return this; }
+        public Builder microTickValue(double microTickValue) { this.microTickValue = microTickValue; return this; }
+        public Builder microContracts(int microContracts) { this.microContracts = microContracts; return this; }
         public Builder tickSize(double tickSize) { this.tickSize = tickSize; return this; }
         public Builder tickValue(double tickValue) { this.tickValue = tickValue; return this; }
         public Builder pointValue(double pointValue) { this.pointValue = pointValue; return this; }

@@ -87,6 +87,10 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     // Active raid from ChartStateManager (for enhanced quality scoring)
     private LiquidityRaid currentActiveRaid = null;
 
+    // Current trade symbol (may be micro version based on raid quality)
+    private String currentTradeSymbol = null;
+    private boolean usingMicroContract = false;
+
     public InstrumentSpecificStrategy(InstrumentProfile profile, EventBus eventBus,
                                        CorrelationTracker sharedCorrelationTracker) {
         this.profile = profile;
@@ -885,9 +889,14 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
 
         // Print raid quality info if available
         if (currentActiveRaid != null) {
+            int raidScore = currentActiveRaid.getQualityScore();
             System.out.println("[" + profile.getSymbol() + "] ★ Raid Quality: " +
-                    currentActiveRaid.getQualityScore() + "/10 (" + currentActiveRaid.getQualityClassification() + ") @ " +
+                    raidScore + "/10 (" + currentActiveRaid.getQualityClassification() + ") @ " +
                     currentActiveRaid.getTargetLevel().getType().getDisplayName());
+
+            // Show contract sizing based on quality
+            System.out.println("[" + profile.getSymbol() + "] 📦 Contract: " +
+                    profile.getContractSizingDescription(raidScore));
         }
 
         System.out.println("[" + profile.getSymbol() + "] R:R Target: 1:" + currentTier.getRiskRewardRatio() +
@@ -896,14 +905,27 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
 
     /**
      * Generate signal with tier-based R:R and instrument-specific sizing.
+     * Uses micro contracts for Standard quality (score 4-5) setups.
      */
     private void generateSignal(Candle candle, StrategyContext context) {
         MarketBias bias = structureDetector.getBias();
         LiquiditySweep sweep = liquidityDetector.getLastSweep();
 
-        // Calculate position size based on ATR and instrument limits
+        // Determine raid quality score for symbol/quantity selection
+        int raidQualityScore = currentActiveRaid != null ? currentActiveRaid.getQualityScore() : 6;
+
+        // Get appropriate symbol based on quality (micro for 4-5, full for 6+)
+        currentTradeSymbol = profile.getSymbolForQuality(raidQualityScore);
+        usingMicroContract = profile.shouldUseMicro(raidQualityScore);
+
+        // Calculate position size based on quality and ATR
         double currentAtr = atrCalculator.getCurrentAtr();
-        if (currentAtr < profile.getLowVolatilityThreshold()) {
+        if (usingMicroContract) {
+            // Using micro contracts for Standard quality
+            recommendedQuantity = profile.getMicroContracts();
+            System.out.println("[" + profile.getSymbol() + "] ⚡ MICRO MODE: Score " + raidQualityScore +
+                    " → Using " + currentTradeSymbol + " x" + recommendedQuantity);
+        } else if (currentAtr < profile.getLowVolatilityThreshold()) {
             recommendedQuantity = profile.getLowVolContracts();
         } else if (currentAtr > profile.getHighVolatilityThreshold()) {
             recommendedQuantity = 1;  // Conservative in high vol
@@ -960,9 +982,12 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
 
         String reason = buildSignalReason("Bullish", candle);
 
+        // Use micro or full symbol based on raid quality
+        String signalSymbol = currentTradeSymbol != null ? currentTradeSymbol : profile.getSymbol();
+
         StrategySignalEvent signal = new StrategySignalEvent(
                 StrategySignalEvent.SignalType.LONG_ENTRY,
-                profile.getSymbol(),
+                signalSymbol,
                 OrderSide.BUY,
                 entry,
                 stop,
@@ -971,6 +996,11 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
                 currentTier,
                 recommendedQuantity
         );
+
+        // Log micro/full contract info
+        if (usingMicroContract) {
+            System.out.println("[" + profile.getSymbol() + "] 📊 LONG Signal using MICRO: " + signalSymbol + " x" + recommendedQuantity);
+        }
 
         eventBus.publish(signal);
     }
@@ -1016,9 +1046,12 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
 
         String reason = buildSignalReason("Bearish", candle);
 
+        // Use micro or full symbol based on raid quality
+        String signalSymbol = currentTradeSymbol != null ? currentTradeSymbol : profile.getSymbol();
+
         StrategySignalEvent signal = new StrategySignalEvent(
                 StrategySignalEvent.SignalType.SHORT_ENTRY,
-                profile.getSymbol(),
+                signalSymbol,
                 OrderSide.SELL,
                 entry,
                 stop,
@@ -1027,6 +1060,11 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
                 currentTier,
                 recommendedQuantity
         );
+
+        // Log micro/full contract info
+        if (usingMicroContract) {
+            System.out.println("[" + profile.getSymbol() + "] 📊 SHORT Signal using MICRO: " + signalSymbol + " x" + recommendedQuantity);
+        }
 
         eventBus.publish(signal);
     }
@@ -1138,5 +1176,21 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     public void resetSignalPending() {
         signalPending = false;
         currentActiveRaid = null;
+        currentTradeSymbol = null;
+        usingMicroContract = false;
+    }
+
+    /**
+     * Check if currently using micro contracts.
+     */
+    public boolean isUsingMicroContract() {
+        return usingMicroContract;
+    }
+
+    /**
+     * Get the current trade symbol (may be micro version).
+     */
+    public String getCurrentTradeSymbol() {
+        return currentTradeSymbol != null ? currentTradeSymbol : profile.getSymbol();
     }
 }
