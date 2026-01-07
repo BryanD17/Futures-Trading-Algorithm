@@ -162,6 +162,46 @@ public class KillzoneClock {
     }
 
     /**
+     * Alias for getKillzoneName() for compatibility with RaidDetector.
+     */
+    public String getCurrentKillzoneName(Instant instant) {
+        return getKillzoneName(instant);
+    }
+
+    /**
+     * Alias for getKillzonePhase() for compatibility with RaidDetector.
+     */
+    public KillzonePhase getCurrentPhase(Instant instant) {
+        return getKillzonePhase(instant);
+    }
+
+    /**
+     * Check if there is session overlap (London/NY or Asia/London).
+     * Session overlaps often produce higher volatility and better setups.
+     */
+    public boolean isSessionOverlap(Instant instant) {
+        ZonedDateTime nyTime = instant.atZone(newYorkZone);
+        LocalTime time = nyTime.toLocalTime();
+
+        // London-NY overlap: London is open (2 AM - 12 PM) and NY is open (9:30 AM - 4 PM)
+        // Overlap is roughly 9:30 AM - 12 PM EST
+        boolean londonOpen = !time.isBefore(londonStart) && time.isBefore(LocalTime.of(12, 0));
+        boolean nyOpen = (!time.isBefore(LocalTime.of(9, 30)) && time.isBefore(nyPmEnd));
+
+        if (londonOpen && nyOpen) {
+            return true;
+        }
+
+        // Asia-London overlap is less common for futures, but check anyway
+        // Asia: 7 PM - 4 AM, London: 2 AM - 12 PM
+        // Overlap: 2 AM - 4 AM EST
+        boolean asiaOpen = !time.isBefore(asianStart) || time.isBefore(asianEnd);
+        boolean londonEarly = !time.isBefore(londonStart) && time.isBefore(LocalTime.of(4, 0));
+
+        return asiaOpen && londonEarly;
+    }
+
+    /**
      * Get detailed info about current killzone and phase.
      */
     public String getDetailedInfo(Instant instant) {

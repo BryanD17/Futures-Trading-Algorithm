@@ -66,6 +66,22 @@ public class KnownLevel {
         this.barsSinceCreation = 0;
     }
 
+    /**
+     * Convenience constructor for simple level creation without instrument/expiry.
+     * Used by RaidDetector and LevelEngine for quick level creation.
+     */
+    public KnownLevel(LevelType type, double price, Instant createdAt) {
+        this(type.name(), type, price, createdAt, null);
+    }
+
+    /**
+     * Convenience constructor with cluster size (for equal highs/lows).
+     * Used by RaidDetector and LevelEngine for equal level creation.
+     */
+    public KnownLevel(LevelType type, double price, Instant createdAt, int clusterSize) {
+        this(type.name(), type, price, createdAt, null, clusterSize, 0.0);
+    }
+
     private static String generateId(String instrument, LevelType type, double price, Instant createdAt) {
         return String.format("%s_%s_%.5f_%d", instrument, type.name(), price, createdAt.toEpochMilli());
     }
