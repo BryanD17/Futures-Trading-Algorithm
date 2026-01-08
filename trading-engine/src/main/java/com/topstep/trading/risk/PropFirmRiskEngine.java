@@ -17,12 +17,18 @@ public class PropFirmRiskEngine {
 
     // Tick values (dollar value per tick) for different instruments
     private static final double TICK_VALUE_ES = 12.50;  // ES: $12.50 per tick (0.25 point)
+    private static final double TICK_VALUE_MES = 1.25;  // MES (Micro ES): $1.25 per tick (1/10th of ES)
     private static final double TICK_VALUE_NQ = 5.00;   // NQ: $5.00 per tick (0.25 point)
+    private static final double TICK_VALUE_MNQ = 0.50;  // MNQ (Micro NQ): $0.50 per tick (1/10th of NQ)
     private static final double TICK_VALUE_6E = 6.25;   // Euro FX: $6.25 per tick (125,000 EUR × 0.00005)
+    private static final double TICK_VALUE_M6E = 0.625; // M6E (Micro Euro): $0.625 per tick (1/10th of 6E)
     private static final double TICK_VALUE_6J = 6.25;   // Japanese Yen: $6.25 per tick (12,500,000 JPY × 0.0000005)
+    private static final double TICK_VALUE_MJY = 0.625; // MJY (E-micro Yen): $0.625 per tick (1/10th of 6J)
     private static final double TICK_VALUE_6B = 6.25;   // British Pound: $6.25 per tick (62,500 GBP × 0.0001)
     private static final double TICK_VALUE_CL = 10.00;  // Crude Oil: $10.00 per tick (1,000 barrels × 0.01)
+    private static final double TICK_VALUE_MCL = 1.00;  // MCL (Micro Crude): $1.00 per tick (1/10th of CL)
     private static final double TICK_VALUE_GC = 10.00;  // Gold: $10.00 per tick (100 oz × 0.10)
+    private static final double TICK_VALUE_MGC = 1.00;  // MGC (Micro Gold): $1.00 per tick (1/10th of GC)
     private static final double TICK_VALUE_NG = 10.00;  // Natural Gas: $10.00 per tick (10,000 MMBtu × 0.001)
     private static final double TICK_VALUE_SI = 25.00;  // Silver: $25.00 per tick (5,000 oz × 0.005)
 
@@ -175,27 +181,38 @@ public class PropFirmRiskEngine {
     private double getTickValue(String symbol) {
         switch (symbol.toUpperCase()) {
             case "ES":
-            case "MES":
                 return TICK_VALUE_ES;
+            case "MES":
+                return TICK_VALUE_MES;  // Micro ES: $1.25/tick
             case "NQ":
-            case "MNQ":
                 return TICK_VALUE_NQ;
+            case "MNQ":
+                return TICK_VALUE_MNQ;  // Micro NQ: $0.50/tick
             case "6E":
                 return TICK_VALUE_6E;
+            case "M6E":
+                return TICK_VALUE_M6E;  // Micro Euro: $0.625/tick
             case "6J":
                 return TICK_VALUE_6J;
+            case "MJY":
+                return TICK_VALUE_MJY;  // E-micro Yen: $0.625/tick
             case "6B":
                 return TICK_VALUE_6B;
             case "CL":
                 return TICK_VALUE_CL;
+            case "MCL":
+                return TICK_VALUE_MCL;  // Micro Crude: $1.00/tick
             case "GC":
                 return TICK_VALUE_GC;
+            case "MGC":
+                return TICK_VALUE_MGC;  // Micro Gold: $1.00/tick
             case "NG":
                 return TICK_VALUE_NG;
             case "SI":
                 return TICK_VALUE_SI;
             default:
                 // Default to ES tick value for unknown instruments
+                System.out.println("[RISK] WARNING: Unknown symbol '" + symbol + "' using ES tick value");
                 return TICK_VALUE_ES;
         }
     }
@@ -212,14 +229,18 @@ public class PropFirmRiskEngine {
             case "MNQ":
                 return TICK_SIZE_NQ;
             case "6E":
+            case "M6E":
                 return TICK_SIZE_6E;
             case "6J":
+            case "MJY":
                 return TICK_SIZE_6J;
             case "6B":
                 return TICK_SIZE_6B;
             case "CL":
+            case "MCL":
                 return TICK_SIZE_CL;
             case "GC":
+            case "MGC":
                 return TICK_SIZE_GC;
             case "NG":
                 return TICK_SIZE_NG;
@@ -253,21 +274,33 @@ public class PropFirmRiskEngine {
     private double getMaxRiskMultiplier(String symbol) {
         switch (symbol.toUpperCase()) {
             case "6J":
+            case "MJY":
                 // Japanese Yen: tiny tick size (0.0000005) means 200+ ticks for typical stops
                 // 200 ticks * $6.25 = $1,250 typical risk - needs 5x ($1,250 max)
+                // MJY has 1/10th tick value but same stop distance logic
                 return 5.0;
             case "SI":
                 // Silver: $25/tick - needs 4x to handle $0.25 stop ($1,000 max)
                 return 4.0;
             case "NQ":
-            case "MNQ":
                 // NQ: $5/tick, 50-point stop = 200 ticks * $5 = $1,000 - needs 4x
                 return 4.0;
+            case "MNQ":
+                // MNQ: $0.50/tick - micro contract is 1/10th so less risk multiplier needed
+                return 2.0;
             case "GC":
             case "NG":
             case "CL":
                 // Gold, NatGas, Crude: $10/tick - needs 3x to handle typical stops ($750 max)
                 return 3.0;
+            case "MGC":
+            case "MCL":
+                // Micro Gold/Crude: $1.00/tick - needs less multiplier
+                return 2.0;
+            case "MES":
+            case "M6E":
+                // Micro contracts have smaller tick values - standard multiplier
+                return 2.0;
             default:
                 // ES, 6E, 6B and others: standard 2x ($500 max)
                 return 2.0;

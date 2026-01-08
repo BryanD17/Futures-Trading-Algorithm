@@ -3,6 +3,7 @@ package com.topstep.trading.strategy;
 import com.topstep.trading.chartstate.ChartStateIntegration;
 import com.topstep.trading.chartstate.ChartStateManager;
 import com.topstep.trading.chartstate.LiquidityRaid;
+import com.topstep.trading.chartstate.RaidDirection;
 import com.topstep.trading.domain.Candle;
 import com.topstep.trading.domain.OrderSide;
 import com.topstep.trading.event.EventBus;
@@ -714,7 +715,7 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         if (hasBreaker && hasPower3Confirmation && hasSmtDivergence && hasDisplacement &&
             htfFullAlignment && hasHtfZone) {
             currentTier = TradeTier.TIER_4;
-            if (htfBreaker5m != null) currentBreaker = null;  // Prefer HTF breaker tracking
+            if (htfBreaker5m != null) currentBreaker = htfBreaker5m;  // Prefer HTF breaker tracking
             if (htfFvg15m != null) currentFvg = htfFvg15m;
             printTier4Signal(candle, bias, sweep, "Breaker+Power3+SMT+Disp [HTF:30m+15m✓]");
             return true;
@@ -942,9 +943,16 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         }
         recommendedQuantity = Math.min(recommendedQuantity, maxPositionSize);
 
-        if (bias == MarketBias.BULLISH && sweep.isBullish()) {
+        // Check bias alignment with sweep direction (null-safe)
+        boolean sweepAlignsBullish = sweep != null && sweep.isBullish();
+        boolean sweepAlignsBearish = sweep != null && sweep.isBearish();
+        // Also allow if we have an active raid from ChartState without legacy sweep
+        boolean raidAlignsBullish = currentActiveRaid != null && currentActiveRaid.getDirection() == RaidDirection.LOW_SWEEP;
+        boolean raidAlignsBearish = currentActiveRaid != null && currentActiveRaid.getDirection() == RaidDirection.HIGH_SWEEP;
+
+        if (bias == MarketBias.BULLISH && (sweepAlignsBullish || raidAlignsBullish)) {
             generateBullishSignal(candle, sweep);
-        } else if (bias == MarketBias.BEARISH && sweep.isBearish()) {
+        } else if (bias == MarketBias.BEARISH && (sweepAlignsBearish || raidAlignsBearish)) {
             generateBearishSignal(candle, sweep);
         }
     }
