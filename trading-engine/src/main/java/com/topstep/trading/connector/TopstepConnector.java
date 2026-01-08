@@ -84,7 +84,7 @@ public class TopstepConnector implements TradingConnector {
 
     // State
     private volatile boolean connected = false;
-    private String authToken;
+    private volatile String authToken;  // Made volatile for thread safety
     private final Map<String, MarketDataListener> marketDataListeners = new ConcurrentHashMap<>();
     private final Map<String, OrderListener> orderListeners = new ConcurrentHashMap<>();
     private final Map<String, String> symbolToContractId = new ConcurrentHashMap<>();
@@ -100,6 +100,8 @@ public class TopstepConnector implements TradingConnector {
 
     // Track subscription status per symbol
     private final Map<String, Boolean> subscriptionStatus = new ConcurrentHashMap<>();
+    // Track scheduled futures for each symbol so they can be cancelled
+    private final Map<String, java.util.concurrent.ScheduledFuture<?>> symbolPollers = new ConcurrentHashMap<>();
 
     // Polling interval in seconds (30 seconds for near real-time data)
     private static final int POLL_INTERVAL_SECONDS = 30;
@@ -953,8 +955,8 @@ public class TopstepConnector implements TradingConnector {
         logger.info("Performing initial fetch for {}", symbol);
         fetchBars(symbol, contractId);
 
-        // Schedule periodic polling
-        marketDataPoller.scheduleAtFixedRate(
+        // Schedule periodic polling and store the future for cancellation
+        java.util.concurrent.ScheduledFuture<?> future = marketDataPoller.scheduleAtFixedRate(
             () -> {
                 logger.debug("Polling market data for {} (scheduled)", symbol);
                 fetchBars(symbol, contractId);
@@ -963,6 +965,7 @@ public class TopstepConnector implements TradingConnector {
             POLL_INTERVAL_SECONDS,
             TimeUnit.SECONDS
         );
+        symbolPollers.put(symbol, future);
     }
 
     @Override
@@ -1032,12 +1035,17 @@ public class TopstepConnector implements TradingConnector {
     public void unsubscribeMarketData(String symbol) {
         logger.info("Unsubscribing from market data for: {}", symbol);
 
+        // Cancel the scheduled poller task for this symbol
+        java.util.concurrent.ScheduledFuture<?> future = symbolPollers.remove(symbol);
+        if (future != null) {
+            future.cancel(false);  // Don't interrupt if running
+            logger.info("Cancelled market data polling task for: {}", symbol);
+        }
+
         marketDataListeners.remove(symbol);
         symbolToContractId.remove(symbol);
         lastBarTimestamp.remove(symbol);
         subscriptionStatus.remove(symbol);
-
-        // Note: The poller will stop processing this symbol since listener is removed
     }
 
     @Override

@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * ExecutionEngine handles order execution and position management.
@@ -61,11 +62,12 @@ public class ExecutionEngine {
 
     public ExecutionEngine(AccountState accountState) {
         this.accountState = accountState;
-        this.activeOrders = new HashMap<>();
+        // CRITICAL: Use ConcurrentHashMap for thread-safe access from multiple threads
+        this.activeOrders = new ConcurrentHashMap<>();
         this.completedTrades = new ArrayList<>();
-        this.tickValues = new HashMap<>();
-        this.orderLevels = new HashMap<>();
-        this.lastPrices = new HashMap<>();
+        this.tickValues = new ConcurrentHashMap<>();
+        this.orderLevels = new ConcurrentHashMap<>();
+        this.lastPrices = new ConcurrentHashMap<>();
 
         // Set default tick values
         initializeTickValues();
