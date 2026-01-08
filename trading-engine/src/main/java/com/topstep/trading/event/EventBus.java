@@ -71,6 +71,55 @@ public class EventBus {
         subscribe(type, handler);
     }
 
+    /**
+     * Unsubscribe a handler from a specific event type.
+     * Prevents memory leaks when components are destroyed.
+     *
+     * @param type The event type to unsubscribe from
+     * @param handler The handler to remove
+     * @return true if handler was found and removed, false otherwise
+     */
+    public <T extends Event> boolean unsubscribe(EventType type, EventHandler<T> handler) {
+        List<EventHandler<? extends Event>> eventHandlers = handlers.get(type);
+        if (eventHandlers != null) {
+            boolean removed = eventHandlers.remove(handler);
+            if (removed) {
+                logger.debug("Unsubscribed handler from event type: {}", type);
+            }
+            return removed;
+        }
+        return false;
+    }
+
+    /**
+     * Unsubscribe a handler from a specific event class.
+     * Convenience method that maps event classes to their EventTypes.
+     */
+    public <T extends Event> boolean unsubscribe(Class<T> eventClass, EventHandler<T> handler) {
+        EventType type = mapClassToEventType(eventClass);
+        return unsubscribe(type, handler);
+    }
+
+    /**
+     * Unsubscribe all handlers for a specific event type.
+     * Use with caution - this removes ALL handlers.
+     */
+    public void unsubscribeAll(EventType type) {
+        List<EventHandler<? extends Event>> removed = handlers.remove(type);
+        if (removed != null) {
+            logger.debug("Removed {} handlers for event type: {}", removed.size(), type);
+        }
+    }
+
+    /**
+     * Clear all handlers (use during shutdown to prevent memory leaks).
+     */
+    public void clearAllHandlers() {
+        int totalHandlers = handlers.values().stream().mapToInt(List::size).sum();
+        handlers.clear();
+        logger.debug("Cleared {} total handlers", totalHandlers);
+    }
+
     private EventType mapClassToEventType(Class<? extends Event> eventClass) {
         String className = eventClass.getSimpleName();
         return switch (className) {

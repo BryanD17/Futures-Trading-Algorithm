@@ -57,18 +57,20 @@ public class BracketOrderManager {
         public final OrderSide entrySide;
         public final TradeTier tier;
 
-        public String stopOrderId;
-        public double stopPrice;
+        // CRITICAL: volatile for thread-safe access from callback threads
+        public volatile String stopOrderId;
+        public volatile double stopPrice;
         public double originalStopPrice;    // Keep track for breakeven calculation
-        public int remainingQuantity;       // Contracts still protected by SL
+        public volatile int remainingQuantity;       // Contracts still protected by SL
 
         // Multi-level take profits
         public List<TakeProfitLevel> takeProfitLevels = new ArrayList<>();
 
-        public boolean stopFilled = false;
-        public boolean allTakesProfitFilled = false;
-        public boolean canceled = false;
-        public boolean movedToBreakeven = false;
+        // CRITICAL: volatile flags for thread-safe checks from callback threads
+        public volatile boolean stopFilled = false;
+        public volatile boolean allTakesProfitFilled = false;
+        public volatile boolean canceled = false;
+        public volatile boolean movedToBreakeven = false;
 
         // Legacy single TP (for backward compatibility)
         public String takeProfitOrderId;

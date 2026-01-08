@@ -12,15 +12,16 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class AccountState {
     private double startingBalance;
-    private double currentBalance;
-    private double realizedPnL;
-    private double unrealizedPnL;
+    // CRITICAL: volatile for thread-safe reads from multiple threads (risk monitoring, UI, etc.)
+    private volatile double currentBalance;
+    private volatile double realizedPnL;
+    private volatile double unrealizedPnL;
 
-    // Topstep-specific tracking
-    private double realizedPnlToday;
-    private double unrealizedPnlToday;
-    private double highestEndOfDayBalance;
-    private LocalDate currentTradingDay;
+    // Topstep-specific tracking - volatile for thread-safe reads
+    private volatile double realizedPnlToday;
+    private volatile double unrealizedPnlToday;
+    private volatile double highestEndOfDayBalance;
+    private volatile LocalDate currentTradingDay;
 
     private final Map<String, Position> positions;
     private final Map<LocalDate, Double> dailyPnL;

@@ -13,6 +13,7 @@ import com.topstep.trading.strategy.*;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Multi-Instrument Trading Engine with HYBRID SIMULTANEOUS TRADING.
@@ -62,7 +63,8 @@ public class MultiInstrumentEngine {
 
     // Scheduler for periodic session checks
     private final ScheduledExecutorService sessionMonitor;
-    private volatile boolean running = false;
+    // CRITICAL: Use AtomicBoolean for thread-safe start/stop operations
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
     // Mode flag - true for hybrid simultaneous, false for session-switching
     private boolean hybridMode = true;
@@ -213,12 +215,11 @@ public class MultiInstrumentEngine {
      * Start the multi-instrument engine.
      */
     public void start() {
-        if (running) {
+        // CRITICAL: Use compareAndSet to prevent race condition on double-start
+        if (!running.compareAndSet(false, true)) {
             System.out.println("[HYBRID ENGINE] Engine already running");
             return;
         }
-
-        running = true;
         System.out.println("\n" + "=".repeat(60));
         System.out.println("HYBRID SIMULTANEOUS TRADING ENGINE STARTING");
         System.out.println("=".repeat(60));
@@ -238,7 +239,7 @@ public class MultiInstrumentEngine {
         // Schedule periodic session checks (for logging/tier bonus, not switching)
         sessionMonitor.scheduleAtFixedRate(
             () -> {
-                if (running) {
+                if (running.get()) {
                     if (hybridMode) {
                         logSessionStatus(Instant.now());
                     } else {
@@ -337,11 +338,11 @@ public class MultiInstrumentEngine {
      * Stop the multi-instrument engine.
      */
     public void stop() {
-        if (!running) {
+        // CRITICAL: Use compareAndSet to prevent race condition on double-stop
+        if (!running.compareAndSet(true, false)) {
             return;
         }
 
-        running = false;
         System.out.println("\n[MultiInstrument] Stopping engine...");
 
         // Shutdown session monitor
@@ -581,7 +582,7 @@ public class MultiInstrumentEngine {
      * Routes to appropriate strategy based on symbol.
      */
     public void onMarketData(Candle candle) {
-        if (!running) {
+        if (!running.get()) {
             return;
         }
 
@@ -739,7 +740,7 @@ public class MultiInstrumentEngine {
      * Check if engine is running.
      */
     public boolean isRunning() {
-        return running;
+        return running.get();
     }
 
     /**
