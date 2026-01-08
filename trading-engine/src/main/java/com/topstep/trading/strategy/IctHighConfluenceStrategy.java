@@ -436,9 +436,10 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         double baseStop = getBaseStopLevel(swingLow, true);
         double stop = baseStop - (5.0 * stopMultiplier);
 
-        // Target: Based on tier R:R
+        // Target: Based on tier R:R (adjusted by tier multiplier for more realistic targets)
         double riskDistance = entry - stop;
-        double target = entry + (riskDistance * currentTier.getRiskRewardRatio());
+        double adjustedRR = currentTier.getRiskRewardRatio() * currentTier.getTierMultiplier();
+        double target = entry + (riskDistance * adjustedRR);
 
         // Validate R:R
         if (riskDistance <= 0) {
@@ -485,9 +486,10 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         double baseStop = getBaseStopLevel(swingHigh, false);
         double stop = baseStop + (5.0 * stopMultiplier);
 
-        // Target: Based on tier R:R
+        // Target: Based on tier R:R (adjusted by tier multiplier for more realistic targets)
         double riskDistance = stop - entry;
-        double target = entry - (riskDistance * currentTier.getRiskRewardRatio());
+        double adjustedRR = currentTier.getRiskRewardRatio() * currentTier.getTierMultiplier();
+        double target = entry - (riskDistance * adjustedRR);
 
         // Validate R:R
         if (riskDistance <= 0) {
