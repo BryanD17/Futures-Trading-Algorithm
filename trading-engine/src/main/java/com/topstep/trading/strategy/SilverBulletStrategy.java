@@ -49,6 +49,9 @@ public class SilverBulletStrategy implements TradingStrategy {
     private final DisplacementDetector displacementDetector;
     private final SilverBulletClock.LiquidityTargets liquidityTargets;
 
+    // Multi-timeframe analysis (NEW)
+    private final MultiTimeframeAnalyzer mtfAnalyzer;
+
     // Configuration
     private final double tickSize;
     private final double tickValue;
@@ -91,6 +94,9 @@ public class SilverBulletStrategy implements TradingStrategy {
         this.displacementDetector = new DisplacementDetector(14);  // 14 period ATR, 1.5x threshold
         this.liquidityTargets = new SilverBulletClock.LiquidityTargets();
 
+        // Initialize multi-timeframe analysis (NEW)
+        this.mtfAnalyzer = new MultiTimeframeAnalyzer(symbol, barManager);
+
         this.isActive = false;
         this.inPosition = false;
         this.hasLiquidityRaid = false;
@@ -99,8 +105,9 @@ public class SilverBulletStrategy implements TradingStrategy {
 
     @Override
     public void onCandle(Candle candle, StrategyContext context) {
-        // Process candle through bar aggregation
-        barManager.processCandle(candle);
+        // Process candle through bar aggregation and update MTF analysis
+        java.util.Map<BarAggregationManager.Timeframe, Candle> completedCandles = barManager.processCandle(candle);
+        mtfAnalyzer.update(completedCandles);
 
         // Update all detectors with 1m candle
         liquidityDetector.updatePrimary(candle);
@@ -228,6 +235,16 @@ public class SilverBulletStrategy implements TradingStrategy {
             return null;
         }
 
+        // Step 2.5: HTF BIAS CHECK (NEW) - 15m bias must not oppose trade direction
+        MarketBias bias15m = mtfAnalyzer.getHtfBias15m();
+        boolean htf15mOpposing = (expectedMssDirection && bias15m == MarketBias.BEARISH) ||
+                                 (!expectedMssDirection && bias15m == MarketBias.BULLISH);
+        if (htf15mOpposing) {
+            System.out.println("[SB] " + symbol + " REJECTED: 15m bias (" + bias15m +
+                    ") opposes trade direction (" + (expectedMssDirection ? "BULLISH" : "BEARISH") + ")");
+            return null;
+        }
+
         // Step 3: Find entry FVG created after MSS
         FairValueGap fvg = findEntryFvg(expectedMssDirection, candle.getClose());
         if (fvg == null) {
@@ -271,6 +288,8 @@ public class SilverBulletStrategy implements TradingStrategy {
         System.out.println("[SB] SILVER BULLET SETUP - " + symbol);
         System.out.println("  Window: " + sbClock.getCurrentWindow(now).getName());
         System.out.println("  Direction: " + (expectedMssDirection ? "BULLISH (Long)" : "BEARISH (Short)"));
+        System.out.println("  HTF: 30m=" + mtfAnalyzer.getHtfBias30m() + ", 15m=" + mtfAnalyzer.getHtfBias15m() +
+                          " | Aligned: " + (mtfAnalyzer.htfBiasAligns(expectedMssDirection) ? "✓" : "~"));
         System.out.println("  Raid Level: " + raidLevel);
         System.out.println("  MSS Level: " + mss.breakLevel);
         System.out.println("  Entry FVG: " + fvg.getBottom() + " - " + fvg.getTop());
@@ -371,25 +390,59 @@ public class SilverBulletStrategy implements TradingStrategy {
     }
 
     /**
-     * Grade the setup tier based on confluences.
+     * Grade the setup tier based on confluences including HTF analysis.
      */
     private TradeTier gradeTier(MarketStructureShiftDetector.MSS mss, FairValueGap fvg, Instant now) {
         int confluenceScore = 0;
+        boolean isBullish = fvg.isBullish();
 
-        // Check for Order Block alignment (use 5m/15m from bar manager)
-        OrderBlock ob = obDetector.findNearestValidOb(fvg.getMidpoint(), fvg.isBullish(), 10);
+        // ═══════════════════════════════════════════════════════════════════════════
+        // HTF ALIGNMENT SCORING (NEW - Major factor for tier determination)
+        // ═══════════════════════════════════════════════════════════════════════════
+        // Full HTF alignment (30m + 15m) = +4 points (major boost)
+        if (mtfAnalyzer.htfBiasAligns(isBullish)) {
+            confluenceScore += 4;
+        } else if (mtfAnalyzer.getHtfBias15m() == (isBullish ? MarketBias.BULLISH : MarketBias.BEARISH)) {
+            // 15m aligned but not 30m = +2 points
+            confluenceScore += 2;
+        }
+
+        // Check for HTF FVG or OB confluence (NEW)
+        MultiTimeframeAnalyzer.FvgResult htfFvg = mtfAnalyzer.findBestHtfFvg(fvg.getMidpoint(), isBullish, 20);
+        if (htfFvg != null) {
+            confluenceScore += 2;  // HTF FVG alignment
+        }
+
+        MultiTimeframeAnalyzer.ObResult htfOb = mtfAnalyzer.findBestHtfOb(fvg.getMidpoint(), isBullish, 20);
+        if (htfOb != null) {
+            confluenceScore += 2;  // HTF OB alignment
+        }
+
+        // Check for Order Block alignment (1m)
+        OrderBlock ob = obDetector.findNearestValidOb(fvg.getMidpoint(), isBullish, 10);
         if (ob != null) {
             confluenceScore += 2;
         }
 
         // Check for Breaker Block alignment
-        BreakerBlock breaker = breakerDetector.findNearestBreaker(fvg.getMidpoint(), fvg.isBullish(), 10);
+        BreakerBlock breaker = breakerDetector.findNearestBreaker(fvg.getMidpoint(), isBullish, 10);
         if (breaker != null) {
             confluenceScore += 3;  // Breakers are higher quality
         }
 
+        // Check for HTF Breaker (5m) - even better
+        BreakerBlock htfBreaker = mtfAnalyzer.findBestBreaker(fvg.getMidpoint(), isBullish, 20);
+        if (htfBreaker != null) {
+            confluenceScore += 2;  // Additional points for HTF breaker
+        }
+
         // Check for strong displacement
         if (mss.strength > tickSize * 5) {
+            confluenceScore += 1;
+        }
+
+        // Check for MTF displacement confirmation
+        if (mtfAnalyzer.hasConfirmedDisplacement(isBullish)) {
             confluenceScore += 1;
         }
 
@@ -404,15 +457,16 @@ public class SilverBulletStrategy implements TradingStrategy {
             confluenceScore += 1;
         }
 
-        // Grade tier based on score
-        if (confluenceScore >= 7) {
-            return TradeTier.TIER_4;  // Elite SB
-        } else if (confluenceScore >= 5) {
+        // Grade tier based on score (adjusted thresholds for HTF integration)
+        // With HTF scoring, max possible is ~18 points
+        if (confluenceScore >= 10) {
+            return TradeTier.TIER_4;  // Elite SB with HTF alignment
+        } else if (confluenceScore >= 7) {
             return TradeTier.TIER_3;  // Premium SB
-        } else if (confluenceScore >= 3) {
+        } else if (confluenceScore >= 4) {
             return TradeTier.TIER_2;  // Standard SB
         } else {
-            return TradeTier.TIER_1;  // Lite SB
+            return TradeTier.TIER_1;  // Lite SB (only if HTF not opposing)
         }
     }
 
@@ -472,5 +526,12 @@ public class SilverBulletStrategy implements TradingStrategy {
      */
     public String getWindowInfo(Instant now) {
         return sbClock.getDetailedInfo(now);
+    }
+
+    /**
+     * Get the multi-timeframe analyzer for external access.
+     */
+    public MultiTimeframeAnalyzer getMtfAnalyzer() {
+        return mtfAnalyzer;
     }
 }
