@@ -1145,7 +1145,15 @@ public class LiveEngineRunner {
 
                 if (orderId != null && !orderId.isEmpty()) {
                     connector.cancelOrder(orderId);
-                    System.out.println("  ✓ Cancelled on exchange: " + orderId);
+                    // Check if it was a server-assigned ID (numeric) or client-generated
+                    try {
+                        Long.parseLong(orderId);
+                        System.out.println("  ✓ Cancelled on exchange: " + orderId);
+                    } catch (NumberFormatException e) {
+                        System.out.println("  ⚠ Removed from local tracking (no server ID): " + orderId);
+                    }
+                } else {
+                    System.out.println("  ⚠ Order had no ID - removed from local tracking only");
                 }
 
                 // Remove from execution engine
