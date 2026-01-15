@@ -1133,8 +1133,10 @@ public class TopstepConnector implements TradingConnector {
 
             // Get server order ID
             String serverId = clientOrderId;
+            boolean hasServerAssignedId = false;
             if (json.has("orderId") && !json.get("orderId").isNull()) {
                 serverId = json.get("orderId").asText();
+                hasServerAssignedId = true;
                 if (!serverId.equals(clientOrderId)) {
                     orderListeners.remove(clientOrderId);
                     orderListeners.put(serverId, listener);
@@ -1142,12 +1144,18 @@ public class TopstepConnector implements TradingConnector {
                 }
             } else if (json.has("id") && !json.get("id").isNull()) {
                 serverId = json.get("id").asText();
+                hasServerAssignedId = true;
                 orderListeners.remove(clientOrderId);
                 orderListeners.put(serverId, listener);
                 order.setOrderId(serverId);
             }
 
-            logger.info("Order submitted successfully: {}", serverId);
+            if (!hasServerAssignedId) {
+                logger.warn("API response did not include server-assigned order ID. Order {} may not be cancellable. Response: {}",
+                    clientOrderId, responseBody);
+            }
+
+            logger.info("Order submitted successfully: {} (server-assigned={})", serverId, hasServerAssignedId);
 
             // CRITICAL: Track order in pendingOrders for fill status polling
             // This enables the polling mechanism to detect fills and trigger callbacks
@@ -1386,14 +1394,26 @@ public class TopstepConnector implements TradingConnector {
     public void cancelOrder(String orderId) throws Exception {
         logger.info("Cancelling order: {}", orderId);
 
+        // Skip cancellation for orders without a valid server-assigned ID
+        // This can happen when API response didn't include orderId/id fields
+        if (orderId == null || orderId.isEmpty()) {
+            logger.warn("Cannot cancel order with null or empty ID - order may not have been submitted to server");
+            return;
+        }
+
         // Parse order ID - must be numeric (server-assigned ID)
         long numericOrderId;
         try {
             numericOrderId = Long.parseLong(orderId);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException(
-                "Cannot cancel order with non-numeric ID: " + orderId +
-                ". Use the server-assigned order ID from submitOrder response.");
+            // Order has a client-generated ID (ORD-xxx or UUID), not a server-assigned numeric ID
+            // This means the server never acknowledged the order or didn't return an ID
+            logger.warn("Cannot cancel order with non-numeric ID '{}' - order may not have server acknowledgment. " +
+                "Removing from local tracking only.", orderId);
+            // Remove from listeners since we can't cancel it on the server
+            orderListeners.remove(orderId);
+            pendingOrders.remove(orderId);
+            return;
         }
 
         // Get numeric account ID (required by ProjectX Gateway)

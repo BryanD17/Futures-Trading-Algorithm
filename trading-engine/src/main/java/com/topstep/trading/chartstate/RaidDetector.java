@@ -202,7 +202,7 @@ public class RaidDetector {
                     // Notify listeners
                     notifyRaidListeners(raid);
                 } else {
-                    log.debug("[{}] Raid below threshold: {} @ {} (score={} < {})",
+                    log.trace("[{}] Raid below threshold: {} @ {} (score={} < {})",
                             symbol, direction.getDisplayName(), level.getType().getDisplayName(),
                             score, config.getMinQualityThreshold());
                 }
@@ -308,7 +308,7 @@ public class RaidDetector {
                 raid.expire();
                 recentRaids.put(raid.getId(), raid);
                 it.remove();
-                log.debug("[{}] Raid expired: {}", symbol, raid.getId());
+                log.trace("[{}] Raid expired: {}", symbol, raid.getId());
             }
         }
 
@@ -332,7 +332,7 @@ public class RaidDetector {
             if (raid.getDirection() == RaidDirection.HIGH_SWEEP) {
                 if (newHigh > raid.getRaidCandleHigh()) {
                     raid.invalidate();
-                    log.debug("[{}] Raid invalidated by new high: {}", symbol, raid.getId());
+                    log.trace("[{}] Raid invalidated by new high: {}", symbol, raid.getId());
                 }
             }
         }
@@ -347,7 +347,7 @@ public class RaidDetector {
             if (raid.getDirection() == RaidDirection.LOW_SWEEP) {
                 if (newLow < raid.getRaidCandleLow()) {
                     raid.invalidate();
-                    log.debug("[{}] Raid invalidated by new low: {}", symbol, raid.getId());
+                    log.trace("[{}] Raid invalidated by new low: {}", symbol, raid.getId());
                 }
             }
         }
