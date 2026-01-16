@@ -5,8 +5,14 @@ import com.topstep.trading.domain.OrderSide;
 import com.topstep.trading.event.EventBus;
 import com.topstep.trading.event.StrategySignalEvent;
 import com.topstep.trading.strategy.BarAggregationManager.Timeframe;
+import com.topstep.trading.chartstate.RaidDetector;
+import com.topstep.trading.chartstate.LiquidityRaid;
+import com.topstep.trading.chartstate.LevelEngine;
+import com.topstep.trading.chartstate.EqualLevelDetector;
+import com.topstep.trading.chartstate.CandleSeries;
 
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * ICT High-Confluence Strategy combining multiple ICT/SMC concepts:
@@ -52,6 +58,15 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private final BarAggregationManager barManager;
     private final MultiTimeframeAnalyzer mtfAnalyzer;
 
+    // Advanced market structure detectors (NEW)
+    private final VolumeProfileAnalyzer volumeProfileAnalyzer;
+    private final ConsolidationDetector consolidationDetector;
+    private final TrendlineDetector trendlineDetector;
+    private final CandleSeries candleSeries;
+    private final LevelEngine levelEngine;
+    private final EqualLevelDetector equalLevelDetector;
+    private final RaidDetector raidDetector;
+
     // Configuration
     private final double fibLow = 0.62;   // OTE zone low
     private final double fibHigh = 0.705; // OTE zone high
@@ -90,6 +105,15 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private int htfConfluenceScore = 0;       // NEW: Track HTF score
     private int recommendedQuantity = 1;
 
+    // Advanced confluence state (NEW)
+    private int volumeConfluenceScore = 0;
+    private int consolidationScore = 0;
+    private int trendlineScore = 0;
+    private boolean hasVolumeSpike = false;
+    private boolean isConsolidating = false;
+    private boolean hasTrendlineBreak = false;
+    private SmtDivergenceResult smtResult = null;
+
     public IctHighConfluenceStrategy(String primarySymbol, String smtSymbol, EventBus eventBus) {
         this.primarySymbol = primarySymbol;
         this.smtSymbol = smtSymbol;
@@ -114,6 +138,44 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         // 100 candles per timeframe provides ~1.5 hours of 1m data, ~8 hours of 5m, etc.
         this.barManager = new BarAggregationManager(primarySymbol, 100);
         this.mtfAnalyzer = new MultiTimeframeAnalyzer(primarySymbol, barManager);
+
+        // Initialize advanced market structure detectors (NEW)
+        double tickSize = getTickSizeForSymbol(primarySymbol);
+        this.volumeProfileAnalyzer = new VolumeProfileAnalyzer(primarySymbol, tickSize);
+        this.consolidationDetector = new ConsolidationDetector(primarySymbol, tickSize);
+        this.trendlineDetector = new TrendlineDetector(primarySymbol, tickSize);
+
+        // Initialize candle series and raid detection
+        this.candleSeries = new CandleSeries(5000);  // 5000 candle capacity
+        this.levelEngine = new LevelEngine(primarySymbol);
+        this.equalLevelDetector = new EqualLevelDetector(primarySymbol, candleSeries);
+        this.raidDetector = new RaidDetector(primarySymbol, levelEngine, equalLevelDetector, candleSeries);
+
+        // Setup automatic raid confirmation listener
+        setupRaidConfirmation();
+    }
+
+    /**
+     * Get tick size for symbol (instrument-specific).
+     */
+    private double getTickSizeForSymbol(String symbol) {
+        if (symbol.contains("ES") || symbol.contains("MES")) return 0.25;
+        if (symbol.contains("NQ") || symbol.contains("MNQ")) return 0.25;
+        if (symbol.contains("CL")) return 0.01;
+        if (symbol.contains("GC")) return 0.10;
+        return 0.25;  // Default
+    }
+
+    /**
+     * Setup automatic raid confirmation after MSS/Displacement.
+     * This connects RaidDetector to the displacement detection system.
+     */
+    private void setupRaidConfirmation() {
+        raidDetector.addRaidListener(raid -> {
+            // When a new raid is detected, check if displacement follows
+            System.out.println("[" + primarySymbol + "] AUTO-RAID: New raid detected - " +
+                    raid.getDirection().getDisplayName() + " @ " + raid.getLevel().getType().getDisplayName());
+        });
     }
 
     @Override
@@ -185,6 +247,54 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         Map<Timeframe, Candle> completedCandles = barManager.processCandle(candle);
         // Update MTF detectors with any newly completed candles
         mtfAnalyzer.update(completedCandles);
+
+        // Update advanced market structure detectors (NEW)
+        candleSeries.add(candle);
+        levelEngine.processCandle(candle);
+        volumeProfileAnalyzer.update(candle);
+        consolidationDetector.update(candle);
+        trendlineDetector.update(candle);
+        equalLevelDetector.ageAndCleanupLevels();
+
+        // Update raid detector with context for SMT/HTF bias
+        MarketBias bias1m = structureDetector.getBias();
+        Boolean htfBullish = (bias1m == MarketBias.BULLISH) ? Boolean.TRUE :
+                             (bias1m == MarketBias.BEARISH) ? Boolean.FALSE : null;
+        boolean hasSmt = correlationTracker.hasSMTDivergence(primarySymbol, smtSymbol, 10);
+        RaidDetector.RaidDetectionContext raidContext =
+                RaidDetector.RaidDetectionContext.full(hasSmt, htfBullish);
+        raidDetector.processCandle(candle, raidContext);
+
+        // AUTO-CONFIRM RAIDS: Check for displacement/MSS after raid detection
+        autoConfirmActiveRaids(candle);
+    }
+
+    /**
+     * Automatically confirm active raids when displacement or MSS/FVG is detected.
+     */
+    private void autoConfirmActiveRaids(Candle candle) {
+        for (LiquidityRaid raid : raidDetector.getActiveRaids()) {
+            if (raid.getState() == com.topstep.trading.chartstate.RaidState.ACTIVE) {
+                boolean isBullishRaid = raid.getDirection() == com.topstep.trading.chartstate.RaidDirection.LOW_SWEEP;
+
+                // Check displacement in the raid direction
+                boolean hasDisp = displacementDetector.hasRecentDisplacement(5, isBullishRaid);
+
+                // Check if structure bias matches raid direction (MSS confirmation)
+                MarketBias currentBias = structureDetector.getBias();
+                boolean hasMss = (isBullishRaid && currentBias == MarketBias.BULLISH) ||
+                                 (!isBullishRaid && currentBias == MarketBias.BEARISH);
+
+                // Check for FVG in raid direction
+                boolean hasFvg = fvgDetector.hasFvgInDirection(isBullishRaid);
+
+                if (hasDisp || (hasMss && hasFvg)) {
+                    raidDetector.confirmRaid(raid.getId(), hasDisp, hasMss, hasFvg);
+                    System.out.println("[" + primarySymbol + "] AUTO-RAID CONFIRMED: " + raid.getId() +
+                            " (disp=" + hasDisp + ", mss=" + hasMss + ", fvg=" + hasFvg + ")");
+                }
+            }
+        }
     }
 
     /**
@@ -203,6 +313,13 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         hasPower3Confirmation = false;
         hasHtfAlignment = false;
         htfConfluenceScore = 0;
+        volumeConfluenceScore = 0;
+        consolidationScore = 0;
+        trendlineScore = 0;
+        hasVolumeSpike = false;
+        isConsolidating = false;
+        hasTrendlineBreak = false;
+        smtResult = null;
 
         // 1. Check killzone and phase
         boolean inKillzone = killzoneClock.isInKillzone(candle.getTimestamp());
@@ -297,6 +414,58 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
                 mtfAnalyzer.calculateHtfConfluence(candle.getClose(), isBullish, maxPriceDistance);
         htfConfluenceScore = htfResult.score;
 
+        // ═══════════════════════════════════════════════════════════════════════════
+        // 6.5. ADVANCED MARKET STRUCTURE ANALYSIS (NEW)
+        // ═══════════════════════════════════════════════════════════════════════════
+        double tickSize = getTickSizeForSymbol(primarySymbol);
+        double tolerance = tickSize * 5;
+
+        // Volume Profile: Check for HVN/LVN, volume spikes
+        volumeConfluenceScore = volumeProfileAnalyzer.getVolumeConfluenceScore(candle.getClose(), tolerance);
+        hasVolumeSpike = volumeProfileAnalyzer.hasVolumeSpike(candle, 2.0);  // 2x average volume
+
+        // Consolidation: Check market state and breakout potential
+        isConsolidating = consolidationDetector.isConsolidating();
+        consolidationScore = consolidationDetector.getConfluenceScore(candle.getClose(), isBullish);
+
+        // Trendline: Check for breaks and proximity
+        trendlineScore = trendlineDetector.getConfluenceScore(candle.getClose(), isBullish);
+        hasTrendlineBreak = isBullish ? trendlineDetector.hasBrokenResistance(candle.getClose())
+                                      : trendlineDetector.hasBrokenSupport(candle.getClose());
+
+        // Check for confirmed raids (highest probability setups)
+        Optional<LiquidityRaid> confirmedRaid = raidDetector.getRaidByDirection(
+                isBullish ? com.topstep.trading.chartstate.RaidDirection.LOW_SWEEP
+                          : com.topstep.trading.chartstate.RaidDirection.HIGH_SWEEP);
+
+        // CONSOLIDATION WARNING: Avoid trading in tight consolidation
+        if (isConsolidating && consolidationDetector.isTightConsolidation()) {
+            if (shouldLog) {
+                System.out.println("[" + primarySymbol + "] WARNING: In tight consolidation - " +
+                        consolidationDetector.getAdvice());
+            }
+            // Don't reject, but the negative score will affect tier determination
+        }
+
+        // VOLUME SPIKE BONUS: Institutional activity detected
+        if (hasVolumeSpike && shouldLog) {
+            System.out.println("[" + primarySymbol + "] VOLUME SPIKE detected (2x+ average) - institutional activity");
+        }
+
+        // TRENDLINE BREAK BONUS
+        if (hasTrendlineBreak && shouldLog) {
+            System.out.println("[" + primarySymbol + "] TRENDLINE BREAK detected - momentum confirmation");
+        }
+
+        // CONFIRMED RAID: Use if available (high probability)
+        if (confirmedRaid.isPresent() && confirmedRaid.get().getState() == com.topstep.trading.chartstate.RaidState.CONFIRMED) {
+            if (shouldLog) {
+                System.out.println("[" + primarySymbol + "] CONFIRMED RAID available: " +
+                        confirmedRaid.get().getQualityClassification() + " (score=" +
+                        confirmedRaid.get().getQualityScore() + ")");
+            }
+        }
+
         // 7. Check for additional confluences
         boolean hasSmtDivergence = sweep.hasSmtDivergence() ||
                 correlationTracker.hasSMTDivergence(primarySymbol, smtSymbol, 10);
@@ -307,6 +476,14 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         // 8. Look for entry zones by tier (highest to lowest)
         // Count confluences for tier determination
         int confluenceCount = 0;
+
+        // Calculate total advanced score from new detectors
+        int advancedScore = volumeConfluenceScore + consolidationScore + trendlineScore;
+        if (hasVolumeSpike) advancedScore += 1;
+        if (hasTrendlineBreak) advancedScore += 1;
+        if (confirmedRaid.isPresent() && confirmedRaid.get().getState() == com.topstep.trading.chartstate.RaidState.CONFIRMED) {
+            advancedScore += confirmedRaid.get().getQualityScore() / 10;  // Scale raid quality
+        }
 
         // Find 1m entry zones
         currentBreaker = breakerBlockDetector.findNearestBreaker(candle.getClose(), isBullish, maxPriceDistance);
@@ -448,6 +625,8 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         if (currentOrderBlock != null) confluenceCount++;
         // Add HTF confluence bonus
         if (htfConfluenceScore >= 3) confluenceCount++;
+        // Add advanced score bonus (NEW)
+        if (advancedScore >= 3) confluenceCount++;  // Volume + trendline + consolidation alignment
 
         // TIGHTENED: Require 3+ confluences AND displacement AND HTF requirements for ANY entry
         if (confluenceCount >= 3 && hasDisplacement && htfTier2Ok) {
@@ -517,6 +696,13 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         System.out.println("[" + primarySymbol + "] SMT: " + (hasSmt ? "✓" : "~") +
                           " | Displacement: " + (hasDisplacement ? "✓" : "~") +
                           " | Power3: " + (hasPower3Confirmation ? "✓" : "~"));
+        // Print advanced scores (NEW)
+        System.out.println("[" + primarySymbol + "] Volume: " + volumeConfluenceScore +
+                          (hasVolumeSpike ? " (SPIKE)" : "") +
+                          " | Consolidation: " + consolidationScore +
+                          (isConsolidating ? " (RANGING)" : "") +
+                          " | Trendline: " + trendlineScore +
+                          (hasTrendlineBreak ? " (BREAK)" : ""));
         double adjustedRR = currentTier.getRiskRewardRatio() * currentTier.getTierMultiplier();
         System.out.println("[" + primarySymbol + "] R:R Target: 1:" + currentTier.getRiskRewardRatio() +
                           " (adjusted by tier multiplier: " + currentTier.getTierMultiplier() + ")");
@@ -780,4 +966,17 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     public BarAggregationManager getBarManager() { return barManager; }
     public boolean hasHtfAlignment() { return hasHtfAlignment; }
     public int getHtfConfluenceScore() { return htfConfluenceScore; }
+
+    // Advanced market structure getters (NEW)
+    public VolumeProfileAnalyzer getVolumeProfileAnalyzer() { return volumeProfileAnalyzer; }
+    public ConsolidationDetector getConsolidationDetector() { return consolidationDetector; }
+    public TrendlineDetector getTrendlineDetector() { return trendlineDetector; }
+    public RaidDetector getRaidDetector() { return raidDetector; }
+    public EqualLevelDetector getEqualLevelDetector() { return equalLevelDetector; }
+    public int getVolumeConfluenceScore() { return volumeConfluenceScore; }
+    public int getConsolidationScore() { return consolidationScore; }
+    public int getTrendlineScore() { return trendlineScore; }
+    public boolean hasVolumeSpike() { return hasVolumeSpike; }
+    public boolean isConsolidating() { return isConsolidating; }
+    public boolean hasTrendlineBreak() { return hasTrendlineBreak; }
 }
