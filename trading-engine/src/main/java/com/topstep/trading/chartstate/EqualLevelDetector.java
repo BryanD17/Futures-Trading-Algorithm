@@ -290,6 +290,79 @@ public class EqualLevelDetector {
         return lastRefreshTime;
     }
 
+    /**
+     * Age all levels and remove expired ones.
+     * Call this each candle to keep levels fresh.
+     */
+    public synchronized void ageAndCleanupLevels() {
+        // Age all highs and remove expired
+        equalHighs.forEach(EqualLevel::incrementAge);
+        equalHighs.removeIf(level -> level.isExpired() || level.isRaided());
+
+        // Age all lows and remove expired
+        equalLows.forEach(EqualLevel::incrementAge);
+        equalLows.removeIf(level -> level.isExpired() || level.isRaided());
+    }
+
+    /**
+     * Get only non-stale equal highs (fresher levels).
+     */
+    public synchronized List<EqualLevel> getFreshEqualHighs() {
+        List<EqualLevel> fresh = new ArrayList<>();
+        for (EqualLevel level : equalHighs) {
+            if (!level.isStale() && !level.isRaided()) {
+                fresh.add(level);
+            }
+        }
+        return fresh;
+    }
+
+    /**
+     * Get only non-stale equal lows (fresher levels).
+     */
+    public synchronized List<EqualLevel> getFreshEqualLows() {
+        List<EqualLevel> fresh = new ArrayList<>();
+        for (EqualLevel level : equalLows) {
+            if (!level.isStale() && !level.isRaided()) {
+                fresh.add(level);
+            }
+        }
+        return fresh;
+    }
+
+    /**
+     * Get the best equal level near a price, prioritizing freshness.
+     */
+    public synchronized Optional<EqualLevel> getBestEqualLevelNear(double price) {
+        double tolerance = config.getToleranceTicks() * config.getTickSize();
+        EqualLevel best = null;
+        double bestScore = -1;
+
+        // Check highs
+        for (EqualLevel level : equalHighs) {
+            if (Math.abs(level.getPrice() - price) <= tolerance && !level.isRaided()) {
+                double score = level.getAgeAdjustedScore();
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = level;
+                }
+            }
+        }
+
+        // Check lows
+        for (EqualLevel level : equalLows) {
+            if (Math.abs(level.getPrice() - price) <= tolerance && !level.isRaided()) {
+                double score = level.getAgeAdjustedScore();
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = level;
+                }
+            }
+        }
+
+        return Optional.ofNullable(best);
+    }
+
     @Override
     public String toString() {
         return String.format("EqualLevelDetector{%s: %d highs, %d lows}",
@@ -310,6 +383,12 @@ public class EqualLevelDetector {
         private final int oldestBarsAgo;     // Oldest swing (bars ago)
         private final boolean isHigh;        // true = equal high, false = equal low
         private boolean raided;              // Has been swept
+        private Instant createdAt;           // When this level was detected
+        private int barsSinceCreation;       // Track staleness
+
+        // Expiration configuration
+        private static final int MAX_BARS_AGE = 500;     // Expire after 500 bars (~8 hours of 1m data)
+        private static final int STALE_BARS_AGE = 200;   // Consider stale after 200 bars
 
         public EqualLevel(double price, int clusterSize, int newestBarsAgo, int oldestBarsAgo, boolean isHigh) {
             this.price = price;
@@ -318,6 +397,8 @@ public class EqualLevelDetector {
             this.oldestBarsAgo = oldestBarsAgo;
             this.isHigh = isHigh;
             this.raided = false;
+            this.createdAt = Instant.now();
+            this.barsSinceCreation = 0;
         }
 
         public double getPrice() { return price; }
@@ -326,9 +407,39 @@ public class EqualLevelDetector {
         public int getOldestBarsAgo() { return oldestBarsAgo; }
         public boolean isHigh() { return isHigh; }
         public boolean isRaided() { return raided; }
+        public Instant getCreatedAt() { return createdAt; }
+        public int getBarsSinceCreation() { return barsSinceCreation; }
 
         public void markRaided() {
             this.raided = true;
+        }
+
+        /**
+         * Increment age counter (called each candle).
+         */
+        public void incrementAge() {
+            this.barsSinceCreation++;
+        }
+
+        /**
+         * Check if this level has expired (too old to be relevant).
+         */
+        public boolean isExpired() {
+            return barsSinceCreation > MAX_BARS_AGE;
+        }
+
+        /**
+         * Check if this level is stale (still valid but aging).
+         */
+        public boolean isStale() {
+            return barsSinceCreation > STALE_BARS_AGE;
+        }
+
+        /**
+         * Check if this level is fresh (recently formed).
+         */
+        public boolean isFresh() {
+            return barsSinceCreation < 50;  // Less than 50 bars old
         }
 
         public LevelType getLevelType() {
@@ -336,19 +447,44 @@ public class EqualLevelDetector {
         }
 
         /**
-         * Get quality bonus based on cluster size.
+         * Get quality bonus based on cluster size and freshness.
          * cluster=2: +0 (base), cluster=3: +1, cluster=4+: +2
+         * Fresh levels get additional bonus.
          */
         public int getQualityBonus() {
-            if (clusterSize >= 4) return 2;
-            if (clusterSize >= 3) return 1;
-            return 0;
+            int bonus = 0;
+
+            // Cluster size bonus
+            if (clusterSize >= 4) bonus += 2;
+            else if (clusterSize >= 3) bonus += 1;
+
+            // Freshness bonus
+            if (isFresh()) bonus += 1;
+
+            // Staleness penalty
+            if (isStale()) bonus -= 1;
+
+            return Math.max(0, bonus);
+        }
+
+        /**
+         * Get age-adjusted quality score for sorting/ranking.
+         */
+        public double getAgeAdjustedScore() {
+            double baseScore = clusterSize;
+
+            // Decay factor based on age
+            double ageFactor = Math.max(0.3, 1.0 - (barsSinceCreation / (double) MAX_BARS_AGE));
+
+            return baseScore * ageFactor;
         }
 
         @Override
         public String toString() {
-            return String.format("EqualLevel{%s @ %.2f, cluster=%d, bars=%d-%d%s}",
+            String freshness = isFresh() ? "FRESH" : (isStale() ? "STALE" : "NORMAL");
+            return String.format("EqualLevel{%s @ %.2f, cluster=%d, bars=%d-%d, age=%d (%s)%s}",
                     isHigh ? "HIGH" : "LOW", price, clusterSize, newestBarsAgo, oldestBarsAgo,
+                    barsSinceCreation, freshness,
                     raided ? ", RAIDED" : "");
         }
     }
