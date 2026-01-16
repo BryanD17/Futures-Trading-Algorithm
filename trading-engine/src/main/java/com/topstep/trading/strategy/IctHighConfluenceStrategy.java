@@ -146,8 +146,8 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         this.trendlineDetector = new TrendlineDetector(primarySymbol, tickSize);
 
         // Initialize candle series and raid detection
-        this.candleSeries = new CandleSeries(5000);  // 5000 candle capacity
-        this.levelEngine = new LevelEngine(primarySymbol);
+        this.candleSeries = new CandleSeries(primarySymbol, 5000);  // 5000 candle capacity
+        this.levelEngine = new LevelEngine(primarySymbol, candleSeries);
         this.equalLevelDetector = new EqualLevelDetector(primarySymbol, candleSeries);
         this.raidDetector = new RaidDetector(primarySymbol, levelEngine, equalLevelDetector, candleSeries);
 
@@ -249,7 +249,7 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         mtfAnalyzer.update(completedCandles);
 
         // Update advanced market structure detectors (NEW)
-        candleSeries.add(candle);
+        candleSeries.addCandle(candle);
         levelEngine.processCandle(candle);
         volumeProfileAnalyzer.update(candle);
         consolidationDetector.update(candle);
