@@ -467,8 +467,38 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         }
 
         // 7. Check for additional confluences
-        boolean hasSmtDivergence = sweep.hasSmtDivergence() ||
+        // Build detailed SMT divergence result (NEW)
+        boolean basicSmtCheck = sweep.hasSmtDivergence() ||
                 correlationTracker.hasSMTDivergence(primarySymbol, smtSymbol, 10);
+
+        if (basicSmtCheck) {
+            // Calculate relative strength and build detailed result
+            double relStrength = correlationTracker.getRelativeStrength(primarySymbol, smtSymbol, 10);
+            double correlation = correlationTracker.calculateCorrelation(primarySymbol, smtSymbol);
+            double expectedCorr = 0.85;  // Expected high correlation for ES/NQ
+            boolean abnormalCorr = correlationTracker.hasAbnormalCorrelation(primarySymbol, smtSymbol);
+
+            // Determine strength (0-5 scale) based on relative strength
+            int strength = Math.min(5, (int)(Math.abs(relStrength) * 10));
+            if (abnormalCorr) strength = Math.min(5, strength + 1);  // Bonus for abnormal
+
+            // Determine type based on direction
+            SmtDivergenceResult.DivergenceType smtType = isBullish ?
+                    SmtDivergenceResult.DivergenceType.BULLISH_SMT :
+                    SmtDivergenceResult.DivergenceType.BEARISH_SMT;
+
+            smtResult = new SmtDivergenceResult(smtType, primarySymbol, smtSymbol,
+                    strength, relStrength, correlation, expectedCorr, abnormalCorr);
+
+            if (shouldLog) {
+                System.out.println("[" + primarySymbol + "] SMT: " + smtResult.getDescription() +
+                        " (score=" + smtResult.getConfluenceScore() + ")");
+            }
+        } else {
+            smtResult = SmtDivergenceResult.none(primarySymbol, smtSymbol);
+        }
+
+        boolean hasSmtDivergence = smtResult.hasDivergence() && smtResult.alignsWith(isBullish);
         hasDisplacement = displacementDetector.hasRecentDisplacement(10, isBullish);
         hasPower3Confirmation = power3Detector.isInDistribution() &&
                 power3Detector.confirmsDirection(isBullish);
@@ -481,6 +511,8 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         int advancedScore = volumeConfluenceScore + consolidationScore + trendlineScore;
         if (hasVolumeSpike) advancedScore += 1;
         if (hasTrendlineBreak) advancedScore += 1;
+        // Add SMT confluence score (NEW)
+        advancedScore += smtResult.getConfluenceScore();
         if (confirmedRaid.isPresent() && confirmedRaid.get().getState() == com.topstep.trading.chartstate.RaidState.CONFIRMED) {
             advancedScore += confirmedRaid.get().getQualityScore() / 10;  // Scale raid quality
         }
