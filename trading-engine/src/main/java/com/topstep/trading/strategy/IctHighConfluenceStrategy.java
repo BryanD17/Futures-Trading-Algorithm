@@ -174,7 +174,7 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         raidDetector.addRaidListener(raid -> {
             // When a new raid is detected, check if displacement follows
             System.out.println("[" + primarySymbol + "] AUTO-RAID: New raid detected - " +
-                    raid.getDirection().getDisplayName() + " @ " + raid.getLevel().getType().getDisplayName());
+                    raid.getDirection().getDisplayName() + " @ " + raid.getTargetLevel().getType().getDisplayName());
         });
     }
 
