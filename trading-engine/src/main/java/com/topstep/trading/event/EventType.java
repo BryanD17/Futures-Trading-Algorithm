@@ -33,5 +33,10 @@ public enum EventType {
     ENGINE_STARTED,
     ENGINE_STOPPED,
     ENGINE_PAUSED,
-    ENGINE_RESUMED
+    ENGINE_RESUMED,
+
+    // Macro news events
+    UPCOMING_NEWS_EVENT,      // Warning about upcoming high-impact event
+    NEWS_RELEASE,             // Economic data release processed
+    MACRO_BIAS_UPDATE         // Change in macro bias for an instrument
 }

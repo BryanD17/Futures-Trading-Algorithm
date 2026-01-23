@@ -10,6 +10,10 @@ import com.topstep.trading.chartstate.LiquidityRaid;
 import com.topstep.trading.chartstate.LevelEngine;
 import com.topstep.trading.chartstate.EqualLevelDetector;
 import com.topstep.trading.chartstate.CandleSeries;
+import com.topstep.trading.news.MacroNewsManager;
+import com.topstep.trading.news.model.GatingAction;
+import com.topstep.trading.news.model.MacroAlignment;
+import com.topstep.trading.news.model.TradeGatingDecision;
 
 import java.util.Map;
 import java.util.Optional;
@@ -67,6 +71,9 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private final EqualLevelDetector equalLevelDetector;
     private final RaidDetector raidDetector;
 
+    // Macro news integration (NEW)
+    private MacroNewsManager macroNewsManager;  // Optional - set via setter
+
     // Configuration
     private final double fibLow = 0.62;   // OTE zone low
     private final double fibHigh = 0.705; // OTE zone high
@@ -91,6 +98,8 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private int sweepMismatch = 0;
     private int noEntryZone = 0;
     private int htfRequirementsNotMet = 0;  // NEW: HTF tier requirements not met
+    private int newsGatingBlocked = 0;  // NEW: Blocked by macro news
+    private int macroOpposingBlocked = 0;  // NEW: Blocked by opposing macro bias
     private int signalsGenerated = 0;
 
     // Current trade setup info
@@ -113,6 +122,11 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private boolean isConsolidating = false;
     private boolean hasTrendlineBreak = false;
     private SmtDivergenceResult smtResult = null;
+
+    // Macro news state (NEW)
+    private MacroAlignment macroAlignment = MacroAlignment.NEUTRAL;
+    private double newsSizeMultiplier = 1.0;
+    private int macroConfluenceAdjustment = 0;
 
     public IctHighConfluenceStrategy(String primarySymbol, String smtSymbol, EventBus eventBus) {
         this.primarySymbol = primarySymbol;
@@ -153,6 +167,17 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
         // Setup automatic raid confirmation listener
         setupRaidConfirmation();
+    }
+
+    /**
+     * Set the MacroNewsManager for news-based gating and bias.
+     * This is optional - if not set, news integration is disabled.
+     *
+     * @param macroNewsManager The MacroNewsManager instance
+     */
+    public void setMacroNewsManager(MacroNewsManager macroNewsManager) {
+        this.macroNewsManager = macroNewsManager;
+        System.out.println("[" + primarySymbol + "] MacroNewsManager integration enabled");
     }
 
     /**
@@ -320,6 +345,33 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         isConsolidating = false;
         hasTrendlineBreak = false;
         smtResult = null;
+        macroAlignment = MacroAlignment.NEUTRAL;
+        newsSizeMultiplier = 1.0;
+        macroConfluenceAdjustment = 0;
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // 0. MACRO NEWS GATING CHECK (NEW - First check before any other filters)
+        // ═══════════════════════════════════════════════════════════════════════════
+        if (macroNewsManager != null && macroNewsManager.isRunning()) {
+            TradeGatingDecision gatingDecision = macroNewsManager.checkTradeGating(primarySymbol);
+
+            if (gatingDecision.getAction() == GatingAction.BLOCK) {
+                newsGatingBlocked++;
+                if (shouldLog) {
+                    System.out.println("[" + primarySymbol + "] BLOCKED by news gating: " +
+                            gatingDecision.getReason());
+                }
+                return false;
+            }
+
+            // Store size multiplier for later use in position sizing
+            newsSizeMultiplier = gatingDecision.getSizeMultiplier();
+            if (newsSizeMultiplier < 1.0 && shouldLog) {
+                System.out.println("[" + primarySymbol + "] NEWS: Size reduced to " +
+                        String.format("%.0f%%", newsSizeMultiplier * 100) +
+                        " (" + gatingDecision.getReason() + ")");
+            }
+        }
 
         // 1. Check killzone and phase
         boolean inKillzone = killzoneClock.isInKillzone(candle.getTimestamp());
@@ -413,6 +465,28 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         MultiTimeframeAnalyzer.HtfConfluenceResult htfResult =
                 mtfAnalyzer.calculateHtfConfluence(candle.getClose(), isBullish, maxPriceDistance);
         htfConfluenceScore = htfResult.score;
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // 6.3. MACRO NEWS ALIGNMENT CHECK (NEW - Adjust confluence based on news)
+        // ═══════════════════════════════════════════════════════════════════════════
+        if (macroNewsManager != null && macroNewsManager.isRunning()) {
+            macroAlignment = macroNewsManager.getMacroAlignment(primarySymbol, isBullish);
+            macroConfluenceAdjustment = macroNewsManager.getConfluenceAdjustment(primarySymbol, isBullish);
+
+            if (shouldLog) {
+                double newsBias = macroNewsManager.getNewsBiasModifier(primarySymbol);
+                System.out.println("[" + primarySymbol + "] MACRO: Alignment=" + macroAlignment +
+                        ", Bias=" + String.format("%.2f", newsBias) +
+                        ", Confluence adj=" + (macroConfluenceAdjustment >= 0 ? "+" : "") + macroConfluenceAdjustment);
+            }
+
+            // Check for strong opposing macro bias that should block the trade
+            if (macroNewsManager.shouldBlockOnOpposition(primarySymbol, isBullish)) {
+                macroOpposingBlocked++;
+                System.out.println("[" + primarySymbol + "] BLOCKED by strong opposing macro bias");
+                return false;
+            }
+        }
 
         // ═══════════════════════════════════════════════════════════════════════════
         // 6.5. ADVANCED MARKET STRUCTURE ANALYSIS (NEW)
@@ -513,6 +587,8 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         if (hasTrendlineBreak) advancedScore += 1;
         // Add SMT confluence score (NEW)
         advancedScore += smtResult.getConfluenceScore();
+        // Add macro news alignment score (NEW)
+        advancedScore += macroConfluenceAdjustment;
         if (confirmedRaid.isPresent() && confirmedRaid.get().getState() == com.topstep.trading.chartstate.RaidState.CONFIRMED) {
             advancedScore += confirmedRaid.get().getQualityScore() / 10;  // Scale raid quality
         }
@@ -735,6 +811,13 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
                           (isConsolidating ? " (RANGING)" : "") +
                           " | Trendline: " + trendlineScore +
                           (hasTrendlineBreak ? " (BREAK)" : ""));
+        // Print macro news info (NEW)
+        if (macroNewsManager != null && macroNewsManager.isRunning()) {
+            double newsBias = macroNewsManager.getNewsBiasModifier(primarySymbol);
+            System.out.println("[" + primarySymbol + "] Macro: " + macroAlignment +
+                              " | NewsBias: " + String.format("%.2f", newsBias) +
+                              " | SizeMult: " + String.format("%.0f%%", newsSizeMultiplier * 100));
+        }
         double adjustedRR = currentTier.getRiskRewardRatio() * currentTier.getTierMultiplier();
         System.out.println("[" + primarySymbol + "] R:R Target: 1:" + currentTier.getRiskRewardRatio() +
                           " (adjusted by tier multiplier: " + currentTier.getTierMultiplier() + ")");
@@ -749,6 +832,17 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
         // Calculate position size based on ATR
         recommendedQuantity = atrCalculator.getRecommendedPositionSize(basePositionSize, maxPositionSize);
+
+        // Apply news size multiplier (NEW)
+        if (newsSizeMultiplier < 1.0) {
+            int adjustedQty = (int) Math.max(1, Math.round(recommendedQuantity * newsSizeMultiplier));
+            if (adjustedQty != recommendedQuantity) {
+                System.out.println("[" + primarySymbol + "] Size adjusted by news: " +
+                        recommendedQuantity + " -> " + adjustedQty +
+                        " (" + String.format("%.0f%%", newsSizeMultiplier * 100) + " multiplier)");
+                recommendedQuantity = adjustedQty;
+            }
+        }
 
         if (bias == MarketBias.BULLISH && sweep.isBullish()) {
             generateBullishSignal(candle, sweep);
@@ -974,6 +1068,8 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         System.out.println("  Volatility blocked:    " + volatilityBlocked + " (" + pct(volatilityBlocked) + ")");
         System.out.println("  Neutral bias (1m):     " + neutralBias + " (" + pct(neutralBias) + ")");
         System.out.println("  HTF bias opposing:     " + htfBiasNotAligned + " (" + pct(htfBiasNotAligned) + ")");
+        System.out.println("  News gating blocked:   " + newsGatingBlocked + " (" + pct(newsGatingBlocked) + ")");
+        System.out.println("  Macro opposing blocked:" + macroOpposingBlocked + " (" + pct(macroOpposingBlocked) + ")");
         System.out.println("  No recent sweep:       " + noSweep + " (" + pct(noSweep) + ")");
         System.out.println("  Sweep direction mismatch: " + sweepMismatch + " (" + pct(sweepMismatch) + ")");
         System.out.println("  HTF tier req not met:  " + htfRequirementsNotMet + " (" + pct(htfRequirementsNotMet) + ")");
@@ -1011,4 +1107,10 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     public boolean hasVolumeSpike() { return hasVolumeSpike; }
     public boolean isConsolidating() { return isConsolidating; }
     public boolean hasTrendlineBreak() { return hasTrendlineBreak; }
+
+    // Macro news getters (NEW)
+    public MacroNewsManager getMacroNewsManager() { return macroNewsManager; }
+    public MacroAlignment getMacroAlignment() { return macroAlignment; }
+    public double getNewsSizeMultiplier() { return newsSizeMultiplier; }
+    public int getMacroConfluenceAdjustment() { return macroConfluenceAdjustment; }
 }
