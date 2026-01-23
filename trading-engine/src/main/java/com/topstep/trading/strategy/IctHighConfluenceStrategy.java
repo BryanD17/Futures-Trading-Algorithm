@@ -81,6 +81,24 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private final int maxPositionSize = 2;
     private final double maxPriceDistance = 50.0;  // Max distance for entry zones
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ASYMMETRIC DIRECTIONAL FILTERS (Based on trade recap analysis)
+    // Longs: 37.5% win rate, -$1,106.89 net
+    // Shorts: 60% win rate, +$2,509.31 net
+    // Solution: Require stronger confluence for longs
+    // ═══════════════════════════════════════════════════════════════════════════
+    private boolean requireMacroAlignedForLongs = true;      // Longs need ALIGNED macro, not just NEUTRAL
+    private boolean requireSmtForLongs = true;               // Longs MUST have SMT divergence
+    private TradeTier minimumTierForLongs = TradeTier.TIER_3; // Longs need Tier 3+, shorts can be Tier 2
+
+    // Symbol-specific filters (based on performance)
+    // /6J: 33% win rate, -$228.47 - DISABLE or require Tier 4
+    // /6E: 50% win rate but fee drag - reduce to 1 lot
+    // /GC: 50% win rate, +$1,807 - keep as is
+    private boolean disable6JTrading = false;  // Set true to disable /6J entirely
+    private TradeTier minimumTierFor6J = TradeTier.TIER_3;  // /6J needs Tier 3+ minimum
+    private int maxQuantityFor6E = 1;  // Cap /6E at 1 lot to reduce fee drag
+
     // State tracking
     private int candleCount = 0;
     private volatile boolean signalPending = false;
@@ -100,6 +118,11 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private int htfRequirementsNotMet = 0;  // NEW: HTF tier requirements not met
     private int newsGatingBlocked = 0;  // NEW: Blocked by macro news
     private int macroOpposingBlocked = 0;  // NEW: Blocked by opposing macro bias
+    private int longMacroNotAligned = 0;  // NEW: Long rejected - macro not ALIGNED
+    private int longMissingSmtDivergence = 0;  // NEW: Long rejected - no SMT
+    private int longTierTooLow = 0;  // NEW: Long rejected - tier below minimum
+    private int symbolDisabled = 0;  // NEW: Symbol trading disabled
+    private int symbolTierTooLow = 0;  // NEW: Symbol tier requirement not met
     private int signalsGenerated = 0;
 
     // Current trade setup info
@@ -240,6 +263,17 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
             return;
         }
 
+        // ═══════════════════════════════════════════════════════════════════════════
+        // FINAL VALIDATION: Asymmetric Long/Short Requirements
+        // Based on trade recap: Longs 37.5% WR (-$1,106), Shorts 60% WR (+$2,509)
+        // ═══════════════════════════════════════════════════════════════════════════
+        MarketBias finalBias = structureDetector.getBias();
+        boolean isBullishEntry = (finalBias == MarketBias.BULLISH);
+
+        if (!validateAsymmetricRequirements(isBullishEntry, candle)) {
+            return;  // Validation failed, don't generate signal
+        }
+
         // All confluences met - generate signal
         signalPending = true;
         lastSignalTime = System.currentTimeMillis();
@@ -371,6 +405,18 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
                         String.format("%.0f%%", newsSizeMultiplier * 100) +
                         " (" + gatingDecision.getReason() + ")");
             }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // 0.5. SYMBOL-SPECIFIC FILTERS (Based on performance analysis)
+        // /6J: 33% win rate - disable or require higher tier
+        // ═══════════════════════════════════════════════════════════════════════════
+        if (disable6JTrading && primarySymbol.contains("6J")) {
+            symbolDisabled++;
+            if (shouldLog) {
+                System.out.println("[" + primarySymbol + "] BLOCKED: /6J trading disabled (33% win rate)");
+            }
+            return false;
         }
 
         // 1. Check killzone and phase
@@ -824,6 +870,65 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     }
 
     /**
+     * Validate asymmetric long/short requirements.
+     * Based on trade recap analysis:
+     * - Longs: 37.5% win rate, -$1,106.89 → need stronger requirements
+     * - Shorts: 60% win rate, +$2,509.31 → keep as is
+     *
+     * @param isBullish true if this is a long entry
+     * @param candle current candle for logging
+     * @return true if validation passes, false to reject the trade
+     */
+    private boolean validateAsymmetricRequirements(boolean isBullish, Candle candle) {
+        // ═══════════════════════════════════════════════════════════════════════════
+        // LONG-SPECIFIC REQUIREMENTS (because longs are underperforming)
+        // ═══════════════════════════════════════════════════════════════════════════
+        if (isBullish) {
+            // 1. Longs MUST have macro ALIGNED (not just NEUTRAL)
+            if (requireMacroAlignedForLongs && macroNewsManager != null && macroNewsManager.isRunning()) {
+                if (macroAlignment != MacroAlignment.ALIGNED) {
+                    longMacroNotAligned++;
+                    System.out.println("[" + primarySymbol + "] LONG REJECTED: Macro not ALIGNED (was " +
+                            macroAlignment + "). Longs require ALIGNED macro bias.");
+                    return false;
+                }
+            }
+
+            // 2. Longs MUST have SMT divergence
+            if (requireSmtForLongs && (smtResult == null || !smtResult.hasDivergence())) {
+                longMissingSmtDivergence++;
+                System.out.println("[" + primarySymbol + "] LONG REJECTED: No SMT divergence. " +
+                        "Longs require SMT confirmation.");
+                return false;
+            }
+
+            // 3. Longs need minimum Tier 3 (shorts can be Tier 2)
+            if (currentTier != null && currentTier.getLevel() < minimumTierForLongs.getLevel()) {
+                longTierTooLow++;
+                System.out.println("[" + primarySymbol + "] LONG REJECTED: Tier " + currentTier +
+                        " below minimum " + minimumTierForLongs + " for longs.");
+                return false;
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // SYMBOL-SPECIFIC TIER REQUIREMENTS
+        // ═══════════════════════════════════════════════════════════════════════════
+
+        // /6J: 33% win rate - require Tier 3+
+        if (primarySymbol.contains("6J") && currentTier != null) {
+            if (currentTier.getLevel() < minimumTierFor6J.getLevel()) {
+                symbolTierTooLow++;
+                System.out.println("[" + primarySymbol + "] REJECTED: /6J requires Tier " +
+                        minimumTierFor6J + "+ (got " + currentTier + ")");
+                return false;
+            }
+        }
+
+        return true;  // All validations passed
+    }
+
+    /**
      * Generate signal with tier-based R:R and quantity.
      */
     private void generateSignal(Candle candle, StrategyContext context) {
@@ -842,6 +947,15 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
                         " (" + String.format("%.0f%%", newsSizeMultiplier * 100) + " multiplier)");
                 recommendedQuantity = adjustedQty;
             }
+        }
+
+        // Apply symbol-specific quantity caps (based on fee analysis)
+        // /6E: 50% WR but -$32.40 fees on 6 trades (2-lot) - cap at 1 lot
+        if (primarySymbol.contains("6E") && recommendedQuantity > maxQuantityFor6E) {
+            System.out.println("[" + primarySymbol + "] Size capped: " +
+                    recommendedQuantity + " -> " + maxQuantityFor6E +
+                    " (fee drag reduction for /6E)");
+            recommendedQuantity = maxQuantityFor6E;
         }
 
         if (bias == MarketBias.BULLISH && sweep.isBullish()) {
@@ -1070,6 +1184,13 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         System.out.println("  HTF bias opposing:     " + htfBiasNotAligned + " (" + pct(htfBiasNotAligned) + ")");
         System.out.println("  News gating blocked:   " + newsGatingBlocked + " (" + pct(newsGatingBlocked) + ")");
         System.out.println("  Macro opposing blocked:" + macroOpposingBlocked + " (" + pct(macroOpposingBlocked) + ")");
+        System.out.println("  --- ASYMMETRIC FILTERS (Longs harder than Shorts) ---");
+        System.out.println("  Long: macro not aligned: " + longMacroNotAligned + " (" + pct(longMacroNotAligned) + ")");
+        System.out.println("  Long: missing SMT:       " + longMissingSmtDivergence + " (" + pct(longMissingSmtDivergence) + ")");
+        System.out.println("  Long: tier too low:      " + longTierTooLow + " (" + pct(longTierTooLow) + ")");
+        System.out.println("  Symbol disabled:         " + symbolDisabled + " (" + pct(symbolDisabled) + ")");
+        System.out.println("  Symbol tier too low:     " + symbolTierTooLow + " (" + pct(symbolTierTooLow) + ")");
+        System.out.println("  ---");
         System.out.println("  No recent sweep:       " + noSweep + " (" + pct(noSweep) + ")");
         System.out.println("  Sweep direction mismatch: " + sweepMismatch + " (" + pct(sweepMismatch) + ")");
         System.out.println("  HTF tier req not met:  " + htfRequirementsNotMet + " (" + pct(htfRequirementsNotMet) + ")");
@@ -1113,4 +1234,70 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     public MacroAlignment getMacroAlignment() { return macroAlignment; }
     public double getNewsSizeMultiplier() { return newsSizeMultiplier; }
     public int getMacroConfluenceAdjustment() { return macroConfluenceAdjustment; }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ASYMMETRIC FILTER CONFIGURATION (Adjustable at runtime)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Configure whether longs require ALIGNED macro bias.
+     * Default: true (based on trade recap showing longs underperform)
+     */
+    public void setRequireMacroAlignedForLongs(boolean require) {
+        this.requireMacroAlignedForLongs = require;
+        System.out.println("[" + primarySymbol + "] Longs require ALIGNED macro: " + require);
+    }
+
+    /**
+     * Configure whether longs require SMT divergence.
+     * Default: true (based on trade recap)
+     */
+    public void setRequireSmtForLongs(boolean require) {
+        this.requireSmtForLongs = require;
+        System.out.println("[" + primarySymbol + "] Longs require SMT: " + require);
+    }
+
+    /**
+     * Set minimum tier for long entries.
+     * Default: TIER_3 (shorts can be TIER_2)
+     */
+    public void setMinimumTierForLongs(TradeTier tier) {
+        this.minimumTierForLongs = tier;
+        System.out.println("[" + primarySymbol + "] Minimum tier for longs: " + tier);
+    }
+
+    /**
+     * Disable /6J trading entirely.
+     * Default: false (but /6J requires Tier 3+)
+     */
+    public void setDisable6JTrading(boolean disable) {
+        this.disable6JTrading = disable;
+        System.out.println("[" + primarySymbol + "] /6J trading disabled: " + disable);
+    }
+
+    /**
+     * Set minimum tier for /6J.
+     * Default: TIER_3
+     */
+    public void setMinimumTierFor6J(TradeTier tier) {
+        this.minimumTierFor6J = tier;
+        System.out.println("[" + primarySymbol + "] Minimum tier for /6J: " + tier);
+    }
+
+    /**
+     * Set maximum quantity for /6E (to reduce fee drag).
+     * Default: 1
+     */
+    public void setMaxQuantityFor6E(int qty) {
+        this.maxQuantityFor6E = qty;
+        System.out.println("[" + primarySymbol + "] Max quantity for /6E: " + qty);
+    }
+
+    // Getters for current settings
+    public boolean isRequireMacroAlignedForLongs() { return requireMacroAlignedForLongs; }
+    public boolean isRequireSmtForLongs() { return requireSmtForLongs; }
+    public TradeTier getMinimumTierForLongs() { return minimumTierForLongs; }
+    public boolean isDisable6JTrading() { return disable6JTrading; }
+    public TradeTier getMinimumTierFor6J() { return minimumTierFor6J; }
+    public int getMaxQuantityFor6E() { return maxQuantityFor6E; }
 }
