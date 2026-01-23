@@ -85,6 +85,10 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     private int sbCandlesSinceRaid = 0;
     private MarketStructureShiftDetector.MSS lastSBMss = null;
 
+    // Silver Bullet setup confirmation (when setup is valid, we use its direction for signal)
+    private boolean isSilverBulletSetup = false;
+    private boolean silverBulletDirection = false;  // true = bullish/LONG, false = bearish/SHORT
+
     // Active raid from ChartStateManager (for enhanced quality scoring)
     private LiquidityRaid currentActiveRaid = null;
 
@@ -361,6 +365,11 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         currentFvg = sbFvg;
         hasDisplacement = true;  // MSS implies displacement
 
+        // CRITICAL: Store Silver Bullet direction for signal generation
+        // This prevents structureDetector bias from overriding the Silver Bullet MSS direction
+        isSilverBulletSetup = true;
+        silverBulletDirection = isBullish;
+
         // Grade the Silver Bullet tier based on confluences
         currentTier = gradeSilverBulletTier(candle, sbWindow, isOptimal);
 
@@ -539,6 +548,22 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         // PRIORITY: Silver Bullet setup check during SB windows
         Instant now = candle.getTimestamp();
         if (checkSilverBulletSetup(candle, now, shouldLog)) {
+            // Silver Bullet setup confirmed - retrieve appropriate raid for quality scoring
+            // Use Silver Bullet direction (not structureDetector bias) to get the correct raid
+            boolean sbIsBullish = silverBulletDirection;
+            Optional<LiquidityRaid> sbRaid = sbIsBullish ?
+                    chartStateIntegration.getActiveBullishRaid() :
+                    chartStateIntegration.getActiveBearishRaid();
+
+            if (sbRaid.isPresent()) {
+                currentActiveRaid = sbRaid.get();
+                if (shouldLog) {
+                    System.out.println("[" + profile.getSymbol() + "] ⚡ Silver Bullet Raid: " +
+                        currentActiveRaid.getDirection().getDisplayName() + " [Score=" +
+                        currentActiveRaid.getQualityScore() + "]");
+                }
+            }
+
             return true;
         }
 
@@ -917,7 +942,15 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
      * Uses micro contracts for Standard quality (score 4-5) setups.
      */
     private void generateSignal(Candle candle, StrategyContext context) {
-        MarketBias bias = structureDetector.getBias();
+        // CRITICAL FIX: Use Silver Bullet direction when in Silver Bullet setup
+        // This prevents structureDetector bias from overriding the Silver Bullet MSS direction
+        MarketBias bias;
+        if (isSilverBulletSetup) {
+            bias = silverBulletDirection ? MarketBias.BULLISH : MarketBias.BEARISH;
+            System.out.println("[" + profile.getSymbol() + "] ⚡ Using Silver Bullet MSS direction: " + bias);
+        } else {
+            bias = structureDetector.getBias();
+        }
         LiquiditySweep sweep = liquidityDetector.getLastSweep();
 
         // Determine raid quality score for symbol/quantity selection
@@ -1194,6 +1227,8 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         currentActiveRaid = null;
         currentTradeSymbol = null;
         usingMicroContract = false;
+        isSilverBulletSetup = false;
+        silverBulletDirection = false;
     }
 
     /**
