@@ -49,15 +49,21 @@ public class TopstepConnector implements TradingConnector {
         // Micro index futures
         TICK_SIZES.put("MES", 0.25);
         TICK_SIZES.put("MNQ", 0.25);
+        TICK_SIZES.put("MYM", 1.0);    // Micro Dow
+        TICK_SIZES.put("M2K", 0.10);   // Micro Russell 2000
 
         // Metals - Gold tick size 0.10, Silver tick size 0.005
         TICK_SIZES.put("GC", 0.10);
         TICK_SIZES.put("SI", 0.005);
+        TICK_SIZES.put("MGC", 0.10);   // Micro Gold (same tick size as GC)
+        TICK_SIZES.put("SIL", 0.001);  // Micro Silver
 
         // Energy - Crude Oil tick size 0.01, Natural Gas tick size 0.001
         TICK_SIZES.put("CL", 0.01);
         TICK_SIZES.put("NG", 0.001);
         TICK_SIZES.put("HO", 0.0001);
+        TICK_SIZES.put("MCL", 0.01);   // Micro Crude Oil (same tick size as CL)
+        TICK_SIZES.put("MNG", 0.001);  // Micro Natural Gas
 
         // Currency futures - Euro FX tick size 0.00005
         TICK_SIZES.put("6E", 0.00005);
@@ -65,6 +71,13 @@ public class TopstepConnector implements TradingConnector {
         TICK_SIZES.put("6B", 0.0001);
         TICK_SIZES.put("6C", 0.00005);
         TICK_SIZES.put("6A", 0.0001);
+
+        // Micro currency futures (different tick sizes from full-size)
+        TICK_SIZES.put("M6E", 0.0001);     // Micro Euro (larger tick than 6E)
+        TICK_SIZES.put("M6B", 0.0001);     // Micro British Pound
+        TICK_SIZES.put("M6A", 0.0001);     // Micro Australian Dollar
+        TICK_SIZES.put("M6C", 0.00005);    // Micro Canadian Dollar
+        TICK_SIZES.put("MJY", 0.000001);   // E-micro Japanese Yen (larger tick than 6J)
     }
 
     // Configuration
@@ -578,6 +591,16 @@ public class TopstepConnector implements TradingConnector {
                 monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
                 if (month == 12 && now.getDayOfMonth() > 15) year++;
                 break;
+            case "MYM":  // Micro Dow
+                root = "MYM";
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "M2K":  // Micro Russell 2000
+                root = "M2K";
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
 
             // ENERGY - Monthly expiration (use next month's contract)
             case "CL":
@@ -595,6 +618,16 @@ public class TopstepConnector implements TradingConnector {
                 monthCode = getNextMonthCode(month);
                 if (month == 12) year++;
                 break;
+            case "MCL":  // Micro Crude Oil
+                root = "MCL";
+                monthCode = getNextMonthCode(month);
+                if (month == 12) year++;
+                break;
+            case "MNG":  // Micro Natural Gas
+                root = "MNG";
+                monthCode = getNextMonthCode(month);
+                if (month == 12) year++;
+                break;
 
             // METALS - Specific expiration months
             case "GC":
@@ -604,6 +637,15 @@ public class TopstepConnector implements TradingConnector {
                 break;
             case "SI":
                 root = "SIE";  // ProjectX uses SIE, not SI
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "MGC":  // Micro Gold
+                root = "MGC";
+                monthCode = getGoldMonthCode(month);
+                break;
+            case "SIL":  // Micro Silver (1000 oz)
+                root = "SIL";
                 monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
                 if (month == 12 && now.getDayOfMonth() > 15) year++;
                 break;
@@ -631,6 +673,33 @@ public class TopstepConnector implements TradingConnector {
                 break;
             case "6A":
                 root = "DA6";  // ProjectX uses DA6, not A6
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+
+            // MICRO CURRENCY FUTURES - Quarterly
+            case "M6E":  // Micro Euro
+                root = "M6E";
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "M6B":  // Micro British Pound
+                root = "M6B";
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "M6A":  // Micro Australian Dollar
+                root = "M6A";
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "M6C":  // Micro Canadian Dollar
+                root = "M6C";
+                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
+                if (month == 12 && now.getDayOfMonth() > 15) year++;
+                break;
+            case "MJY":  // E-micro Japanese Yen
+                root = "MJY";
                 monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
                 if (month == 12 && now.getDayOfMonth() > 15) year++;
                 break;
