@@ -570,6 +570,75 @@ public class MultiTimeframeAnalyzer {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // HTF CONFIRMATION CHECK (MANDATORY for all trades)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Check for Higher Timeframe (HTF) confirmation - MANDATORY for trade entry.
+     *
+     * This method checks multiple HTF confirmation types in order of priority:
+     * 1. 15-minute FVG in trade direction (highest priority)
+     * 2. 5-minute FVG in trade direction
+     * 3. 5-minute Order Block in trade direction
+     * 4. HTF Market Structure Shift aligned
+     * 5. HTF Bias aligned with trade direction
+     *
+     * At least ONE of these must be present for a valid trade.
+     *
+     * @param symbol The instrument symbol
+     * @param bullish True for bullish entries, false for bearish
+     * @return HtfConfirmationResult with confirmation status and details
+     */
+    public HtfConfirmationResult checkHtfConfirmation(String symbol, boolean bullish) {
+        double maxDistance = 100.0;  // Maximum distance to search for zones
+
+        // Priority 1: Check 15m FVG (Premium HTF confirmation)
+        FairValueGap fvg15m = findHtfUnfilledFvg15m(Double.MAX_VALUE, bullish, maxDistance);
+        if (fvg15m != null) {
+            return HtfConfirmationResult.confirmed("15mFVG", "15-minute FVG aligned with trade direction");
+        }
+
+        // Priority 2: Check 5m FVG (Standard HTF confirmation)
+        FairValueGap fvg5m = findUnfilledFvg5m(Double.MAX_VALUE, bullish, maxDistance);
+        if (fvg5m != null) {
+            return HtfConfirmationResult.confirmed("5mFVG", "5-minute FVG aligned with trade direction");
+        }
+
+        // Priority 3: Check 5m Order Block
+        OrderBlock ob5m = findOb5m(Double.MAX_VALUE, bullish, maxDistance);
+        if (ob5m != null) {
+            return HtfConfirmationResult.confirmed("5mOB", "5-minute Order Block aligned with trade direction");
+        }
+
+        // Priority 4: Check HTF Market Structure Shift
+        // An MSS in the trade direction on 15m+ is strong confirmation
+        IctStructureDetector struct15m = structureDetectors.get(Timeframe.M15);
+        if (struct15m != null) {
+            MarketBias bias15m = struct15m.getBias();
+            MarketBias expectedBias = bullish ? MarketBias.BULLISH : MarketBias.BEARISH;
+            if (bias15m == expectedBias && struct15m.hasRecentMss(10)) {
+                return HtfConfirmationResult.confirmed("HTF_MSS", "15-minute Market Structure Shift in trade direction");
+            }
+        }
+
+        // Priority 5: Check HTF Bias alignment (30m + 15m)
+        if (htfBiasAligns(bullish)) {
+            return HtfConfirmationResult.confirmed("HTF_BIAS", "HTF Bias (30m+15m) aligned with trade direction");
+        }
+
+        // Priority 6: Check single 15m bias alignment (weaker but acceptable)
+        MarketBias bias15m = getHtfBias15m();
+        MarketBias expectedBias = bullish ? MarketBias.BULLISH : MarketBias.BEARISH;
+        if (bias15m == expectedBias) {
+            return HtfConfirmationResult.confirmed("15m_BIAS", "15-minute bias aligned with trade direction");
+        }
+
+        // No HTF confirmation found
+        return HtfConfirmationResult.notConfirmed(
+                "No HTF confirmation found. Checked: 15mFVG, 5mFVG, 5mOB, HTF_MSS, HTF_BIAS - none confirmed.");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // RESET
     // ═══════════════════════════════════════════════════════════════════════════
 

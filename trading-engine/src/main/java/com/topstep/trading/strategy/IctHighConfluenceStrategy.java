@@ -10,10 +10,13 @@ import com.topstep.trading.chartstate.LiquidityRaid;
 import com.topstep.trading.chartstate.LevelEngine;
 import com.topstep.trading.chartstate.EqualLevelDetector;
 import com.topstep.trading.chartstate.CandleSeries;
+import com.topstep.trading.chartstate.ChartStateQueryAPI;
 import com.topstep.trading.news.MacroNewsManager;
 import com.topstep.trading.news.model.GatingAction;
 import com.topstep.trading.news.model.MacroAlignment;
 import com.topstep.trading.news.model.TradeGatingDecision;
+import com.topstep.trading.validation.MandatoryConfluenceValidator;
+import com.topstep.trading.validation.ValidationResult;
 
 import java.util.Map;
 import java.util.Optional;
@@ -73,6 +76,9 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
     // Macro news integration (NEW)
     private MacroNewsManager macroNewsManager;  // Optional - set via setter
+
+    // Mandatory confluence validation (NEW)
+    private MandatoryConfluenceValidator mandatoryValidator;  // Initialized after chartState is created
 
     // Configuration
     private final double fibLow = 0.62;   // OTE zone low
@@ -190,6 +196,218 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
         // Setup automatic raid confirmation listener
         setupRaidConfirmation();
+
+        // Initialize mandatory confluence validator
+        initializeMandatoryValidator();
+    }
+
+    /**
+     * Initialize the mandatory confluence validator.
+     * This validates ALL mandatory confluences before allowing trade entry.
+     */
+    private void initializeMandatoryValidator() {
+        // Create a simple ChartStateQueryAPI adapter for the validator
+        ChartStateQueryAPI chartStateAdapter = createChartStateAdapter();
+
+        // Initialize validator with required components
+        this.mandatoryValidator = new MandatoryConfluenceValidator(
+                mtfAnalyzer,
+                displacementDetector,
+                chartStateAdapter
+        );
+
+        System.out.println("[" + primarySymbol + "] Mandatory Confluence Validator initialized");
+    }
+
+    /**
+     * Create a ChartStateQueryAPI adapter that provides raid access.
+     */
+    private ChartStateQueryAPI createChartStateAdapter() {
+        return new ChartStateQueryAPI() {
+            @Override
+            public String getSymbol() {
+                return primarySymbol;
+            }
+
+            @Override
+            public com.topstep.trading.chartstate.InstrumentRaidConfig getConfig() {
+                return com.topstep.trading.chartstate.InstrumentRaidConfig.forSymbol(primarySymbol);
+            }
+
+            @Override
+            public java.util.List<LiquidityRaid> getActiveRaids() {
+                return raidDetector.getActiveRaids();
+            }
+
+            @Override
+            public java.util.List<LiquidityRaid> getEntryValidRaids() {
+                return raidDetector.getEntryValidRaids();
+            }
+
+            @Override
+            public java.util.List<LiquidityRaid> getConfirmedRaids() {
+                return raidDetector.getConfirmedRaids();
+            }
+
+            @Override
+            public Optional<LiquidityRaid> getBestActiveRaid() {
+                return raidDetector.getBestActiveRaid();
+            }
+
+            @Override
+            public Optional<LiquidityRaid> getActiveBullishRaid() {
+                return raidDetector.getActiveRaidByDirection(
+                        com.topstep.trading.chartstate.RaidDirection.LOW_SWEEP);
+            }
+
+            @Override
+            public Optional<LiquidityRaid> getActiveBearishRaid() {
+                return raidDetector.getActiveRaidByDirection(
+                        com.topstep.trading.chartstate.RaidDirection.HIGH_SWEEP);
+            }
+
+            @Override
+            public boolean hasActiveRaidForDirection(boolean expectBullish) {
+                return raidDetector.hasActiveRaidForDirection(expectBullish);
+            }
+
+            @Override
+            public Optional<LiquidityRaid> getRaidById(String raidId) {
+                return raidDetector.getRaidById(raidId);
+            }
+
+            // Delegate level queries to levelEngine
+            @Override
+            public Optional<Double> getPDH() {
+                return levelEngine.getPDH();
+            }
+
+            @Override
+            public Optional<Double> getPDL() {
+                return levelEngine.getPDL();
+            }
+
+            @Override
+            public Optional<Double> getPWH() {
+                return levelEngine.getPWH();
+            }
+
+            @Override
+            public Optional<Double> getPWL() {
+                return levelEngine.getPWL();
+            }
+
+            @Override
+            public java.util.List<com.topstep.trading.chartstate.KnownLevel> getAllLevels() {
+                return levelEngine.getAllLevels();
+            }
+
+            @Override
+            public java.util.List<com.topstep.trading.chartstate.KnownLevel> getUnraidedLevels() {
+                return levelEngine.getUnraidedLevels();
+            }
+
+            @Override
+            public java.util.List<com.topstep.trading.chartstate.KnownLevel> getLevelsNearPrice(double price) {
+                return levelEngine.getLevelsNearPrice(price);
+            }
+
+            @Override
+            public Optional<com.topstep.trading.chartstate.KnownLevel> getNearestLevelAbove(double price) {
+                return levelEngine.getNearestLevelAbove(price);
+            }
+
+            @Override
+            public Optional<com.topstep.trading.chartstate.KnownLevel> getNearestLevelBelow(double price) {
+                return levelEngine.getNearestLevelBelow(price);
+            }
+
+            @Override
+            public Optional<com.topstep.trading.chartstate.KnownLevel> getLevel(
+                    com.topstep.trading.chartstate.LevelType type) {
+                return levelEngine.getLevel(type);
+            }
+
+            @Override
+            public java.util.List<com.topstep.trading.chartstate.EqualLevelDetector.EqualLevel> getEqualHighs() {
+                return equalLevelDetector.getEqualHighs();
+            }
+
+            @Override
+            public java.util.List<com.topstep.trading.chartstate.EqualLevelDetector.EqualLevel> getEqualLows() {
+                return equalLevelDetector.getEqualLows();
+            }
+
+            @Override
+            public Optional<com.topstep.trading.chartstate.EqualLevelDetector.EqualLevel> getStrongestEqualHigh() {
+                return equalLevelDetector.getStrongestEqualHigh();
+            }
+
+            @Override
+            public Optional<com.topstep.trading.chartstate.EqualLevelDetector.EqualLevel> getStrongestEqualLow() {
+                return equalLevelDetector.getStrongestEqualLow();
+            }
+
+            @Override
+            public java.util.List<com.topstep.trading.chartstate.EqualLevelDetector.EqualLevel> getEqualHighsAbove(double price) {
+                return equalLevelDetector.getEqualHighsAbove(price);
+            }
+
+            @Override
+            public java.util.List<com.topstep.trading.chartstate.EqualLevelDetector.EqualLevel> getEqualLowsBelow(double price) {
+                return equalLevelDetector.getEqualLowsBelow(price);
+            }
+
+            @Override
+            public Optional<Double> getLatestClose() {
+                return candleSeries.getLatestClose();
+            }
+
+            @Override
+            public double getHighest(int lookback) {
+                return candleSeries.getHighest(lookback);
+            }
+
+            @Override
+            public double getLowest(int lookback) {
+                return candleSeries.getLowest(lookback);
+            }
+
+            @Override
+            public double getAverageRange(int lookback) {
+                return candleSeries.getAverageRange(lookback);
+            }
+
+            @Override
+            public boolean hasMinimumData(int required) {
+                return candleSeries.size() >= required;
+            }
+
+            @Override
+            public boolean isInAsia() {
+                return false;  // Not needed for validation
+            }
+
+            @Override
+            public boolean isInLondon() {
+                return false;  // Not needed for validation
+            }
+
+            @Override
+            public boolean isInNY() {
+                return false;  // Not needed for validation
+            }
+
+            @Override
+            public String getLevelsSummary() {
+                return levelEngine.toString();
+            }
+
+            @Override
+            public String getRaidsSummary() {
+                return raidDetector.getRaidsSummary();
+            }
+        };
     }
 
     /**
@@ -272,6 +490,14 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
         if (!validateAsymmetricRequirements(isBullishEntry, candle)) {
             return;  // Validation failed, don't generate signal
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // MANDATORY CONFLUENCE VALIDATION (NEW - Critical filter for high win rate)
+        // All 6 checks must pass: Bias/Sweep, Displacement, Raid Quality, HTF, Market Condition, Not Promoted
+        // ═══════════════════════════════════════════════════════════════════════════
+        if (!validateMandatoryConfluences(finalBias, isBullishEntry, candle)) {
+            return;  // Mandatory validation failed, don't generate signal
         }
 
         // All confluences met - generate signal
@@ -926,6 +1152,105 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         }
 
         return true;  // All validations passed
+    }
+
+    /**
+     * Validate ALL mandatory confluences for trade entry.
+     *
+     * This method enforces the 6 MANDATORY requirements identified from
+     * real trade analysis comparing winning vs losing setups:
+     *
+     * 1. Bias/Sweep Alignment (opposite directions)
+     * 2. Confirmed Displacement
+     * 3. Raid Quality ≥ 5
+     * 4. HTF Confirmation
+     * 5. Market Condition ≥ 0
+     * 6. Not Promoted
+     *
+     * ALL checks must pass or the trade is rejected.
+     *
+     * @param bias The market bias (BULLISH or BEARISH)
+     * @param isBullish True for bullish entry, false for bearish
+     * @param candle Current candle
+     * @return true if all mandatory confluences are met, false otherwise
+     */
+    private boolean validateMandatoryConfluences(MarketBias bias, boolean isBullish, Candle candle) {
+        // Get raid direction from active raids
+        com.topstep.trading.chartstate.RaidDirection raidDirection = null;
+        Optional<LiquidityRaid> raidOpt = raidDetector.getBestActiveRaid();
+        if (raidOpt.isPresent()) {
+            raidDirection = raidOpt.get().getDirection();
+        }
+
+        // Calculate market condition score
+        // For now, use a simplified version based on session and volatility
+        // Future: integrate with full MarketConditionFilter if available
+        int marketConditionScore = calculateSimpleMarketConditionScore(candle);
+
+        // Check if this trade was promoted (currently always false - future enhancement)
+        boolean wasPromoted = false;
+
+        // Run mandatory validation
+        ValidationResult result = mandatoryValidator.validateEntry(
+                primarySymbol,
+                bias,
+                raidDirection,
+                isBullish,
+                marketConditionScore,
+                wasPromoted
+        );
+
+        if (result.failed()) {
+            // Log detailed rejection reasons
+            System.out.println(result.getSummary());
+            return false;
+        }
+
+        // Log approval with confirmations
+        System.out.println(result.getSummary());
+        return true;
+    }
+
+    /**
+     * Calculate a simple market condition score for validation.
+     * This is a simplified version - integrate with MarketConditionFilter for full scoring.
+     *
+     * @param candle Current candle
+     * @return Market condition score (higher is better, 0 is minimum acceptable)
+     */
+    private int calculateSimpleMarketConditionScore(Candle candle) {
+        int score = 0;
+
+        // Killzone check (+2)
+        if (killzoneClock.isInKillzone(candle.getTimestamp())) {
+            KillzonePhase phase = killzoneClock.getKillzonePhase(candle.getTimestamp());
+            if (phase == KillzonePhase.PRIME) {
+                score += 2;
+            } else if (phase == KillzonePhase.OPENING) {
+                score += 1;
+            }
+        }
+
+        // Volatility check (+1 if tradeable, -3 if extreme)
+        if (atrCalculator.isTradeable()) {
+            score += 1;
+        } else {
+            score -= 3;
+        }
+
+        // HTF alignment (+2 if aligned)
+        if (hasHtfAlignment) {
+            score += 2;
+        }
+
+        // Macro alignment (+1 if aligned, -2 if opposing)
+        if (macroAlignment == MacroAlignment.ALIGNED) {
+            score += 1;
+        } else if (macroAlignment == MacroAlignment.OPPOSING) {
+            score -= 2;
+        }
+
+        return score;
     }
 
     /**

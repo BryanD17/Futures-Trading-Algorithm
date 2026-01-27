@@ -5,6 +5,7 @@ import com.topstep.trading.domain.OrderSide;
 import com.topstep.trading.event.EventBus;
 import com.topstep.trading.event.StrategySignalEvent;
 import com.topstep.trading.event.StrategySignalEvent.SignalType;
+import com.topstep.trading.validation.TradeEntryValidator;
 
 import java.time.Instant;
 import java.util.List;
@@ -280,6 +281,14 @@ public class SilverBulletStrategy implements TradingStrategy {
             return null;
         }
 
+        // ═══════════════════════════════════════════════════════════════════════════
+        // MANDATORY CONFLUENCE VALIDATION (NEW - Simplified for Silver Bullet)
+        // Check critical confluences: Displacement, HTF confirmation
+        // ═══════════════════════════════════════════════════════════════════════════
+        if (!validateMandatoryConfluencesSilverBullet(expectedMssDirection, candle)) {
+            return null;  // Mandatory validation failed
+        }
+
         // Grade the tier
         TradeTier tier = gradeTier(mss, fvg, now);
 
@@ -473,6 +482,72 @@ public class SilverBulletStrategy implements TradingStrategy {
     /**
      * Reset the raid tracking state.
      */
+    /**
+     * Validate mandatory confluences for Silver Bullet strategy (simplified version).
+     *
+     * Checks:
+     * 1. Confirmed Displacement
+     * 2. HTF Confirmation
+     * 3. Market Condition (simplified - already in SB window = positive)
+     *
+     * @param isBullish Expected trade direction
+     * @param candle Current candle
+     * @return true if validation passes, false otherwise
+     */
+    private boolean validateMandatoryConfluencesSilverBullet(boolean isBullish, Candle candle) {
+        List<String> failures = new java.util.ArrayList<>();
+        List<String> confirmations = new java.util.ArrayList<>();
+
+        // ═══════════════════════════════════════════════════════════════
+        // CHECK 1: Confirmed Displacement (MANDATORY)
+        // ═══════════════════════════════════════════════════════════════
+        boolean hasDisplacement = displacementDetector.hasRecentDisplacement(5, isBullish);
+        if (!hasDisplacement) {
+            failures.add("✗ Displacement not confirmed. No recent displacement in trade direction.");
+        } else {
+            DisplacementDetector.Displacement disp = displacementDetector.getLastDisplacement();
+            confirmations.add(String.format("✓ Displacement: Confirmed (%.2f pts over %d candles)",
+                    disp.getMoveSize(), disp.getCandleCount()));
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // CHECK 2: HTF Confirmation (MANDATORY)
+        // ═══════════════════════════════════════════════════════════════
+        HtfConfirmationResult htf = mtfAnalyzer.checkHtfConfirmation(symbol, isBullish);
+        if (!htf.isConfirmed()) {
+            failures.add("✗ No HTF confirmation. Requires: 15mFVG, 5mFVG, 5mOB, HTF_MSS, or HTF_BIAS.");
+        } else {
+            confirmations.add(String.format("✓ HTF: %s (%s)", htf.getConfirmationType(), htf.getDetails()));
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // CHECK 3: Market Condition (Simplified - SB window = good timing)
+        // ═══════════════════════════════════════════════════════════════
+        // Already in SB window with time remaining = positive market condition
+        confirmations.add("✓ Market: Silver Bullet window (optimal timing)");
+
+        // ═══════════════════════════════════════════════════════════════
+        // BUILD RESULT
+        // ═══════════════════════════════════════════════════════════════
+        boolean passed = failures.isEmpty();
+
+        if (!passed) {
+            // Log rejection
+            System.out.println(String.format("[%s] ❌ SB ENTRY REJECTED - Failed mandatory confluences:", symbol));
+            for (String failure : failures) {
+                System.out.println("  " + failure);
+            }
+            return false;
+        }
+
+        // Log approval
+        System.out.println(String.format("[%s] ✅ SB ENTRY APPROVED - Mandatory confluences confirmed:", symbol));
+        for (String conf : confirmations) {
+            System.out.println("  " + conf);
+        }
+        return true;
+    }
+
     private void resetRaidState() {
         hasLiquidityRaid = false;
         candlesSinceRaid = 0;
