@@ -27,6 +27,7 @@ public class StrategySignalEvent extends BaseEvent {
     private final int quantity;
     private final double riskRewardRatio;
     private final double[][] partialProfitTargets;  // [[R-multiple, % to close], ...]
+    private final boolean wasPromoted;  // True if artificially promoted to higher tier
 
     /**
      * Original constructor for backward compatibility.
@@ -34,7 +35,7 @@ public class StrategySignalEvent extends BaseEvent {
     public StrategySignalEvent(SignalType signalType, String symbol, OrderSide side,
                                double entryPrice, double stopPrice, double targetPrice, String reason) {
         this(signalType, symbol, side, entryPrice, stopPrice, targetPrice, reason,
-             TradeTier.TIER_2, 1, 2.0, null);
+             TradeTier.TIER_2, 1, 2.0, null, false);
     }
 
     /**
@@ -44,7 +45,17 @@ public class StrategySignalEvent extends BaseEvent {
                                double entryPrice, double stopPrice, double targetPrice, String reason,
                                TradeTier tier, int quantity) {
         this(signalType, symbol, side, entryPrice, stopPrice, targetPrice, reason,
-             tier, quantity, tier.getRiskRewardRatio(), tier.getPartialProfitTargets());
+             tier, quantity, tier.getRiskRewardRatio(), tier.getPartialProfitTargets(), false);
+    }
+
+    /**
+     * Enhanced constructor with tier, quantity, and wasPromoted flag.
+     */
+    public StrategySignalEvent(SignalType signalType, String symbol, OrderSide side,
+                               double entryPrice, double stopPrice, double targetPrice, String reason,
+                               TradeTier tier, int quantity, boolean wasPromoted) {
+        this(signalType, symbol, side, entryPrice, stopPrice, targetPrice, reason,
+             tier, quantity, tier.getRiskRewardRatio(), tier.getPartialProfitTargets(), wasPromoted);
     }
 
     /**
@@ -53,7 +64,7 @@ public class StrategySignalEvent extends BaseEvent {
     public StrategySignalEvent(SignalType signalType, String symbol, OrderSide side,
                                double entryPrice, double stopPrice, double targetPrice, String reason,
                                TradeTier tier, int quantity, double riskRewardRatio,
-                               double[][] partialProfitTargets) {
+                               double[][] partialProfitTargets, boolean wasPromoted) {
         super(EventType.STRATEGY_SIGNAL);
         this.signalType = Objects.requireNonNull(signalType, "signalType cannot be null");
         this.symbol = Objects.requireNonNull(symbol, "symbol cannot be null");
@@ -66,6 +77,7 @@ public class StrategySignalEvent extends BaseEvent {
         this.quantity = quantity > 0 ? quantity : 1;
         this.riskRewardRatio = riskRewardRatio > 0 ? riskRewardRatio : tier.getRiskRewardRatio();
         this.partialProfitTargets = partialProfitTargets != null ? partialProfitTargets : tier.getPartialProfitTargets();
+        this.wasPromoted = wasPromoted;
     }
 
     // Original getters
@@ -82,6 +94,7 @@ public class StrategySignalEvent extends BaseEvent {
     public int getQuantity() { return quantity; }
     public double getRiskRewardRatio() { return riskRewardRatio; }
     public double[][] getPartialProfitTargets() { return partialProfitTargets; }
+    public boolean wasPromoted() { return wasPromoted; }
 
     /**
      * Get the risk distance (entry to stop).
