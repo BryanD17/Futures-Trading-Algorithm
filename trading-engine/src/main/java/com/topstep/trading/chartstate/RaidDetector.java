@@ -513,6 +513,46 @@ public class RaidDetector {
         return String.format("RaidDetector{%s: %d active raids}", symbol, activeRaids.size());
     }
 
+    /**
+     * Get the best active raid (highest score among all active).
+     * This is an alias for getBestRaidForEntry() for API compatibility.
+     */
+    public synchronized Optional<LiquidityRaid> getBestActiveRaid() {
+        return getBestRaidForEntry();
+    }
+
+    /**
+     * Get active raid by direction.
+     * This is an alias for getRaidByDirection() for API compatibility.
+     */
+    public synchronized Optional<LiquidityRaid> getActiveRaidByDirection(RaidDirection direction) {
+        return getRaidByDirection(direction);
+    }
+
+    /**
+     * Get a summary of all active raids.
+     * @return Human-readable summary of active raids
+     */
+    public synchronized String getRaidsSummary() {
+        if (activeRaids.isEmpty()) {
+            return "[" + symbol + "] No active raids";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("[").append(symbol).append("] Active raids (").append(activeRaids.size()).append("):\n");
+
+        for (LiquidityRaid raid : activeRaids.values()) {
+            sb.append("  - ").append(raid.getDirection().getDisplayName())
+              .append(" @ ").append(raid.getTargetLevel().getType().getDisplayName())
+              .append(" (score=").append(raid.getQualityScore())
+              .append(", state=").append(raid.getState())
+              .append(", bars=").append(raid.getBarsSinceRaid())
+              .append(")\n");
+        }
+
+        return sb.toString().trim();
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // DETECTION CONTEXT
     // ═══════════════════════════════════════════════════════════════════

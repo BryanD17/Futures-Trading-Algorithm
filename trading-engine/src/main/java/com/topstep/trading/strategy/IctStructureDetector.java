@@ -154,4 +154,41 @@ public class IctStructureDetector {
         lastSwingLow = null;
         currentBias = MarketBias.NEUTRAL;
     }
+
+    /**
+     * Check if there was a recent Market Structure Shift (MSS) within the lookback period.
+     * An MSS is detected when the bias changes from one direction to another.
+     *
+     * @param lookback Number of candles to look back for MSS
+     * @return true if MSS occurred recently
+     */
+    public boolean hasRecentMss(int lookback) {
+        // If bias is neutral, no MSS has occurred
+        if (currentBias == MarketBias.NEUTRAL) {
+            return false;
+        }
+
+        // We need at least a few candles to detect MSS
+        if (candles.size() < 3) {
+            return false;
+        }
+
+        // Check if we have swing points that indicate a shift
+        // An MSS is confirmed when price breaks structure in the new direction
+        if (lastSwingHigh != null && lastSwingLow != null && !candles.isEmpty()) {
+            Candle latest = candles.get(candles.size() - 1);
+
+            // For bullish MSS: price broke above swing high (lower high broken)
+            if (currentBias == MarketBias.BULLISH && latest.getClose() > lastSwingHigh) {
+                return true;
+            }
+
+            // For bearish MSS: price broke below swing low (higher low broken)
+            if (currentBias == MarketBias.BEARISH && latest.getClose() < lastSwingLow) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
