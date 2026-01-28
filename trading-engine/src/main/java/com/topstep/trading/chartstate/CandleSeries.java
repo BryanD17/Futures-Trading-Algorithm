@@ -74,6 +74,18 @@ public class CandleSeries {
     }
 
     /**
+     * Get the close price of the most recent candle.
+     * @return Optional containing the close price, or empty if no candles
+     */
+    public synchronized java.util.Optional<Double> getLatestClose() {
+        Candle latest = getLatestCandle();
+        if (latest != null) {
+            return java.util.Optional.of(latest.getClose());
+        }
+        return java.util.Optional.empty();
+    }
+
+    /**
      * Get a range of candles (most recent first).
      * @param startBarsAgo Start position (0 = most recent)
      * @param endBarsAgo End position (exclusive)
@@ -303,6 +315,14 @@ public class CandleSeries {
     }
 
     public synchronized int getSize() {
+        return size;
+    }
+
+    /**
+     * Get the current number of candles.
+     * This is an alias for getSize() for API compatibility.
+     */
+    public synchronized int size() {
         return size;
     }
 
