@@ -27,6 +27,10 @@ public class InstrumentProfile {
     private final int microContracts;         // Number of micro contracts for Standard quality
     private final boolean hasMicroContract;   // Whether micro version exists
 
+    // Topstep trading restrictions (due to increased volatility/margin requirements)
+    private final boolean alwaysUseMicro;     // When true, ALWAYS use micro contracts (full-size restricted)
+    private final int microMaxContracts;      // Topstep max micro contracts (e.g., 2 for $50K account)
+
     // Tick/Point values
     private final double tickSize;
     private final double tickValue;
@@ -87,6 +91,8 @@ public class InstrumentProfile {
         this.microTickValue = builder.microTickValue;
         this.microContracts = builder.microContracts;
         this.hasMicroContract = builder.microSymbol != null && !builder.microSymbol.isEmpty();
+        this.alwaysUseMicro = builder.alwaysUseMicro;
+        this.microMaxContracts = builder.microMaxContracts;
         this.tickSize = builder.tickSize;
         this.tickValue = builder.tickValue;
         this.pointValue = builder.pointValue;
@@ -129,6 +135,8 @@ public class InstrumentProfile {
     public double getMicroTickValue() { return microTickValue; }
     public int getMicroContracts() { return microContracts; }
     public boolean hasMicroContract() { return hasMicroContract; }
+    public boolean isAlwaysUseMicro() { return alwaysUseMicro; }
+    public int getMicroMaxContracts() { return microMaxContracts; }
     public double getTickSize() { return tickSize; }
     public double getTickValue() { return tickValue; }
     public double getPointValue() { return pointValue; }
@@ -217,15 +225,23 @@ public class InstrumentProfile {
     /**
      * Determine if we should use micro contracts based on raid quality score.
      *
-     * Score 4-5 (Standard): Use MICRO contracts (lower risk)
-     * Score 6-7 (Premium): Use FULL contracts
-     * Score 8-10 (Elite): Use FULL contracts
+     * When alwaysUseMicro is true (Topstep restriction on full-size contract):
+     *   ALL trades use micro contracts regardless of quality score.
+     *
+     * Otherwise (normal behavior):
+     *   Score 4-5 (Standard): Use MICRO contracts (lower risk)
+     *   Score 6-7 (Premium): Use FULL contracts
+     *   Score 8-10 (Elite): Use FULL contracts
      *
      * @param raidQualityScore The quality score (1-10)
      * @return true if micro contracts should be used
      */
     public boolean shouldUseMicro(int raidQualityScore) {
-        // Only use micro for Standard quality (4-5) and if micro exists
+        // Topstep restriction: full-size contract is banned, always use micro
+        if (alwaysUseMicro && hasMicroContract) {
+            return true;
+        }
+        // Normal behavior: only use micro for Standard quality (4-5) and if micro exists
         return hasMicroContract && raidQualityScore >= 4 && raidQualityScore <= 5;
     }
 
@@ -243,11 +259,17 @@ public class InstrumentProfile {
     }
 
     /**
-     * Get the appropriate quantity based on raid quality score.
+     * Get the appropriate quantity based on raid quality score and trade tier.
      *
-     * Score 4-5 (Standard): Use micro contracts (microContracts field, default 2)
-     * Score 6-7 (Premium): Use full contracts (baseContracts)
-     * Score 8-10 (Elite): Use full contracts (baseContracts)
+     * When alwaysUseMicro is true (Topstep restriction):
+     *   Tier 3-4 (Premium/Elite - best confluence): microMaxContracts (e.g., 2)
+     *   Tier 2 (Standard): 1 contract
+     *   Never exceeds microMaxContracts (Topstep enforced limit)
+     *
+     * Otherwise (normal behavior):
+     *   Score 4-5 (Standard): Use micro contracts (microContracts field, default 2)
+     *   Score 6-7 (Premium): Use full contracts (baseContracts)
+     *   Score 8-10 (Elite): Use full contracts (baseContracts)
      *
      * @param raidQualityScore The quality score (1-10), or -1 if no raid
      * @return Number of contracts to trade
@@ -257,6 +279,27 @@ public class InstrumentProfile {
             return microContracts;
         }
         return baseContracts;
+    }
+
+    /**
+     * Get tier-based micro contract quantity when alwaysUseMicro is active.
+     *
+     * Topstep restriction sizing:
+     *   Tier 3-4 (Premium/Elite - best optimal confluence): max micro contracts (e.g., 2)
+     *   Tier 2 (Standard): 1 contract (conservative for lower confluence)
+     *
+     * @param tier The trade tier
+     * @return Number of micro contracts to trade
+     */
+    public int getMicroQuantityForTier(TradeTier tier) {
+        if (!alwaysUseMicro) {
+            return microContracts;  // Fall back to default micro sizing
+        }
+        // Best confluence (Tier 3-4) gets max contracts, Tier 2 gets 1
+        if (tier == TradeTier.TIER_4 || tier == TradeTier.TIER_3) {
+            return microMaxContracts;  // e.g., 2 for $50K account
+        }
+        return 1;  // Conservative for lower-tier setups
     }
 
     /**
@@ -279,6 +322,18 @@ public class InstrumentProfile {
         return String.format("FULL (%s x%d @ $%.2f/tick)", symbol, baseContracts, tickValue);
     }
 
+    /**
+     * Get a description of the contract sizing for a specific tier (when alwaysUseMicro).
+     */
+    public String getContractSizingDescriptionForTier(TradeTier tier) {
+        if (alwaysUseMicro) {
+            int qty = getMicroQuantityForTier(tier);
+            return String.format("MICRO (%s x%d @ $%.2f/tick) [Topstep restricted]",
+                    microSymbol, qty, microTickValue);
+        }
+        return getContractSizingDescription(6);  // Default to full contract description
+    }
+
     @Override
     public String toString() {
         return String.format("%s (%s) - $%.2f/tick, ATR: %.2f, OTE: %.2f-%.2f",
@@ -296,6 +351,8 @@ public class InstrumentProfile {
         private String microSymbol;
         private double microTickValue;
         private int microContracts = 2;  // Default: 2 micro contracts for Standard quality
+        private boolean alwaysUseMicro = false;  // Topstep restriction: full-size banned
+        private int microMaxContracts = 2;       // Topstep max micro contracts for account size
         private double tickSize;
         private double tickValue;
         private double pointValue;
@@ -335,6 +392,8 @@ public class InstrumentProfile {
         public Builder microSymbol(String microSymbol) { this.microSymbol = microSymbol; return this; }
         public Builder microTickValue(double microTickValue) { this.microTickValue = microTickValue; return this; }
         public Builder microContracts(int microContracts) { this.microContracts = microContracts; return this; }
+        public Builder alwaysUseMicro(boolean alwaysUseMicro) { this.alwaysUseMicro = alwaysUseMicro; return this; }
+        public Builder microMaxContracts(int microMaxContracts) { this.microMaxContracts = microMaxContracts; return this; }
         public Builder tickSize(double tickSize) { this.tickSize = tickSize; return this; }
         public Builder tickValue(double tickValue) { this.tickValue = tickValue; return this; }
         public Builder pointValue(double pointValue) { this.pointValue = pointValue; return this; }

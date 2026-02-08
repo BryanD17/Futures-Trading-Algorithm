@@ -80,9 +80,10 @@ public class TradingRiskManager {
         CORRELATION_GROUPS.put("6E", Arrays.asList("6B"));  // Euro and Pound move together
         CORRELATION_GROUPS.put("6B", Arrays.asList("6E"));
 
-        // Commodities - Gold and Silver
-        CORRELATION_GROUPS.put("GC", Arrays.asList("SI"));
-        CORRELATION_GROUPS.put("SI", Arrays.asList("GC"));
+        // Commodities - Gold and Silver (include micro versions)
+        CORRELATION_GROUPS.put("GC", Arrays.asList("SI", "MGC"));
+        CORRELATION_GROUPS.put("MGC", Arrays.asList("SI", "GC"));  // MGC correlates with GC and SI
+        CORRELATION_GROUPS.put("SI", Arrays.asList("GC", "MGC"));
     }
 
     // Inverse correlation pairs (symbols that typically move opposite)
@@ -91,11 +92,23 @@ public class TradingRiskManager {
     static {
         // Gold vs Dollar (when USD strengthens, Gold typically falls)
         INVERSE_CORRELATIONS.put("GC", Arrays.asList("DX"));
-        INVERSE_CORRELATIONS.put("DX", Arrays.asList("GC"));
+        INVERSE_CORRELATIONS.put("MGC", Arrays.asList("DX"));  // MGC same inverse as GC
+        INVERSE_CORRELATIONS.put("DX", Arrays.asList("GC", "MGC"));
 
         // Yen is a safe haven - inverse to risk assets
         INVERSE_CORRELATIONS.put("6J", Arrays.asList("ES", "NQ"));
     }
+
+    // Topstep restricted full-size instruments (Feb 2026 - volatility/margin restrictions)
+    // These cannot be traded at all - must use micro equivalents instead
+    private static final Set<String> TOPSTEP_RESTRICTED_FULL_SIZE = new HashSet<>(Arrays.asList(
+            "GC",   // Gold - use MGC instead
+            "SI",   // Silver - use SIL instead
+            "HG",   // Copper - use MHG instead
+            "PL",   // Platinum - restricted
+            "NG",   // Natural Gas - use MNG instead
+            "QG"    // E-Mini Natural Gas - restricted
+    ));
 
     // ==================== STATE TRACKING ====================
 
@@ -130,7 +143,13 @@ public class TradingRiskManager {
         // Check and reset daily counters if needed
         checkDayRollover();
 
-        // 1. Check if instrument is blocked
+        // 1a. TOPSTEP RESTRICTION: Reject full-size restricted instruments
+        if (TOPSTEP_RESTRICTED_FULL_SIZE.contains(symbol.toUpperCase())) {
+            return RiskDecision.reject("TOPSTEP RESTRICTION: " + symbol +
+                    " is restricted due to volatility/margin requirements. Use micro equivalent.");
+        }
+
+        // 1b. Check if instrument is blocked
         if (blockedInstruments.contains(symbol)) {
             return RiskDecision.reject("Instrument blocked due to consecutive losses or daily limit");
         }
@@ -468,6 +487,14 @@ public class TradingRiskManager {
      */
     public PositionInfo getPositionInfo(String symbol) {
         return activePositions.get(symbol);
+    }
+
+    /**
+     * Check if a full-size instrument is restricted by Topstep.
+     * Restricted instruments cannot be traded directly - must use micro equivalents.
+     */
+    public static boolean isTopstepRestricted(String symbol) {
+        return TOPSTEP_RESTRICTED_FULL_SIZE.contains(symbol.toUpperCase());
     }
 
     /**
