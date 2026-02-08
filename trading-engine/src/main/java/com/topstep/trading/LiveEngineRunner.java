@@ -18,6 +18,7 @@ import com.topstep.trading.strategy.KillzoneClock;
 import com.topstep.trading.strategy.KillzonePhase;
 import com.topstep.trading.strategy.SessionManager;
 import com.topstep.trading.strategy.TradeTier;
+import com.topstep.trading.strategy.InstrumentCharacteristics;
 import com.topstep.trading.strategy.TradingStrategy;
 
 import java.time.*;
@@ -498,6 +499,14 @@ public class LiveEngineRunner {
 
             // Process through execution engine first (fills, stops, targets)
             executionEngine.onNewCandle(candle);
+
+            // Check price-based breakeven trigger for single-contract runner positions
+            // (e.g., 1 MGC contract running to full tier target, needs breakeven at 1R)
+            if (bracketManager != null) {
+                String symbol = candle.getSymbol();
+                double tickSize = InstrumentCharacteristics.getProfile(symbol).getTickSize();
+                bracketManager.checkPriceBreakevenTrigger(symbol, candle.getClose(), tickSize);
+            }
 
             // Feed to appropriate engine (only if not paused and not flattening)
             if (!paused.get() && !flatteningPositions.get()) {
