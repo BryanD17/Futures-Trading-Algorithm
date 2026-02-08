@@ -173,8 +173,13 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         // Update ALL detectors
         updateDetectors(candle);
 
-        // Don't trade if we already have a position
+        // Don't trade if we already have a position (check both full and micro symbols)
         if (context.hasPosition(profile.getSymbol())) {
+            signalPending = false;
+            return;
+        }
+        // Also check micro symbol position (e.g., MGC when analyzing GC)
+        if (profile.hasMicroContract() && context.hasPosition(profile.getMicroSymbol())) {
             signalPending = false;
             return;
         }
@@ -928,9 +933,18 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
                     raidScore + "/10 (" + currentActiveRaid.getQualityClassification() + ") @ " +
                     currentActiveRaid.getTargetLevel().getType().getDisplayName());
 
-            // Show contract sizing based on quality
+            // Show contract sizing based on quality or Topstep restriction
+            if (profile.isAlwaysUseMicro() && currentTier != null) {
+                System.out.println("[" + profile.getSymbol() + "] 📦 Contract: " +
+                        profile.getContractSizingDescriptionForTier(currentTier));
+            } else {
+                System.out.println("[" + profile.getSymbol() + "] 📦 Contract: " +
+                        profile.getContractSizingDescription(raidScore));
+            }
+        } else if (profile.isAlwaysUseMicro() && currentTier != null) {
+            // Show Topstep restriction even without raid
             System.out.println("[" + profile.getSymbol() + "] 📦 Contract: " +
-                    profile.getContractSizingDescription(raidScore));
+                    profile.getContractSizingDescriptionForTier(currentTier));
         }
 
         System.out.println("[" + profile.getSymbol() + "] R:R Target: 1:" + currentTier.getRiskRewardRatio() +
@@ -940,6 +954,11 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     /**
      * Generate signal with tier-based R:R and instrument-specific sizing.
      * Uses micro contracts for Standard quality (score 4-5) setups.
+     *
+     * TOPSTEP RESTRICTION: When alwaysUseMicro is active (e.g., GC restricted),
+     * ALL trades use micro contracts with tier-based sizing:
+     *   Tier 3-4 (Premium/Elite): max micro contracts (e.g., 2 MGC)
+     *   Tier 2 (Standard): 1 micro contract
      */
     private void generateSignal(Candle candle, StrategyContext context) {
         // CRITICAL FIX: Use Silver Bullet direction when in Silver Bullet setup
@@ -957,13 +976,21 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         int raidQualityScore = currentActiveRaid != null ? currentActiveRaid.getQualityScore() : 6;
 
         // Get appropriate symbol based on quality (micro for 4-5, full for 6+)
+        // NOTE: When alwaysUseMicro is true, this ALWAYS returns micro symbol
         currentTradeSymbol = profile.getSymbolForQuality(raidQualityScore);
         usingMicroContract = profile.shouldUseMicro(raidQualityScore);
 
-        // Calculate position size based on quality and ATR
+        // Calculate position size based on quality, tier, and ATR
         double currentAtr = atrCalculator.getCurrentAtr();
-        if (usingMicroContract) {
-            // Using micro contracts for Standard quality
+        if (profile.isAlwaysUseMicro()) {
+            // TOPSTEP RESTRICTED: Full-size contract banned, always use micro
+            // Size based on tier: best confluence (T3-4) gets max, lower gets 1
+            recommendedQuantity = profile.getMicroQuantityForTier(currentTier);
+            System.out.println("[" + profile.getSymbol() + "] ⚡ TOPSTEP RESTRICTED: " +
+                    profile.getSymbol() + " banned → Using " + currentTradeSymbol +
+                    " x" + recommendedQuantity + " (" + currentTier + ")");
+        } else if (usingMicroContract) {
+            // Normal micro mode: Standard quality (raid score 4-5)
             recommendedQuantity = profile.getMicroContracts();
             System.out.println("[" + profile.getSymbol() + "] ⚡ MICRO MODE: Score " + raidQualityScore +
                     " → Using " + currentTradeSymbol + " x" + recommendedQuantity);
@@ -974,7 +1001,9 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
         } else {
             recommendedQuantity = basePositionSize;
         }
-        recommendedQuantity = Math.min(recommendedQuantity, maxPositionSize);
+        // Enforce max: use microMaxContracts when restricted, otherwise maxPositionSize
+        int effectiveMax = profile.isAlwaysUseMicro() ? profile.getMicroMaxContracts() : maxPositionSize;
+        recommendedQuantity = Math.min(recommendedQuantity, effectiveMax);
 
         // Check bias alignment with sweep direction (null-safe)
         boolean sweepAlignsBullish = sweep != null && sweep.isBullish();
@@ -1203,6 +1232,14 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
                           ", Power3=" + profile.getPower3Reliability());
         System.out.println("  Position Sizing: Base=" + basePositionSize + ", Max=" + maxPositionSize);
         System.out.println("  Enhanced Raid Detection: ENABLED (quality scoring active)");
+        if (profile.isAlwaysUseMicro()) {
+            System.out.println("  *** TOPSTEP RESTRICTION ACTIVE ***");
+            System.out.println("  Full-size " + profile.getSymbol() + " RESTRICTED - using " +
+                    profile.getMicroSymbol() + " (Micro) for all trades");
+            System.out.println("  Max micro contracts: " + profile.getMicroMaxContracts() +
+                    " | Tier 3-4: " + profile.getMicroMaxContracts() +
+                    " contracts | Tier 2: 1 contract");
+        }
     }
 
     @Override

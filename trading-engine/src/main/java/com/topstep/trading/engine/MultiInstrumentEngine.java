@@ -133,8 +133,22 @@ public class MultiInstrumentEngine {
                 " " + symbol + " " + signal.getSide());
 
         // Log market conditions (informational only - actual validation in Runner)
+        // For micro symbols (e.g., MGC), look up the parent profile (GC)
         InstrumentProfile profile = profiles.get(symbol);
+        if (profile == null) {
+            // Try to find parent profile for micro symbols
+            profile = InstrumentCharacteristics.getProfile(symbol);
+            if (profile != null && !profile.getSymbol().equals(symbol)) {
+                // Found parent profile (e.g., GC for MGC signal)
+                System.out.println("[HYBRID ENGINE] Using parent profile " +
+                        profile.getSymbol() + " for micro signal " + symbol);
+            }
+        }
         ATRCalculator atr = atrCalculators.get(symbol);
+        // For micro symbols, try parent ATR calculator
+        if (atr == null && profile != null) {
+            atr = atrCalculators.get(profile.getSymbol());
+        }
         if (profile != null && atr != null) {
             MarketConditionFilter.MarketCondition condition =
                     conditionFilter.evaluate(strategyContext.getCurrentTime(), symbol, atr, profile);
@@ -167,6 +181,14 @@ public class MultiInstrumentEngine {
         String symbol = signal.getSymbol();
         InstrumentProfile profile = profiles.get(symbol);
         ATRCalculator atr = atrCalculators.get(symbol);
+
+        // For micro symbols (e.g., MGC), look up the parent profile
+        if (profile == null) {
+            profile = InstrumentCharacteristics.getProfile(symbol);
+            if (profile != null && !profile.getSymbol().equals(symbol)) {
+                atr = atrCalculators.get(profile.getSymbol());
+            }
+        }
 
         if (profile == null) {
             return null; // No profile means no filtering
@@ -259,6 +281,7 @@ public class MultiInstrumentEngine {
         System.out.println("  - Consecutive loss protection (2 max)");
         System.out.println("  - Market condition filtering");
         System.out.println("  - Session-based tier bonus");
+        System.out.println("  - Topstep trading restrictions (GC/SI/HG/PL/NG/QG full-size banned)");
 
         System.out.println("\n[HYBRID ENGINE] Engine started successfully");
     }

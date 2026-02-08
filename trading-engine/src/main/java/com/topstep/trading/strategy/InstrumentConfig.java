@@ -63,6 +63,9 @@ public class InstrumentConfig {
 
     /**
      * GC - Gold Futures
+     * NOTE: Full-size GC is RESTRICTED by Topstep (Feb 2026).
+     * All gold trades use MGC (Micro Gold) instead.
+     * This config is kept for data analysis; orders go to MGC.
      */
     public static InstrumentConfig gold() {
         return new InstrumentConfig(
@@ -74,6 +77,24 @@ public class InstrumentConfig {
             "SI",              // SMT with Silver
             25.0,              // Typical ATR ~$25
             1
+        );
+    }
+
+    /**
+     * MGC - Micro Gold Futures
+     * Used instead of GC due to Topstep trading restrictions.
+     * Topstep limits: 2 contracts for $50K, 4 for $100K, 6 for $150K accounts.
+     */
+    public static InstrumentConfig microGold() {
+        return new InstrumentConfig(
+            "MGC",
+            "CON.F.US.MGC.G26",  // February 2026 Micro Gold
+            0.10,
+            1.0,               // $1.00 per tick (1/10th of GC)
+            10.0,              // $10 per point (1/10th of GC)
+            "SI",              // SMT with Silver
+            25.0,              // Same ATR as GC (same price)
+            2                  // Max 2 contracts ($50K account)
         );
     }
 

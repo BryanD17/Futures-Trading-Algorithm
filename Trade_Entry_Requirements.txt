@@ -186,19 +186,33 @@ Sequential checks (ALL must pass):
 7. INSTRUMENT SPECIFICATIONS
 ================================================================================
 
-+--------+-----------+------------+---------------------+
-| Symbol | Tick Size | Tick Value | Max Risk Multiplier |
-+--------+-----------+------------+---------------------+
-| ES     | 0.25      | $12.50     | 2.0x                |
-| NQ     | 0.25      | $5.00      | 4.0x                |
-| 6E     | 0.00005   | $6.25      | 2.0x                |
-| 6J     | 0.0000005 | $6.25      | 5.0x                |
-| 6B     | 0.0001    | $6.25      | 2.0x                |
-| CL     | 0.01      | $10.00     | 3.0x                |
-| GC     | 0.10      | $10.00     | 3.0x                |
-| NG     | 0.001     | $10.00     | 3.0x                |
-| SI     | 0.005     | $25.00     | 4.0x                |
-+--------+-----------+------------+---------------------+
++--------+-----------+------------+---------------------+-----------------------+
+| Symbol | Tick Size | Tick Value | Max Risk Multiplier | Topstep Status        |
++--------+-----------+------------+---------------------+-----------------------+
+| ES     | 0.25      | $12.50     | 2.0x                | Active                |
+| NQ     | 0.25      | $5.00      | 4.0x                | Active                |
+| 6E     | 0.00005   | $6.25      | 2.0x                | Active                |
+| 6J     | 0.0000005 | $6.25      | 5.0x                | Active                |
+| 6B     | 0.0001    | $6.25      | 2.0x                | Active                |
+| CL     | 0.01      | $10.00     | 3.0x                | Active                |
+| GC     | 0.10      | $10.00     | 3.0x                | RESTRICTED (use MGC)  |
+| MGC    | 0.10      | $1.00      | 2.0x                | Active (max 2 for 50K)|
+| NG     | 0.001     | $10.00     | 3.0x                | RESTRICTED            |
+| SI     | 0.005     | $25.00     | 4.0x                | RESTRICTED            |
++--------+-----------+------------+---------------------+-----------------------+
+
+TOPSTEP TRADING RESTRICTIONS (Feb 2026):
+Full-size contracts RESTRICTED: GC, SI, HG, PL, NG, QG
+Micro alternatives with position limits ($50K / $100K / $150K):
+  MGC (Micro Gold):    2 / 4 / 6 contracts
+  SIL (Micro Silver):  2 / 4 / 6 contracts
+  MHG (Micro Copper):  2 / 4 / 6 contracts
+  MNG (Micro NatGas):  2 / 4 / 6 contracts
+
+Gold (GC) -> MGC strategy:
+  Tier 3-4 (Premium/Elite confluence): 2 MGC contracts
+  Tier 2 (Standard confluence): 1 MGC contract
+  All partial take profits and risk management apply normally.
 
 
 ================================================================================
