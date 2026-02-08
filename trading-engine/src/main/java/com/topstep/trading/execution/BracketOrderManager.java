@@ -72,6 +72,11 @@ public class BracketOrderManager {
         public volatile boolean canceled = false;
         public volatile boolean movedToBreakeven = false;
 
+        // Price-based breakeven trigger for single-contract positions
+        // When only 1 contract runs to full target, move stop to breakeven at 1R price level
+        public volatile double breakevenTriggerPrice = 0.0;  // 0 = no trigger
+        public volatile boolean isSingleContractRunner = false;
+
         // Legacy single TP (for backward compatibility)
         public String takeProfitOrderId;
         public double takeProfitPrice;
@@ -193,37 +198,101 @@ public class BracketOrderManager {
         List<TakeProfitLevel> levels = new ArrayList<>();
 
         System.out.println("  Take Profit Levels:");
-        for (int i = 0; i < partialTargets.length && remainingQty > 0; i++) {
-            double rMultiple = partialTargets[i][0];
-            double percentage = partialTargets[i][1];
 
-            // Calculate quantity for this level
-            int levelQty;
-            if (i == partialTargets.length - 1) {
-                // Last level gets remaining quantity
-                levelQty = remainingQty;
+        // SMALL POSITION OPTIMIZATION: For 1-2 contracts, use simplified distribution
+        // to ensure a "runner" always reaches the tier's full R:R target.
+        // Without this fix, Math.max(1,...) consumes all contracts at early TP levels.
+        if (quantity <= 2 && partialTargets.length > 1) {
+            double lastRMultiple = partialTargets[partialTargets.length - 1][0];  // Tier's full target
+
+            if (quantity == 1) {
+                // 1 CONTRACT: Single TP at the tier's FULL R:R target
+                // Run for the big target instead of closing at 1R
+                double levelPrice;
+                if (bracket.isLong()) {
+                    levelPrice = entryPrice + (riskDistance * lastRMultiple);
+                } else {
+                    levelPrice = entryPrice - (riskDistance * lastRMultiple);
+                }
+                TakeProfitLevel level = new TakeProfitLevel(lastRMultiple, 1.0, levelPrice, 1);
+                levels.add(level);
+                remainingQty = 0;
+
+                // Set price-based breakeven trigger at 1R for protection
+                bracket.isSingleContractRunner = true;
+                if (bracket.isLong()) {
+                    bracket.breakevenTriggerPrice = entryPrice + riskDistance;  // 1R above entry
+                } else {
+                    bracket.breakevenTriggerPrice = entryPrice - riskDistance;  // 1R below entry
+                }
+
+                System.out.println("    TP1: 1 contract @ " + String.format("%.2f", levelPrice) +
+                    " (100% at " + lastRMultiple + "R) [single-contract: full target]");
+                System.out.println("    Breakeven trigger: " +
+                    String.format("%.2f", bracket.breakevenTriggerPrice) + " (1R price-based)");
+
             } else {
-                levelQty = Math.max(1, (int) Math.round(quantity * percentage));
-                levelQty = Math.min(levelQty, remainingQty);
+                // 2 CONTRACTS: 1 at 1R (lock-in + breakeven move), 1 at full target (runner)
+                double firstR = partialTargets[0][0];  // Always 1R
+
+                // TP1: Lock-in at 1R
+                double price1;
+                if (bracket.isLong()) {
+                    price1 = entryPrice + (riskDistance * firstR);
+                } else {
+                    price1 = entryPrice - (riskDistance * firstR);
+                }
+                levels.add(new TakeProfitLevel(firstR, 0.50, price1, 1));
+                System.out.println("    TP1: 1 contract @ " + String.format("%.2f", price1) +
+                    " (50% at " + firstR + "R) [lock-in + breakeven]");
+
+                // TP2: Runner at full tier target
+                double price2;
+                if (bracket.isLong()) {
+                    price2 = entryPrice + (riskDistance * lastRMultiple);
+                } else {
+                    price2 = entryPrice - (riskDistance * lastRMultiple);
+                }
+                levels.add(new TakeProfitLevel(lastRMultiple, 0.50, price2, 1));
+                System.out.println("    TP2: 1 contract @ " + String.format("%.2f", price2) +
+                    " (50% at " + lastRMultiple + "R) [runner]");
+
+                remainingQty = 0;
             }
+        } else {
+            // STANDARD DISTRIBUTION: 3+ contracts use normal tier-based partials
+            for (int i = 0; i < partialTargets.length && remainingQty > 0; i++) {
+                double rMultiple = partialTargets[i][0];
+                double percentage = partialTargets[i][1];
 
-            // Calculate price for this level
-            double levelPrice;
-            if (bracket.isLong()) {
-                levelPrice = entryPrice + (riskDistance * rMultiple);
-            } else {
-                levelPrice = entryPrice - (riskDistance * rMultiple);
+                // Calculate quantity for this level
+                int levelQty;
+                if (i == partialTargets.length - 1) {
+                    // Last level gets remaining quantity
+                    levelQty = remainingQty;
+                } else {
+                    levelQty = Math.max(1, (int) Math.round(quantity * percentage));
+                    levelQty = Math.min(levelQty, remainingQty);
+                }
+
+                // Calculate price for this level
+                double levelPrice;
+                if (bracket.isLong()) {
+                    levelPrice = entryPrice + (riskDistance * rMultiple);
+                } else {
+                    levelPrice = entryPrice - (riskDistance * rMultiple);
+                }
+
+                TakeProfitLevel level = new TakeProfitLevel(rMultiple, percentage, levelPrice, levelQty);
+                levels.add(level);
+                remainingQty -= levelQty;
+
+                System.out.println("    TP" + (i + 1) + ": " + levelQty + " contracts @ " +
+                    String.format("%.2f", levelPrice) + " (" + String.format("%.0f%%", percentage * 100) +
+                    " at " + rMultiple + "R)");
+
+                if (remainingQty <= 0) break;
             }
-
-            TakeProfitLevel level = new TakeProfitLevel(rMultiple, percentage, levelPrice, levelQty);
-            levels.add(level);
-            remainingQty -= levelQty;
-
-            System.out.println("    TP" + (i + 1) + ": " + levelQty + " contracts @ " +
-                String.format("%.2f", levelPrice) + " (" + String.format("%.0f%%", percentage * 100) +
-                " at " + rMultiple + "R)");
-
-            if (remainingQty <= 0) break;
         }
 
         bracket.takeProfitLevels = levels;
@@ -635,5 +704,44 @@ public class BracketOrderManager {
      */
     public int getActiveBracketCount() {
         return activeBrackets.size();
+    }
+
+    /**
+     * Check price-based breakeven trigger for single-contract runner positions.
+     *
+     * For 1-contract positions targeting the full tier R:R (e.g., 3R, 4R, 5R),
+     * there is no partial TP fill to trigger the normal breakeven move.
+     * Instead, we monitor price and move to breakeven when price reaches 1R.
+     *
+     * Call this method on each market data update for symbols with active brackets.
+     *
+     * @param symbol The trading symbol
+     * @param currentPrice The current market price
+     * @param tickSize The instrument's tick size for breakeven buffer calculation
+     */
+    public void checkPriceBreakevenTrigger(String symbol, double currentPrice, double tickSize) {
+        BracketOrder bracket = activeBrackets.get(symbol);
+        if (bracket == null || bracket.canceled || bracket.stopFilled || bracket.movedToBreakeven) {
+            return;
+        }
+
+        // Only applies to single-contract runner positions
+        if (!bracket.isSingleContractRunner || bracket.breakevenTriggerPrice == 0.0) {
+            return;
+        }
+
+        // Check if price has reached the breakeven trigger level (1R)
+        boolean triggered = false;
+        if (bracket.isLong() && currentPrice >= bracket.breakevenTriggerPrice) {
+            triggered = true;
+        } else if (!bracket.isLong() && currentPrice <= bracket.breakevenTriggerPrice) {
+            triggered = true;
+        }
+
+        if (triggered) {
+            System.out.println("\n[BRACKET] Price reached 1R breakeven trigger for " + symbol +
+                " (price: " + currentPrice + ", trigger: " + bracket.breakevenTriggerPrice + ")");
+            moveStopToBreakeven(bracket, tickSize);
+        }
     }
 }
