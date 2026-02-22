@@ -1283,6 +1283,13 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
             recommendedQuantity = maxQuantityFor6E;
         }
 
+        // 6J requires minimum TIER_3 - skip lower quality setups
+        if ("6J".equals(primarySymbol) && (currentTier == null || currentTier.getLevel() < 3)) {
+            System.out.println("[STRATEGY] 6J signal rejected - tier " + currentTier + " below minimum TIER_3");
+            signalPending = false;
+            return;
+        }
+
         if (bias == MarketBias.BULLISH && sweep.isBullish()) {
             generateBullishSignal(candle, sweep);
         } else if (bias == MarketBias.BEARISH && sweep.isBearish()) {

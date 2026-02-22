@@ -134,6 +134,12 @@ public class PropFirmRiskEngine {
             quantity = limits.getMaxContracts();
         }
 
+        // 5b. 6J: enforce minimum of 3 contracts - never trade 1 or 2
+        if ("6J".equals(signal.getSymbol()) && quantity < 3) {
+            System.out.println("[RISK] 6J minimum contract size is 3 - approved quantity was " + quantity);
+            return RiskDecision.deny("6J minimum contract size is 3 - insufficient account size/risk budget");
+        }
+
         // 6. Check total contracts limit
         int currentContracts = account.getTotalContracts();
         if (currentContracts + quantity > limits.getMaxTotalContracts()) {

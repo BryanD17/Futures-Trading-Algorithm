@@ -4,6 +4,7 @@ import Overview from './components/Overview'
 import Positions from './components/Positions'
 import Trades from './components/Trades'
 import Risk from './components/Risk'
+import Journal from './components/Journal'
 import Controls from './components/Controls'
 import { StatusService } from './services/api'
 
@@ -64,6 +65,12 @@ function App() {
         >
           Risk
         </button>
+        <button
+          className={activeTab === 'journal' ? 'active' : ''}
+          onClick={() => setActiveTab('journal')}
+        >
+          Journal
+        </button>
       </nav>
 
       <main className="content">
@@ -72,6 +79,7 @@ function App() {
         {activeTab === 'positions' && <Positions />}
         {activeTab === 'trades' && <Trades />}
         {activeTab === 'risk' && <Risk />}
+        {activeTab === 'journal' && <Journal />}
       </main>
     </div>
   )

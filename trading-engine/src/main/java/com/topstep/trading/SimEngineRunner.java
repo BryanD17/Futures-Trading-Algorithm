@@ -6,17 +6,22 @@ import com.topstep.trading.domain.AccountState;
 import com.topstep.trading.domain.Candle;
 import com.topstep.trading.domain.Order;
 import com.topstep.trading.domain.RiskLimits;
+import com.topstep.trading.domain.Trade;
 import com.topstep.trading.event.EventBus;
 import com.topstep.trading.event.StrategySignalEvent;
 import com.topstep.trading.execution.ExecutionEngine;
+import com.topstep.trading.journal.TradeJournalService;
 import com.topstep.trading.risk.PropFirmRiskEngine;
 import com.topstep.trading.risk.RiskDecision;
 import com.topstep.trading.strategy.DefaultStrategyContext;
 import com.topstep.trading.strategy.IctHighConfluenceStrategy;
 import com.topstep.trading.strategy.TradingStrategy;
 
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 /**
  * SIM mode engine runner for live trading simulation.
@@ -42,6 +47,8 @@ public class SimEngineRunner {
     private final TradingStrategy strategy;
     private final EventBus eventBus;
     private final DefaultStrategyContext strategyContext;
+
+    private final TradeJournalService journalService = new TradeJournalService();
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
@@ -194,6 +201,10 @@ public class SimEngineRunner {
         // Disconnect from market data
         connector.disconnect();
 
+        // Print and persist the session journal
+        List<Trade> sessionTrades = executionEngine.getCompletedTrades();
+        journalService.onSessionEnd(sessionTrades);
+
         // Print final stats
         printFinalStats();
 
@@ -251,6 +262,10 @@ public class SimEngineRunner {
             // Submit order to execution engine
             Order order = decision.getOrder();
             executionEngine.submitOrder(order, signal.getStopPrice(), signal.getTargetPrice());
+
+            // Record signal context for trade journal enrichment
+            List<String> confluenceFactors = parseConfluenceFromReason(signal.getReason());
+            executionEngine.recordSignalContext(signal.getSymbol(), signal.getTier(), confluenceFactors);
 
             // Print account status
             printAccountStatus();
@@ -349,6 +364,17 @@ public class SimEngineRunner {
     }
 
     /**
+     * Parse confluence factors from the signal reason string.
+     */
+    private List<String> parseConfluenceFromReason(String reason) {
+        if (reason == null || reason.isBlank()) return List.of("Unknown");
+        return Arrays.stream(reason.split("[|,;]+"))
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .collect(Collectors.toList());
+    }
+
+    /**
      * Main entry point for SIM mode.
      */
     public static void run() {
@@ -357,6 +383,8 @@ public class SimEngineRunner {
         // Add shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("\nReceived shutdown signal...");
+            System.out.println("[Journal] Shutdown hook triggered - saving journal...");
+            runner.journalService.onSessionEnd(runner.executionEngine.getCompletedTrades());
             runner.stop();
         }));
 

@@ -9,6 +9,7 @@ import com.topstep.trading.event.EventBus;
 import com.topstep.trading.event.StrategySignalEvent;
 import com.topstep.trading.execution.ExecutionEngine;
 import com.topstep.trading.execution.BracketOrderManager;
+import com.topstep.trading.journal.TradeJournalService;
 import com.topstep.trading.risk.PropFirmRiskEngine;
 import com.topstep.trading.risk.RiskDecision;
 import com.topstep.trading.risk.TradingRiskManager;
@@ -23,6 +24,7 @@ import com.topstep.trading.strategy.TradingStrategy;
 
 import java.time.*;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -32,6 +34,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 /**
  * LIVE mode engine runner for real trading with Topstep.
@@ -98,6 +101,9 @@ public class LiveEngineRunner {
     private final AtomicBoolean killSwitchActive = new AtomicBoolean(false);
     private final AtomicBoolean flatteningPositions = new AtomicBoolean(false);
     private final CountDownLatch shutdownLatch = new CountDownLatch(1);
+
+    // Trade journal service for session summary and persistence
+    private final TradeJournalService journalService = new TradeJournalService();
 
     // EXPRESS Funded Account flag - these accounts start at $0 balance (not $50K)
     // Balance represents P&L accumulated since account creation
@@ -631,6 +637,10 @@ public class LiveEngineRunner {
                     signal.getTier(),
                     signal.getPartialProfitTargets()
                 );
+
+                // Record signal context for trade journal enrichment
+                List<String> confluenceFactors = parseConfluenceFromReason(signal.getReason());
+                executionEngine.recordSignalContext(signal.getSymbol(), signal.getTier(), confluenceFactors);
 
                 // THEN submit to live market via connector
                 String orderId = connector.submitOrder(order, (id, status, fillPrice, fillQty) -> {
@@ -1387,6 +1397,10 @@ public class LiveEngineRunner {
         // Disconnect from market
         connector.disconnect();
 
+        // Print and persist the session journal
+        List<Trade> sessionTrades = executionEngine.getCompletedTrades();
+        journalService.onSessionEnd(sessionTrades);
+
         // Print final stats
         printFinalStats();
 
@@ -1476,14 +1490,28 @@ public class LiveEngineRunner {
     }
 
     /**
+     * Parse confluence factors from the signal reason string.
+     * The reason string contains confluence details separated by common delimiters.
+     */
+    private List<String> parseConfluenceFromReason(String reason) {
+        if (reason == null || reason.isBlank()) return List.of("Unknown");
+        return Arrays.stream(reason.split("[|,;]+"))
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .collect(Collectors.toList());
+    }
+
+    /**
      * Main entry point for LIVE mode.
      */
     public static void run() {
         LiveEngineRunner runner = new LiveEngineRunner();
 
-        // Add shutdown hook for emergency shutdown
+        // Add shutdown hook for emergency shutdown and journal save
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("\nReceived shutdown signal...");
+            System.out.println("[Journal] Shutdown hook triggered - saving journal...");
+            runner.journalService.onSessionEnd(runner.executionEngine.getCompletedTrades());
             runner.emergencyShutdown("System shutdown signal");
         }));
 
