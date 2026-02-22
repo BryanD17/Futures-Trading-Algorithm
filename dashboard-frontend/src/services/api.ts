@@ -51,6 +51,19 @@ export const MetricsService = {
   }
 }
 
+export const JournalService = {
+  async getJournal(filters?: Record<string, string>): Promise<any[]> {
+    const params = filters ? new URLSearchParams(filters).toString() : ''
+    const response = await api.get(`/journal${params ? '?' + params : ''}`)
+    return response.data
+  },
+
+  async getStats(): Promise<any> {
+    const response = await api.get('/journal/stats')
+    return response.data
+  }
+}
+
 export const ControlService = {
   async start(mode: string = 'SIM'): Promise<{ status: string; message: string; warning?: string }> {
     const response = await api.post(`/control/start?mode=${mode}`)

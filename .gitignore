@@ -70,6 +70,9 @@ api-keys.json
 *.swo
 *~
 
+# Trade journal data (auto-created at runtime)
+journal/trade_journal.json
+
 # Backtest data
 backtest-data/
 historical-data/

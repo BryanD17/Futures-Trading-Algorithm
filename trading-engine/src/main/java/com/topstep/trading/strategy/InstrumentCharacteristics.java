@@ -361,14 +361,18 @@ public class InstrumentCharacteristics {
             .lowVolatilityThreshold(0.00040)
             .highVolatilityThreshold(0.00100)
             .extremeVolatilityThreshold(0.00150)
-            // Position sizing
-            .baseContracts(1)
-            .maxContracts(1)
-            .lowVolContracts(1)
-            // Stop/Target adjustments
-            .stopBufferPoints(0.000050)
-            .minStopDistance(0.000100)
-            .maxStopDistance(0.000300)
+            // Position sizing - 6J requires minimum 3 contracts, max 5
+            // TP: 90 ticks from entry (~$562 per contract) -> total ~$1,687 for 3 contracts
+            // Stop: 60 ticks from entry (~$375 per contract) -> total ~$1,125 for 3 contracts
+            .baseContracts(3)
+            .maxContracts(5)
+            .lowVolContracts(3)
+            // Stop/Target adjustments (60-80 ticks range)
+            // 60 ticks = 60 x 0.0000005 = 0.000030
+            // 80 ticks = 80 x 0.0000005 = 0.000040
+            .stopBufferPoints(0.000005)
+            .minStopDistance(0.000030)  // 60 ticks x 0.0000005 = $375/contract
+            .maxStopDistance(0.000040)  // 80 ticks x 0.0000005 = $500/contract
             // Killzone preferences - ASIAN FOCUSED
             .primaryKillzones(Arrays.asList("ASIAN", "LONDON"))
             .killzoneStartBuffer(15)
@@ -380,7 +384,7 @@ public class InstrumentCharacteristics {
             .sweepFakeoutRate(0.55)
             .power3Reliability(0.70)
             // Special notes
-            .notes("Safe haven - rises during fear. Best in Asian session. Patient trading required.")
+            .notes("Safe haven - rises during fear. Best in Asian session. Min 3 contracts, TIER_3+ only.")
             .build();
 
     /**

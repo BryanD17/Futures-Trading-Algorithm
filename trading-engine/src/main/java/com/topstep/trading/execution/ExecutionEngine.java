@@ -57,6 +57,10 @@ public class ExecutionEngine {
     // Execution listener for external notifications
     private ExecutionListener executionListener;
 
+    // Per-symbol signal context for enriching Trade records with confluence details
+    private final Map<String, List<String>> pendingConfluenceFactors = new ConcurrentHashMap<>();
+    private final Map<String, TradeTier> pendingTiers = new ConcurrentHashMap<>();
+
     // Controls whether this engine simulates fills (true for backtest/sim, false for live)
     private boolean simulationEnabled = true;
 
@@ -113,6 +117,20 @@ public class ExecutionEngine {
      */
     public void setSimulationEnabled(boolean simulationEnabled) {
         this.simulationEnabled = simulationEnabled;
+    }
+
+    /**
+     * Record signal context (tier and confluence factors) for a symbol.
+     * Called when a strategy signal is processed, so the data is available
+     * when the trade is eventually closed and the Trade record is built.
+     */
+    public void recordSignalContext(String symbol, TradeTier tier, List<String> confluenceFactors) {
+        if (tier != null) {
+            pendingTiers.put(symbol, tier);
+        }
+        if (confluenceFactors != null && !confluenceFactors.isEmpty()) {
+            pendingConfluenceFactors.put(symbol, confluenceFactors);
+        }
     }
 
     /**
@@ -495,7 +513,7 @@ public class ExecutionEngine {
         double priceDiff = position.isLong() ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
         double realizedPnl = priceDiff * quantity * tickValue;
 
-        // Create trade record
+        // Create trade record enriched with signal context
         Trade trade = Trade.builder()
                 .symbol(symbol)
                 .side(side)
@@ -506,7 +524,13 @@ public class ExecutionEngine {
                 .exitTime(exitTime)
                 .realizedPnL(realizedPnl)
                 .notes(reason)
+                .tier(pendingTiers.getOrDefault(symbol, TradeTier.TIER_1))
+                .confluenceFactors(pendingConfluenceFactors.getOrDefault(symbol, List.of()))
                 .build();
+
+        // Clean up signal context after recording
+        pendingTiers.remove(symbol);
+        pendingConfluenceFactors.remove(symbol);
 
         completedTrades.add(trade);
 

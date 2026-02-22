@@ -132,17 +132,19 @@ public class InstrumentConfig {
 
     /**
      * 6J - Japanese Yen
+     * Min contracts: 3, max: 5 (raised to allow for 3-contract minimum setups)
+     * Tick value: $6.25 per tick (12,500,000 JPY x 0.0000005)
      */
     public static InstrumentConfig japaneseYen() {
         return new InstrumentConfig(
             "6J",
             "CON.F.US.6J.H26",
-            0.0000005,
-            6.25,
-            12500000.0,
-            "6E",
-            0.0007,
-            1
+            0.0000005,   // Tick size (0.5 pip)
+            6.25,        // $6.25 per tick
+            12500000.0,  // Point value
+            "6E",        // SMT with Euro FX
+            0.0007,      // Typical daily ATR
+            5            // Max 5 contracts (raised to allow for 3-contract minimum setups)
         );
     }
 

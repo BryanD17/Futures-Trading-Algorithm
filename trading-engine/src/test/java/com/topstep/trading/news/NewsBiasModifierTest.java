@@ -263,7 +263,7 @@ class NewsBiasModifierTest {
             // Hawkish Fed is very bearish for equities
             // Trying to go long should potentially be blocked
             // The exact behavior depends on the calculated bias magnitude
-            boolean shouldBlock = biasModifier.shouldBlockOnOpposition(InstrumentNewsMapper.ES, true);
+            boolean shouldBlock = biasModifier.shouldBlockOnOpposition(InstrumentNewsMapper.ES, true, Instant.now());
 
             // This will depend on the calculated bias magnitude
             // Just verify the method runs without error
@@ -273,7 +273,7 @@ class NewsBiasModifierTest {
         @Test
         @DisplayName("Should not block when no opposing bias")
         void doesNotBlockWithoutOpposition() {
-            boolean shouldBlock = biasModifier.shouldBlockOnOpposition(InstrumentNewsMapper.ES, true);
+            boolean shouldBlock = biasModifier.shouldBlockOnOpposition(InstrumentNewsMapper.ES, true, Instant.now());
             assertThat(shouldBlock).isFalse();
         }
     }

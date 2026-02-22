@@ -1,0 +1,300 @@
+.journal {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* Stats Bar */
+.journal-stats {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 1rem;
+}
+
+.stat-card {
+  background: #1e293b;
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  text-align: center;
+  border: 1px solid #334155;
+}
+
+.stat-card .label {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.stat-card .value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.stat-card .value.positive {
+  color: #10b981;
+}
+
+.stat-card .value.negative {
+  color: #ef4444;
+}
+
+/* Filter Row */
+.journal-filters {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.journal-filters select {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  min-width: 120px;
+}
+
+.journal-filters select:hover {
+  border-color: #3b82f6;
+}
+
+.journal-filters select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.filter-label {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+}
+
+/* Trade Cards */
+.journal-trades {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+.journal-trades::-webkit-scrollbar {
+  width: 6px;
+}
+
+.journal-trades::-webkit-scrollbar-track {
+  background: #0f172a;
+  border-radius: 3px;
+}
+
+.journal-trades::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+
+.trade-card {
+  background: #1e293b;
+  border-radius: 12px;
+  padding: 1.25rem;
+  border: 1px solid #334155;
+  transition: border-color 0.2s;
+}
+
+.trade-card:hover {
+  border-color: #475569;
+}
+
+.trade-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.trade-card-header .trade-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.result-badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.result-badge.win {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.result-badge.loss {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.trade-card-row {
+  display: flex;
+  gap: 2rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.trade-card-row .detail-label {
+  color: #64748b;
+  min-width: 80px;
+}
+
+.trade-card-row .detail-value {
+  color: #cbd5e1;
+}
+
+.trade-card-row .pnl-value.positive {
+  color: #10b981;
+  font-weight: 600;
+}
+
+.trade-card-row .pnl-value.negative {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+/* Tier Badges */
+.tier-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.tier-badge.tier-4 {
+  background: rgba(245, 158, 11, 0.2);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.tier-badge.tier-3 {
+  background: rgba(139, 92, 246, 0.2);
+  color: #8b5cf6;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+}
+
+.tier-badge.tier-2 {
+  background: rgba(59, 130, 246, 0.2);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.tier-badge.tier-1 {
+  background: rgba(148, 163, 184, 0.2);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+/* Confluence Pills */
+.confluence-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+}
+
+.confluence-pill {
+  display: inline-block;
+  background: rgba(59, 130, 246, 0.1);
+  color: #93c5fd;
+  padding: 0.15rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+/* Notes */
+.trade-notes {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #334155;
+}
+
+.trade-notes .note-input {
+  width: 100%;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 0.5rem;
+  font-size: 0.8rem;
+  resize: vertical;
+  min-height: 40px;
+}
+
+.trade-notes .note-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.add-note-btn {
+  background: transparent;
+  border: 1px dashed #475569;
+  color: #64748b;
+  padding: 0.3rem 0.8rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  margin-top: 0.5rem;
+  transition: all 0.2s;
+}
+
+.add-note-btn:hover {
+  border-color: #3b82f6;
+  color: #3b82f6;
+}
+
+/* Empty State */
+.journal-empty {
+  text-align: center;
+  padding: 3rem;
+  color: #64748b;
+  font-size: 1.1rem;
+}
+
+/* Loading */
+.journal-loading {
+  text-align: center;
+  padding: 2rem;
+  color: #94a3b8;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .journal-stats {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .journal-filters {
+    flex-wrap: wrap;
+  }
+
+  .trade-card-row {
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+}

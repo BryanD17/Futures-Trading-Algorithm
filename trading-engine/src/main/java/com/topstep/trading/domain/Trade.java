@@ -1,6 +1,10 @@
 package com.topstep.trading.domain;
 
+import com.topstep.trading.strategy.TradeTier;
+
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -21,6 +25,8 @@ public final class Trade {
     private final double riskAmount;      // 1R value
     private final double rMultiple;       // Actual R multiple achieved
     private final String notes;           // Why this trade was taken
+    private final List<String> confluenceFactors;  // e.g. ["IFVG", "SMT Divergence", "PDL Sweep"]
+    private final TradeTier tier;                  // TIER_1 through TIER_4
 
     private Trade(Builder builder) {
         this.tradeId = builder.tradeId != null ? builder.tradeId : UUID.randomUUID().toString();
@@ -35,6 +41,10 @@ public final class Trade {
         this.riskAmount = builder.riskAmount;
         this.rMultiple = builder.riskAmount > 0 ? builder.realizedPnL / builder.riskAmount : 0.0;
         this.notes = builder.notes;
+        this.confluenceFactors = builder.confluenceFactors != null
+                ? List.copyOf(builder.confluenceFactors)
+                : List.of();
+        this.tier = builder.tier;
     }
 
     // Getters
@@ -51,6 +61,8 @@ public final class Trade {
     public double getRiskAmount() { return riskAmount; }
     public double getRMultiple() { return rMultiple; }
     public String getNotes() { return notes; }
+    public List<String> getConfluenceFactors() { return confluenceFactors; }
+    public TradeTier getTier() { return tier; }
 
     public boolean isWinner() {
         return realizedPnL > 0;
@@ -62,8 +74,11 @@ public final class Trade {
 
     @Override
     public String toString() {
-        return String.format("Trade{id='%s', symbol='%s', %s %d @ %.2f -> %.2f, PnL=%.2f, R=%.2f, notes='%s'}",
-                tradeId, symbol, side, quantity, entryPrice, exitPrice, realizedPnL, rMultiple, notes);
+        return String.format("Trade{id='%s', symbol='%s', %s %d @ %.2f -> %.2f, PnL=%.2f, R=%.2f, tier=%s, confluence=%s, notes='%s'}",
+                tradeId, symbol, side, quantity, entryPrice, exitPrice, realizedPnL, rMultiple,
+                tier != null ? tier.name() : "N/A",
+                confluenceFactors,
+                notes);
     }
 
     public static Builder builder() {
@@ -82,6 +97,8 @@ public final class Trade {
         private double realizedPnL;
         private double riskAmount;
         private String notes;
+        private List<String> confluenceFactors = new ArrayList<>();
+        private TradeTier tier;
 
         public Builder tradeId(String tradeId) {
             this.tradeId = tradeId;
@@ -135,6 +152,16 @@ public final class Trade {
 
         public Builder notes(String notes) {
             this.notes = notes;
+            return this;
+        }
+
+        public Builder confluenceFactors(List<String> factors) {
+            this.confluenceFactors = factors;
+            return this;
+        }
+
+        public Builder tier(TradeTier tier) {
+            this.tier = tier;
             return this;
         }
 
