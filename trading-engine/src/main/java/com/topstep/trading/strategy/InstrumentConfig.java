@@ -83,7 +83,8 @@ public class InstrumentConfig {
     /**
      * MGC - Micro Gold Futures
      * Used instead of GC due to Topstep trading restrictions.
-     * Topstep limits: 2 contracts for $50K, 4 for $100K, 6 for $150K accounts.
+     * Topstep limits: 5 contracts for $50K account.
+     * Min 4 contracts, max 5 for highest tier setups.
      */
     public static InstrumentConfig microGold() {
         return new InstrumentConfig(
@@ -94,7 +95,7 @@ public class InstrumentConfig {
             10.0,              // $10 per point (1/10th of GC)
             "SI",              // SMT with Silver
             25.0,              // Same ATR as GC (same price)
-            2                  // Max 2 contracts ($50K account)
+            5                  // Max 5 contracts ($50K account)
         );
     }
 
