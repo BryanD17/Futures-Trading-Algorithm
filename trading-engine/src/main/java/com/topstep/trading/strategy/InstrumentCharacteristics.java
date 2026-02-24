@@ -148,8 +148,8 @@ public class InstrumentCharacteristics {
      * TOPSTEP RESTRICTION (Feb 2026):
      * Full-size GC is RESTRICTED due to increased volatility/margin requirements.
      * All trades are placed on MGC (Micro Gold) instead.
-     * Position limits: 2 contracts for $50K, 4 for $100K, 6 for $150K accounts.
-     * Strategy: Use 2 MGC for Tier 3-4 (best confluence), 1 MGC for Tier 2.
+     * Position limits: 5 contracts for $50K account.
+     * Strategy: Use 5 MGC for Tier 3-4 (best confluence), 4 MGC for Tier 2.
      */
     public static final InstrumentProfile GC = InstrumentProfile.builder()
             .symbol("GC")
@@ -158,10 +158,10 @@ public class InstrumentCharacteristics {
             // Micro contract support: MGC = Micro Gold
             .microSymbol("MGC")
             .microTickValue(1.00)     // $1.00/tick (1/10th of GC's $10.00)
-            .microContracts(2)        // 2 micro contracts for Standard quality
+            .microContracts(4)        // 4 micro contracts minimum for MGC
             // TOPSTEP RESTRICTION: Full-size GC is banned, always use MGC
             .alwaysUseMicro(true)
-            .microMaxContracts(2)     // $50K account limit: max 2 MGC contracts
+            .microMaxContracts(5)     // $50K account limit: max 5 MGC contracts
             .tickSize(0.10)
             .tickValue(10.00)
             .pointValue(100.00)

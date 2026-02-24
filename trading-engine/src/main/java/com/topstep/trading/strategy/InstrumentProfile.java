@@ -262,8 +262,8 @@ public class InstrumentProfile {
      * Get the appropriate quantity based on raid quality score and trade tier.
      *
      * When alwaysUseMicro is true (Topstep restriction):
-     *   Tier 3-4 (Premium/Elite - best confluence): microMaxContracts (e.g., 2)
-     *   Tier 2 (Standard): 1 contract
+     *   Tier 3-4 (Premium/Elite - best confluence): microMaxContracts (e.g., 5 MGC)
+     *   Tier 2 (Standard): microContracts (e.g., 4 MGC)
      *   Never exceeds microMaxContracts (Topstep enforced limit)
      *
      * Otherwise (normal behavior):
@@ -285,8 +285,8 @@ public class InstrumentProfile {
      * Get tier-based micro contract quantity when alwaysUseMicro is active.
      *
      * Topstep restriction sizing:
-     *   Tier 3-4 (Premium/Elite - best optimal confluence): max micro contracts (e.g., 2)
-     *   Tier 2 (Standard): 1 contract (conservative for lower confluence)
+     *   Tier 3-4 (Premium/Elite - best optimal confluence): max micro contracts (e.g., 5 MGC)
+     *   Tier 2 (Standard): base micro contracts (e.g., 4 MGC)
      *
      * @param tier The trade tier
      * @return Number of micro contracts to trade
@@ -295,11 +295,11 @@ public class InstrumentProfile {
         if (!alwaysUseMicro) {
             return microContracts;  // Fall back to default micro sizing
         }
-        // Best confluence (Tier 3-4) gets max contracts, Tier 2 gets 1
+        // Best confluence (Tier 3-4) gets max contracts, Tier 2 gets base (min)
         if (tier == TradeTier.TIER_4 || tier == TradeTier.TIER_3) {
-            return microMaxContracts;  // e.g., 2 for $50K account
+            return microMaxContracts;  // e.g., 5 for $50K account
         }
-        return 1;  // Conservative for lower-tier setups
+        return microContracts;  // e.g., 4 for $50K account (minimum)
     }
 
     /**

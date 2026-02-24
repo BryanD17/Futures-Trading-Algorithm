@@ -957,8 +957,8 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
      *
      * TOPSTEP RESTRICTION: When alwaysUseMicro is active (e.g., GC restricted),
      * ALL trades use micro contracts with tier-based sizing:
-     *   Tier 3-4 (Premium/Elite): max micro contracts (e.g., 2 MGC)
-     *   Tier 2 (Standard): 1 micro contract
+     *   Tier 3-4 (Premium/Elite): max micro contracts (e.g., 5 MGC)
+     *   Tier 2 (Standard): base micro contracts (e.g., 4 MGC)
      */
     private void generateSignal(Candle candle, StrategyContext context) {
         // CRITICAL FIX: Use Silver Bullet direction when in Silver Bullet setup
@@ -1238,7 +1238,7 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
                     profile.getMicroSymbol() + " (Micro) for all trades");
             System.out.println("  Max micro contracts: " + profile.getMicroMaxContracts() +
                     " | Tier 3-4: " + profile.getMicroMaxContracts() +
-                    " contracts | Tier 2: 1 contract");
+                    " contracts | Tier 2: " + profile.getMicroContracts() + " contracts");
         }
     }
 
