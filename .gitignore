@@ -24,6 +24,7 @@ out/
 target/
 *.class
 *.jar
+!gradle/wrapper/gradle-wrapper.jar
 *.war
 *.ear
 *.log
