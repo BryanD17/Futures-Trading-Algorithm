@@ -24,7 +24,6 @@ public class SurpriseCalculator {
         EventCategory.PMI_SURVEYS, 2.0,      // PMI varies by ~2 points
         EventCategory.CONSUMER, 5.0,         // Retail sales varies by ~5%
         EventCategory.CENTRAL_BANK, 0.25,    // Rate decisions by 25bps
-        EventCategory.ENERGY, 3.0,           // EIA inventory varies by ~3M barrels
         EventCategory.HOUSING, 10.0,         // Housing starts varies by ~10%
         EventCategory.TRADE, 5.0,            // Trade balance varies by ~$5B
         EventCategory.OTHER, 1.0
@@ -34,9 +33,7 @@ public class SurpriseCalculator {
     private static final String[] LOWER_IS_BETTER = {
         "unemployment",
         "jobless",
-        "initial claims",
-        "inventory",    // For EIA, build is bad
-        "stocks"        // For EIA crude stocks
+        "initial claims"
     };
 
     private final MacroNewsConfig config;

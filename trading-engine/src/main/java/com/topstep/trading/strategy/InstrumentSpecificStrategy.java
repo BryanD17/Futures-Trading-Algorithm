@@ -608,7 +608,7 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
             return false;
         }
 
-        // 3. Check times to avoid (e.g., news releases for CL)
+        // 3. Check times to avoid (e.g., scheduled news/data releases)
         if (profile.shouldAvoidTime(candle.getTimestamp().atZone(java.time.ZoneId.of("America/New_York")).toLocalTime())) {
             if (shouldLog) {
                 System.out.println("[" + profile.getSymbol() + "] Avoiding scheduled time (news/data release)");

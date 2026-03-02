@@ -48,7 +48,7 @@ import java.util.stream.Collectors;
  *
  * MULTI-INSTRUMENT AUTO-SWITCHING:
  * - Automatically switches between instruments based on optimal trading sessions
- * - NQ/ES during NY session, Gold during London, Yen during Asian session
+ * - NQ/MNQ/ES/MES during NY session, GC/MGC during London session
  * - Instrument-specific ICT strategy parameters (OTE zones, reliability rates)
  * - Shared correlation tracker for cross-instrument SMT divergence
  *
@@ -302,9 +302,8 @@ public class LiveEngineRunner {
         System.out.println("  - Volatility Sizing: ATR-based position adjustment");
         if (MULTI_INSTRUMENT_MODE) {
             System.out.println("  - MULTI-INSTRUMENT MODE: Auto-switching based on session");
-            System.out.println("    • NY Session: NQ, ES");
-            System.out.println("    • London Session: GC (Gold), 6E (Euro), CL (Oil)");
-            System.out.println("    • Asian Session: 6J (Yen)");
+            System.out.println("    • NY Session: NQ, MNQ, ES, MES");
+            System.out.println("    • London Session: GC, MGC (Gold)");
         }
     }
 
@@ -833,23 +832,6 @@ public class LiveEngineRunner {
     }
 
     /**
-     * Get tick size for a symbol.
-     
-    private double getTickSize(String symbol) {
-        switch (symbol.toUpperCase()) {
-            case "ES": case "NQ": return 0.25;
-            case "6E": return 0.00005;
-            case "6J": return 0.0000005;
-            case "6B": return 0.0001;
-            case "CL": return 0.01;
-            case "GC": return 0.10;
-            case "SI": return 0.005;
-            case "NG": return 0.001;
-            default: return 0.25;
-        }
-    }
-    */
-    /**
      * Calculate PnL for a closed position.
      */
     private double calculatePnl(String symbol, double entryPrice, double exitPrice, int quantity, OrderSide entrySide) {
@@ -866,9 +848,11 @@ public class LiveEngineRunner {
     private double getTickValue(String symbol) {
         switch (symbol.toUpperCase()) {
             case "ES": return 12.50;
+            case "MES": return 1.25;
             case "NQ": return 5.00;
-            case "6E": case "6J": case "6B": return 6.25;
-            case "CL": case "GC": case "NG": return 10.00;
+            case "MNQ": return 0.50;
+            case "GC": case "NG": return 10.00;
+            case "MGC": return 1.00;
             case "SI": return 25.00;
             default: return 12.50;
         }
@@ -885,15 +869,8 @@ public class LiveEngineRunner {
             case "NQ":
             case "MNQ":
                 return 0.25;
-            case "6E":
-                return 0.00005;
-            case "6J":
-                return 0.0000005;
-            case "6B":
-                return 0.0001;
-            case "CL":
-                return 0.01;
             case "GC":
+            case "MGC":
                 return 0.10;
             case "NG":
                 return 0.001;

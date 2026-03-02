@@ -9,7 +9,6 @@ import java.util.*;
  * Correlation-based trading uses the relationship between instruments:
  * - NQ vs ES: ~0.95 correlation (should move together)
  * - Gold vs DXY: ~-0.80 correlation (inversely related)
- * - Oil vs CAD: ~0.70 correlation (commodity currency)
  *
  * When correlated instruments diverge, it signals potential opportunities:
  * - SMT Divergence: One makes new high/low, other doesn't
@@ -29,14 +28,6 @@ public class CorrelationTracker {
         // Gold correlations
         CORRELATION_PAIRS.put("GC_SI", new CorrelationPair("GC", "SI", 0.85, true));   // Gold/Silver
         CORRELATION_PAIRS.put("GC_DX", new CorrelationPair("GC", "DX", -0.80, false)); // Gold/Dollar (inverse)
-
-        // Oil correlations
-        CORRELATION_PAIRS.put("CL_6C", new CorrelationPair("CL", "6C", 0.70, true));   // Oil/CAD
-        CORRELATION_PAIRS.put("CL_NG", new CorrelationPair("CL", "NG", 0.50, true));   // Oil/NatGas
-
-        // Currency correlations
-        CORRELATION_PAIRS.put("6E_6B", new CorrelationPair("6E", "6B", 0.85, true));   // Euro/GBP
-        CORRELATION_PAIRS.put("6E_DX", new CorrelationPair("6E", "DX", -0.95, false)); // Euro/Dollar
     }
 
     private final Map<String, LinkedList<Double>> priceHistory;

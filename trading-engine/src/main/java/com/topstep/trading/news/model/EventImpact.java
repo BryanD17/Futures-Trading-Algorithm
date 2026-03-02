@@ -5,7 +5,7 @@ package com.topstep.trading.news.model;
  * Higher impact events have stronger effects on market volatility and bias.
  */
 public enum EventImpact {
-    HIGH(3),      // Fed decisions, CPI, NFP, ECB, BOJ
+    HIGH(3),      // Fed decisions, CPI, NFP
     MEDIUM(2),    // PMI, Retail Sales, Jobless Claims
     LOW(1);       // Minor releases, revisions
 

@@ -39,7 +39,7 @@ public class EventProximityChecker {
     /**
      * Check if we should gate trades for an instrument right now.
      *
-     * @param instrument The instrument to check (ES, NQ, GC, CL, 6E, 6J)
+     * @param instrument The instrument to check (ES, NQ, GC)
      * @param now Current time
      * @return Gating decision with action, size multiplier, and reason
      */
@@ -106,7 +106,7 @@ public class EventProximityChecker {
     }
 
     /**
-     * HIGH impact events (Fed, CPI, NFP, ECB, BOJ):
+     * HIGH impact events (Fed, CPI, NFP):
      * - Block 5 minutes before
      * - Reduce size 15 minutes before
      * - Block 10 minutes after (until release processed)

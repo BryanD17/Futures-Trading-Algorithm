@@ -91,17 +91,7 @@ public class ExecutionEngine {
 
         // Metals
         tickValues.put("GC", 10.00);   // Gold: $10.00 per tick (100 oz × 0.10)
-        tickValues.put("SI", 25.00);   // Silver: $25.00 per tick (5,000 oz × 0.005)
-
-        // Energy
-        tickValues.put("CL", 10.00);   // Crude Oil: $10.00 per tick (1,000 barrels × 0.01)
-        tickValues.put("NG", 10.00);   // Natural Gas: $10.00 per tick (10,000 MMBtu × 0.001)
-
-        // Currency futures
-        tickValues.put("6E", 6.25);    // Euro FX: $6.25 per tick (125,000 EUR × 0.00005)
-        tickValues.put("6J", 6.25);    // Japanese Yen: $6.25 per tick (12,500,000 JPY × 0.0000005)
-        tickValues.put("6B", 6.25);    // British Pound: $6.25 per tick (62,500 GBP × 0.0001)
-        tickValues.put("6C", 10.00);   // Canadian Dollar: $10.00 per tick (100,000 CAD × 0.0001)
+        tickValues.put("MGC", 1.00);   // Micro Gold: $1.00 per tick (10 oz × 0.10)
     }
 
     /**

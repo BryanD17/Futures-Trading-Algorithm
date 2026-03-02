@@ -11,7 +11,7 @@ import java.util.function.Consumer;
 
 /**
  * Interface for economic calendar data providers.
- * Implementations can pull from various APIs (Trading Economics, Forex Factory, etc.)
+ * Implementations can pull from various APIs (Trading Economics, etc.)
  * or from mock data for backtesting.
  */
 public interface EconomicCalendarProvider {

@@ -99,56 +99,6 @@ public class InstrumentConfig {
         );
     }
 
-    /**
-     * CL - Crude Oil
-     */
-    public static InstrumentConfig crudeOil() {
-        return new InstrumentConfig(
-            "CL",
-            "CON.F.US.CL.G26",
-            0.01,
-            10.0,
-            1000.0,
-            "NG",              // SMT with Natural Gas
-            2.0,               // Typical ATR ~$2
-            1
-        );
-    }
-
-    /**
-     * 6E - Euro FX
-     */
-    public static InstrumentConfig euroFx() {
-        return new InstrumentConfig(
-            "6E",
-            "CON.F.US.6E.H26",
-            0.00005,
-            6.25,
-            125000.0,
-            "6B",              // SMT with British Pound
-            0.008,             // Typical ATR
-            1
-        );
-    }
-
-    /**
-     * 6J - Japanese Yen
-     * Min contracts: 3, max: 5 (raised to allow for 3-contract minimum setups)
-     * Tick value: $6.25 per tick (12,500,000 JPY x 0.0000005)
-     */
-    public static InstrumentConfig japaneseYen() {
-        return new InstrumentConfig(
-            "6J",
-            "CON.F.US.6J.H26",
-            0.0000005,   // Tick size (0.5 pip)
-            6.25,        // $6.25 per tick
-            12500000.0,  // Point value
-            "6E",        // SMT with Euro FX
-            0.0007,      // Typical daily ATR
-            5            // Max 5 contracts (raised to allow for 3-contract minimum setups)
-        );
-    }
-
     // Getters
     public String getSymbol() { return symbol; }
     public String getContractId() { return contractId; }

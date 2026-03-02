@@ -43,7 +43,7 @@ public class TradingEconomicsProvider implements EconomicCalendarProvider {
     private static final String CALENDAR_ENDPOINT = "/calendar";
 
     // Currencies we're interested in
-    private static final Set<String> RELEVANT_CURRENCIES = Set.of("USD", "EUR", "JPY", "GBP", "CNY");
+    private static final Set<String> RELEVANT_CURRENCIES = Set.of("USD");
 
     private final String apiKey;
     private final HttpClient httpClient;
@@ -198,7 +198,7 @@ public class TradingEconomicsProvider implements EconomicCalendarProvider {
     }
 
     private String buildCalendarUrl(LocalDate startDate, LocalDate endDate) {
-        // Format: /calendar?c=USD,EUR,JPY&importance=2,3&d1=2024-01-01&d2=2024-01-07
+        // Format: /calendar?c=USD&importance=2,3&d1=2024-01-01&d2=2024-01-07
         String currencies = String.join(",", RELEVANT_CURRENCIES);
         String start = startDate.format(DateTimeFormatter.ISO_LOCAL_DATE);
         String end = endDate.format(DateTimeFormatter.ISO_LOCAL_DATE);
@@ -317,15 +317,6 @@ public class TradingEconomicsProvider implements EconomicCalendarProvider {
 
         return switch (country.toLowerCase()) {
             case "united states", "usa", "us" -> Currency.USD;
-            case "euro area", "eurozone", "european union", "germany", "france", "italy", "spain" ->
-                Currency.EUR;
-            case "japan" -> Currency.JPY;
-            case "united kingdom", "uk" -> Currency.GBP;
-            case "china" -> Currency.CNY;
-            case "canada" -> Currency.CAD;
-            case "australia" -> Currency.AUD;
-            case "new zealand" -> Currency.NZD;
-            case "switzerland" -> Currency.CHF;
             default -> Currency.USD;
         };
     }
@@ -334,7 +325,6 @@ public class TradingEconomicsProvider implements EconomicCalendarProvider {
         String combined = (eventName + " " + (categoryStr != null ? categoryStr : "")).toLowerCase();
 
         if (combined.contains("fed") || combined.contains("fomc") || combined.contains("rate decision") ||
-            combined.contains("ecb") || combined.contains("boj") || combined.contains("boe") ||
             combined.contains("central bank")) {
             return EventCategory.CENTRAL_BANK;
         }
@@ -362,10 +352,6 @@ public class TradingEconomicsProvider implements EconomicCalendarProvider {
         if (combined.contains("trade balance") || combined.contains("exports") || combined.contains("imports")) {
             return EventCategory.TRADE;
         }
-        if (combined.contains("eia") || combined.contains("crude") || combined.contains("oil inventory")) {
-            return EventCategory.ENERGY;
-        }
-
         return EventCategory.OTHER;
     }
 

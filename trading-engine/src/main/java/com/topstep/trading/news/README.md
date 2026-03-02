@@ -116,28 +116,23 @@ The `InstrumentNewsMapper` determines how events affect each instrument.
 
 ### Relevance Scores
 
-| Event Type | ES/NQ | GC | CL | 6E | 6J |
-|------------|-------|-----|-----|-----|-----|
-| USD Fed | 1.0 | 1.0 | 0.5 | 0.95 | 0.95 |
-| USD CPI | 0.95 | 0.95 | 0.4 | 0.8 | 0.8 |
-| USD NFP | 0.9 | 0.7 | - | 0.75 | 0.75 |
-| EUR ECB | 0.2 | 0.2 | - | 1.0 | - |
-| JPY BOJ | 0.2 | 0.2 | - | - | 1.0 |
-| EIA Crude | - | - | 1.0 | - | - |
+| Event Type | ES/NQ | GC |
+|------------|-------|-----|
+| USD Fed | 1.0 | 1.0 |
+| USD CPI | 0.95 | 0.95 |
+| USD NFP | 0.9 | 0.7 |
 
 ### Directional Signs
 
-| Surprise Type | ES | GC | CL | 6E | 6J |
-|---------------|-----|-----|-----|-----|-----|
-| Hot USD Inflation | -1 | -1 | - | -1 | -1 |
-| Strong USD Jobs | -1 | -1 | - | -1 | -1 |
-| Hawkish Fed | -1 | -1 | -1 | -1 | -1 |
-| Strong EUR Data | - | - | - | +1 | - |
-| Inventory Build | - | - | -1 | - | - |
+| Surprise Type | ES | GC |
+|---------------|-----|-----|
+| Hot USD Inflation | -1 | -1 |
+| Strong USD Jobs | -1 | -1 |
+| Hawkish Fed | -1 | -1 |
 
 ## Trade Gating Logic
 
-### HIGH Impact Events (Fed, CPI, NFP, ECB, BOJ)
+### HIGH Impact Events (Fed, CPI, NFP)
 
 - **5 min before**: BLOCK
 - **15 min before**: REDUCE_SIZE (50%)

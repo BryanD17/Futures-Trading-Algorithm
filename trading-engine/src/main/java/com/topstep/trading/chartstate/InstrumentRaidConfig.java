@@ -10,7 +10,6 @@ import java.util.Map;
  * - ES is relatively calm, needs tighter tolerances
  * - NQ is more volatile, needs wider tolerances
  * - GC (Gold) can be choppy, needs clearer raids
- * - CL (Oil) is volatile, especially during inventory releases
  *
  * These configurations tune the raid detection sensitivity per instrument
  * to filter out noise while capturing genuine liquidity raids.
@@ -133,98 +132,6 @@ public class InstrumentRaidConfig {
                 .build();
     }
 
-    /**
-     * Crude Oil futures (CL) configuration.
-     * Oil is volatile - needs clear penetration.
-     */
-    public static InstrumentRaidConfig forCL() {
-        return new Builder("CL")
-                .tickSize(0.01)
-                .tickValue(10.00)
-                .toleranceTicks(3.0)           // 3 ticks = 0.03 points
-                .minPenetrationTicks(5.0)      // Must sweep by at least 5 ticks
-                .strongPenetrationTicks(10.0)  // 10+ ticks is strong penetration
-                .maxBarsSinceRaid(10)
-                .minQualityThreshold(4)
-                .build();
-    }
-
-    /**
-     * Natural Gas futures (NG) configuration.
-     * NG is extremely volatile.
-     */
-    public static InstrumentRaidConfig forNG() {
-        return new Builder("NG")
-                .tickSize(0.001)
-                .tickValue(10.00)
-                .toleranceTicks(5.0)           // 5 ticks = 0.005 points
-                .minPenetrationTicks(10.0)     // Must sweep by at least 10 ticks
-                .strongPenetrationTicks(20.0)  // 20+ ticks is strong penetration
-                .maxBarsSinceRaid(10)
-                .minQualityThreshold(5)        // Higher threshold due to volatility
-                .build();
-    }
-
-    /**
-     * Euro FX futures (6E) configuration.
-     */
-    public static InstrumentRaidConfig for6E() {
-        return new Builder("6E")
-                .tickSize(0.00005)
-                .tickValue(6.25)
-                .toleranceTicks(2.0)           // 2 ticks = 1 pip
-                .minPenetrationTicks(3.0)      // Must sweep by at least 3 ticks
-                .strongPenetrationTicks(6.0)   // 6+ ticks is strong penetration
-                .maxBarsSinceRaid(10)
-                .minQualityThreshold(4)
-                .build();
-    }
-
-    /**
-     * British Pound futures (6B) configuration.
-     */
-    public static InstrumentRaidConfig for6B() {
-        return new Builder("6B")
-                .tickSize(0.0001)
-                .tickValue(6.25)
-                .toleranceTicks(2.0)           // 2 ticks = 2 pips
-                .minPenetrationTicks(3.0)      // Must sweep by at least 3 ticks
-                .strongPenetrationTicks(6.0)   // 6+ ticks is strong penetration
-                .maxBarsSinceRaid(10)
-                .minQualityThreshold(4)
-                .build();
-    }
-
-    /**
-     * Japanese Yen futures (6J) configuration.
-     */
-    public static InstrumentRaidConfig for6J() {
-        return new Builder("6J")
-                .tickSize(0.0000005)
-                .tickValue(6.25)
-                .toleranceTicks(4.0)           // 4 ticks
-                .minPenetrationTicks(6.0)      // Must sweep by at least 6 ticks
-                .strongPenetrationTicks(12.0)  // 12+ ticks is strong penetration
-                .maxBarsSinceRaid(10)
-                .minQualityThreshold(4)
-                .build();
-    }
-
-    /**
-     * Silver futures (SI) configuration.
-     */
-    public static InstrumentRaidConfig forSI() {
-        return new Builder("SI")
-                .tickSize(0.005)
-                .tickValue(25.00)
-                .toleranceTicks(2.0)           // 2 ticks = 0.01 points
-                .minPenetrationTicks(4.0)      // Must sweep by at least 4 ticks
-                .strongPenetrationTicks(8.0)   // 8+ ticks is strong penetration
-                .maxBarsSinceRaid(12)
-                .minQualityThreshold(5)
-                .build();
-    }
-
     // ═══════════════════════════════════════════════════════════════════
     // CONFIG REGISTRY
     // ═══════════════════════════════════════════════════════════════════
@@ -236,12 +143,6 @@ public class InstrumentRaidConfig {
         register(forES());
         register(forNQ());
         register(forGC());
-        register(forCL());
-        register(forNG());
-        register(for6E());
-        register(for6B());
-        register(for6J());
-        register(forSI());
     }
 
     private static void register(InstrumentRaidConfig config) {

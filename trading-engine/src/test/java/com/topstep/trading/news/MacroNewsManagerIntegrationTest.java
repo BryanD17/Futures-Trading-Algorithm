@@ -117,8 +117,6 @@ class MacroNewsManagerIntegrationTest {
             assertThat(newsManager.getNewsBiasModifier("ES")).isNotEqualTo(0.0);
             assertThat(newsManager.getNewsBiasModifier("NQ")).isNotEqualTo(0.0);
             assertThat(newsManager.getNewsBiasModifier("GC")).isNotEqualTo(0.0);
-            assertThat(newsManager.getNewsBiasModifier("6E")).isNotEqualTo(0.0);
-            assertThat(newsManager.getNewsBiasModifier("6J")).isNotEqualTo(0.0);
         }
     }
 
@@ -202,11 +200,10 @@ class MacroNewsManagerIntegrationTest {
 
             calendarProvider.addEvent(createEvent("Event1", Currency.USD, EventImpact.HIGH, now.plus(Duration.ofHours(1))));
             calendarProvider.addEvent(createEvent("Event2", Currency.EUR, EventImpact.HIGH, now.plus(Duration.ofHours(2))));
-            calendarProvider.addEvent(createEvent("Event3", Currency.JPY, EventImpact.HIGH, now.plus(Duration.ofHours(3))));
 
             List<EconomicEvent> allEvents = newsManager.getAllUpcomingEvents(24);
 
-            assertThat(allEvents).hasSize(3);
+            assertThat(allEvents).hasSize(2);
         }
     }
 

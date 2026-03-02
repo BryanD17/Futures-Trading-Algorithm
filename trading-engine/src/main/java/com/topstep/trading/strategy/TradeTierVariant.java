@@ -150,7 +150,7 @@ public enum TradeTierVariant {
 
         /**
          * Lenient trailing - wide trail for volatile setups.
-         * Best for: Elite setups, volatile instruments (GC, CL).
+         * Best for: Elite setups, volatile instruments (GC).
          */
         LENIENT(
             2.0,    // activationR: Start trailing at 2R (more room)

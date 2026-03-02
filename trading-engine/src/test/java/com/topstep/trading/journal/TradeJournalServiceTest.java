@@ -135,7 +135,7 @@ class TradeJournalServiceTest {
     @DisplayName("Loss trades are recorded with correct result")
     void onSessionEnd_lossTrade_recordsLoss() {
         // Given
-        Trade trade = buildTestTrade("6J", OrderSide.SELL, -375.00, TradeTier.TIER_3);
+        Trade trade = buildTestTrade("GC", OrderSide.SELL, -375.00, TradeTier.TIER_3);
 
         // When
         journalService.onSessionEnd(List.of(trade));
