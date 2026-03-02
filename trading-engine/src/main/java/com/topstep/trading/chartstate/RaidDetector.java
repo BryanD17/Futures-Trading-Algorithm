@@ -284,6 +284,12 @@ public class RaidDetector {
         if (context != null) {
             builder.smtDivergence(context.hasSmtDivergence());
             builder.htfBias(context.getHtfBiasBullish());
+
+            // Multi-timeframe trend cascade data
+            builder.htfTrendStrong(context.isHtfTrendStrong());
+            builder.zoneConfluence(context.getZoneConfluenceScore());
+            builder.displacementEntry(context.hasDisplacementEntry());
+            builder.targetAlignment(context.getTargetAlignmentBonus());
         }
 
         return builder.build();
@@ -560,18 +566,42 @@ public class RaidDetector {
     /**
      * Context provided by the caller for raid detection/scoring.
      * Contains information the detector cannot determine on its own.
+     *
+     * Enhanced with multi-timeframe trend data for the revised scoring system:
+     * - HTF trend strength (strong vs weak)
+     * - 5m zone confluence score
+     * - 1m displacement entry trigger
+     * - Liquidity target alignment bonus
      */
     public static class RaidDetectionContext {
         private final boolean hasSmtDivergence;
         private final Boolean htfBiasBullish;  // null = neutral
+        private final boolean htfTrendStrong;
+        private final int zoneConfluenceScore;
+        private final boolean hasDisplacementEntry;
+        private final int targetAlignmentBonus;
 
         public RaidDetectionContext(boolean hasSmtDivergence, Boolean htfBiasBullish) {
+            this(hasSmtDivergence, htfBiasBullish, false, 0, false, 0);
+        }
+
+        public RaidDetectionContext(boolean hasSmtDivergence, Boolean htfBiasBullish,
+                                    boolean htfTrendStrong, int zoneConfluenceScore,
+                                    boolean hasDisplacementEntry, int targetAlignmentBonus) {
             this.hasSmtDivergence = hasSmtDivergence;
             this.htfBiasBullish = htfBiasBullish;
+            this.htfTrendStrong = htfTrendStrong;
+            this.zoneConfluenceScore = zoneConfluenceScore;
+            this.hasDisplacementEntry = hasDisplacementEntry;
+            this.targetAlignmentBonus = targetAlignmentBonus;
         }
 
         public boolean hasSmtDivergence() { return hasSmtDivergence; }
         public Boolean getHtfBiasBullish() { return htfBiasBullish; }
+        public boolean isHtfTrendStrong() { return htfTrendStrong; }
+        public int getZoneConfluenceScore() { return zoneConfluenceScore; }
+        public boolean hasDisplacementEntry() { return hasDisplacementEntry; }
+        public int getTargetAlignmentBonus() { return targetAlignmentBonus; }
 
         public static RaidDetectionContext withSmt(boolean hasSmt) {
             return new RaidDetectionContext(hasSmt, null);
@@ -583,6 +613,16 @@ public class RaidDetector {
 
         public static RaidDetectionContext full(boolean hasSmt, Boolean htfBullish) {
             return new RaidDetectionContext(hasSmt, htfBullish);
+        }
+
+        /**
+         * Full context with all multi-timeframe trend data.
+         */
+        public static RaidDetectionContext fullWithCascade(boolean hasSmt, Boolean htfBullish,
+                                                            boolean htfTrendStrong, int zoneConfluenceScore,
+                                                            boolean hasDisplacementEntry, int targetAlignmentBonus) {
+            return new RaidDetectionContext(hasSmt, htfBullish, htfTrendStrong,
+                    zoneConfluenceScore, hasDisplacementEntry, targetAlignmentBonus);
         }
 
         public static RaidDetectionContext empty() {

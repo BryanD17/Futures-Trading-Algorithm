@@ -9,29 +9,45 @@ package com.topstep.trading.strategy;
  *
  * IMPORTANT: Minimum R:R of 2.0 is required by PropFirmRiskEngine, so all tiers
  * must have R:R >= 2.0 to be executed.
+ *
+ * MULTI-TIMEFRAME TREND INTEGRATION:
+ * Every tier now requires the 3-Layer Cascade to pass:
+ *   Layer 1 (HTF Trend): Must allow trade direction — MANDATORY for ALL tiers
+ *   Layer 2 (5m Zone):   Score >= 2 boosts to Tier 3+; Score >= 1 boosts quality
+ *   Layer 3 (1m Displacement): Full trigger (FVG+MSS) boosts tier evaluation
+ *
+ * Tier 4: STRONG HTF Trend + Breaker + Power3 + SMT + Displacement + 5m Zone + Liquidity Target
+ * Tier 3: HTF Trending + 5m Zone(2+) + Displacement + (SMT OR Power3)
+ *      OR: HTF Trending + Breaker + Displacement + confirmation
+ * Tier 2: HTF Not Opposing + OB/FVG + Displacement + SMT
+ *      OR: HTF Trending + 5m Zone(1+) + Displacement
+ * Tier 1: DISABLED
  */
 public enum TradeTier {
     /**
      * Tier 4: Elite quality setup - maximum confluence combination.
-     * Requires: Breaker Block + Power of 3 + SMT Divergence + Displacement (ALL required)
+     * Requires: STRONG HTF Trend + Breaker Block + Power of 3 + SMT Divergence + Displacement
+     *           + 5m Continuation Zone (2+) + Liquidity Target Aligned
      * R:R Target: 1:5
-     * This is the highest quality setup with all major confluences aligned.
+     * This is the highest quality setup with all major confluences + multi-timeframe alignment.
      */
     TIER_4(4, 5.0, "Elite Setup"),
 
     /**
-     * Tier 3: Premium quality setup - best combination of confluences.
-     * Requires: Breaker Block + (SMT OR Displacement OR Power3)
-     *       OR: (IFVG + OB + Displacement + Power3)
+     * Tier 3: Premium quality setup - HTF trend confirmed + strong structure confluences.
+     * Requires: HTF Trending + 5m Zone(2+) + Displacement + (SMT OR Power3)
+     *       OR: HTF Trending + Breaker + Displacement + (SMT OR Power3)
+     *       OR: HTF Trending + IFVG + OB + Displacement + Power3
      * R:R Target: 1:4
      */
     TIER_3(3, 4.0, "Premium Setup"),
 
     /**
-     * Tier 2: Standard quality setup - strong confluence.
-     * Requires: (Order Block + Displacement + SMT)
-     *       OR: (Unfilled FVG + SMT + Displacement)
-     *       OR: (Fresh Mitigation + SMT)
+     * Tier 2: Standard quality setup - strong confluence with HTF not opposing.
+     * Requires: HTF Not Opposing + (Order Block + Displacement + SMT)
+     *       OR: HTF Not Opposing + (Unfilled FVG + SMT + Displacement)
+     *       OR: HTF Not Opposing + (Fresh Mitigation + SMT)
+     *       OR: HTF Trending + 5m Zone(1+) + Displacement
      * R:R Target: 1:3
      */
     TIER_2(2, 3.0, "Standard Setup"),
@@ -42,6 +58,7 @@ public enum TradeTier {
      *       OR: (Order Block + any confirmation)
      * R:R Target: 1:2
      * Note: Single confluence is no longer accepted - must have confirmation.
+     * Note: DISABLED in production — Tier 2 is the minimum acceptable tier.
      */
     TIER_1(1, 2.0, "Confirmed Setup");
 
@@ -116,20 +133,43 @@ public enum TradeTier {
 
     /**
      * Get the minimum number of confluences required for this tier.
+     * Now includes HTF trend as a mandatory confluence for all tiers.
      */
     public int getMinConfluences() {
         switch (this) {
             case TIER_4:
-                return 4;  // Breaker + Power3 + SMT + Displacement
+                return 5;  // HTF Strong + Breaker + Power3 + SMT + Displacement (+ 5mZone + LiqTarget optional)
             case TIER_3:
-                return 3;  // Breaker + 1 confirmation OR IFVG + OB + Displacement + Power3
+                return 4;  // HTF Trending + 5mZone/Breaker + Displacement + confirmation
             case TIER_2:
-                return 3;  // OB + Displacement + SMT OR FVG + SMT + Displacement
+                return 3;  // HTF Not Opposing + OB/FVG + Displacement + SMT
             case TIER_1:
                 return 2;  // Double confluence required
             default:
                 return 2;
         }
+    }
+
+    /**
+     * Check if HTF trend alignment is required for this tier.
+     * Answer: YES for ALL tiers — the 3-layer cascade is mandatory.
+     */
+    public boolean requiresHtfTrend() {
+        return true;  // All tiers require Layer 1 (HTF trend) to pass
+    }
+
+    /**
+     * Check if this tier requires a strong HTF trend (vs. weak trending).
+     */
+    public boolean requiresStrongHtfTrend() {
+        return this == TIER_4;  // Only Tier 4 requires STRONG
+    }
+
+    /**
+     * Check if this tier benefits from 5m continuation zone.
+     */
+    public boolean benefitsFrom5mZone() {
+        return true;  // All tiers benefit; score >= 2 can promote to Tier 3
     }
 
     @Override

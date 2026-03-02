@@ -255,12 +255,13 @@ public enum TradeTierVariant {
 
     /**
      * Get minimum number of confluences required.
+     * Updated: HTF trend counts as a mandatory confluence for all tiers.
      */
     public int getMinConfluences() {
         switch (tierLevel) {
-            case 4: return 4;
-            case 3: return 3;
-            case 2: return 3;
+            case 4: return 5;  // HTF Strong + Breaker + Power3 + SMT + Displacement
+            case 3: return 4;  // HTF Trending + 5mZone/Breaker + Displacement + confirmation
+            case 2: return 3;  // HTF Not Opposing + structure + Displacement + SMT
             default: return 2;
         }
     }

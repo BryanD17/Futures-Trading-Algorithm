@@ -463,33 +463,54 @@ public class MultiTimeframeAnalyzer {
 
     /**
      * Check if minimum HTF requirements are met for a tier.
+     *
+     * Enhanced with 3-Layer Cascade integration:
+     * - Tier 4: Requires STRONG HTF trend (30m+15m aligned) + HTF zone (15m FVG or 5m OB)
+     * - Tier 3: Requires HTF trending (15m bias aligned) + HTF zone
+     * - Tier 2: Requires HTF not opposing + any zone present
+     * - Tier 1: Requires HTF not opposing
+     *
+     * Note: The HtfTrendAnalyzer gate (Layer 1) should have already filtered
+     * before reaching this method. This provides additional zone-level requirements.
      */
     public boolean meetsHtfRequirements(TradeTier tier, boolean bullish, double price, double maxDistance) {
         switch (tier) {
             case TIER_4:
                 // Elite: Must have 30m+15m bias alignment AND (15m FVG OR 5m OB)
+                // The HtfTrendAnalyzer should report STRONG_BULLISH or STRONG_BEARISH
                 return htfBiasAligns(bullish) &&
                        (findHtfUnfilledFvg15m(price, bullish, maxDistance) != null ||
                         findOb5m(price, bullish, maxDistance) != null);
 
             case TIER_3:
-                // Premium: Must have 15m bias alignment AND (15m FVG OR 5m FVG OR 5m OB)
+                // Premium: Must have 15m bias aligned AND (15m FVG OR 5m FVG OR 5m OB)
+                // OR: 30m+15m aligned (even without specific zone)
                 MarketBias bias15m = getHtfBias15m();
                 boolean bias15mOk = (bullish && bias15m == MarketBias.BULLISH) ||
                                     (!bullish && bias15m == MarketBias.BEARISH);
-                return bias15mOk &&
-                       (findHtfUnfilledFvg15m(price, bullish, maxDistance) != null ||
+
+                if (bias15mOk) {
+                    // Has aligned bias — check for zone OR strong bias alignment
+                    if (findHtfUnfilledFvg15m(price, bullish, maxDistance) != null ||
                         findUnfilledFvg5m(price, bullish, maxDistance) != null ||
-                        findOb5m(price, bullish, maxDistance) != null);
+                        findOb5m(price, bullish, maxDistance) != null) {
+                        return true;
+                    }
+                    // Allow if 30m+15m strongly aligned (trend continuation)
+                    return htfBiasAligns(bullish);
+                }
+                return false;
 
             case TIER_2:
                 // Standard: Must have 15m bias non-opposing AND (5m FVG OR 3m/5m OB)
+                // Also accepts if continuation zone present (cascade Layer 2)
                 MarketBias bias15mT2 = getHtfBias15m();
                 boolean bias15mNotOpposing = (bullish && bias15mT2 != MarketBias.BEARISH) ||
                                               (!bullish && bias15mT2 != MarketBias.BULLISH);
                 return bias15mNotOpposing &&
                        (findUnfilledFvg5m(price, bullish, maxDistance) != null ||
-                        findBestHtfOb(price, bullish, maxDistance) != null);
+                        findBestHtfOb(price, bullish, maxDistance) != null ||
+                        hasConfirmedDisplacement(bullish));
 
             case TIER_1:
             default:
@@ -636,6 +657,172 @@ public class MultiTimeframeAnalyzer {
         // No HTF confirmation found
         return HtfConfirmationResult.notConfirmed(
                 "No HTF confirmation found. Checked: 15mFVG, 5mFVG, 5mOB, HTF_MSS, HTF_BIAS - none confirmed.");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 3-LAYER CASCADE GATING (NEW — Sequential decision framework)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * LAYER 1 CHECK: Evaluate HTF directional bias gate.
+     *
+     * This is the FIRST and MOST IMPORTANT check in the cascade.
+     * If HTF is not trending, NO trades are taken regardless of lower-TF setups.
+     *
+     * @param htfTrendAnalyzer The HTF trend state machine
+     * @param bullish Desired trade direction
+     * @return true if Layer 1 passes (HTF allows this direction)
+     */
+    public boolean passesLayer1Gate(HtfTrendAnalyzer htfTrendAnalyzer, boolean bullish) {
+        if (htfTrendAnalyzer == null) {
+            // Fallback to existing bias check if HTF analyzer not available
+            return htfBiasAligns(bullish) ||
+                   (bullish ? getHtfBias15m() != MarketBias.BEARISH :
+                              getHtfBias15m() != MarketBias.BULLISH);
+        }
+
+        // Primary gate: HTF trend must allow this direction
+        return htfTrendAnalyzer.allowsDirection(bullish);
+    }
+
+    /**
+     * LAYER 2 CHECK: Evaluate 5m continuation zone.
+     *
+     * Only called when Layer 1 passes. Checks if the 5m has pulled back
+     * to a confluent zone with 2+ overlapping structures.
+     *
+     * @param continuationDetector The 5m continuation pattern detector
+     * @param bullish Desired trade direction
+     * @return true if Layer 2 passes (valid pullback zone identified)
+     */
+    public boolean passesLayer2Gate(ContinuationPatternDetector continuationDetector, boolean bullish) {
+        if (continuationDetector == null) {
+            // Fallback: check for any HTF zone
+            return true;  // Don't block if detector unavailable
+        }
+
+        // Check for valid or activated continuation zone
+        return continuationDetector.hasValidZone(bullish) ||
+               continuationDetector.hasActivatedZone(bullish);
+    }
+
+    /**
+     * LAYER 3 CHECK: Evaluate 1m displacement entry trigger.
+     *
+     * Only called when Layer 2 passes. Checks for displacement on 1m
+     * that creates an FVG and breaks a swing point (MSS).
+     *
+     * @param displacementDetector The 1m displacement detector
+     * @param bullish Desired trade direction
+     * @param lookback How many candles back to check
+     * @return true if Layer 3 passes (displacement entry trigger fired)
+     */
+    public boolean passesLayer3Gate(DisplacementDetector displacementDetector,
+                                     boolean bullish, int lookback) {
+        if (displacementDetector == null) {
+            return false;
+        }
+
+        // Full Layer 3: displacement + FVG + MSS
+        if (displacementDetector.hasLayer3EntryTrigger(lookback, bullish)) {
+            return true;
+        }
+
+        // Acceptable fallback: displacement without full FVG/MSS
+        // (allows trades when displacement is clear but FVG gap is tight)
+        return displacementDetector.hasRecentDisplacement(lookback, bullish);
+    }
+
+    /**
+     * Run the full 3-layer cascade check.
+     *
+     * @param htfTrendAnalyzer Layer 1: HTF trend state
+     * @param continuationDetector Layer 2: 5m continuation zone
+     * @param displacementDetector Layer 3: 1m displacement trigger
+     * @param bullish Desired trade direction
+     * @return CascadeResult with pass/fail and which layer blocked
+     */
+    public CascadeResult evaluateThreeLayerCascade(
+            HtfTrendAnalyzer htfTrendAnalyzer,
+            ContinuationPatternDetector continuationDetector,
+            DisplacementDetector displacementDetector,
+            boolean bullish) {
+
+        // Layer 1: HTF Trend Direction
+        if (!passesLayer1Gate(htfTrendAnalyzer, bullish)) {
+            String htfState = htfTrendAnalyzer != null ?
+                    htfTrendAnalyzer.getTrendState().getDisplayName() : "UNKNOWN";
+            return CascadeResult.blocked(1, "HTF trend does not allow " +
+                    (bullish ? "LONGS" : "SHORTS") + " (state=" + htfState + ")");
+        }
+
+        // Layer 2: 5m Continuation Zone
+        if (!passesLayer2Gate(continuationDetector, bullish)) {
+            return CascadeResult.blocked(2, "No 5m continuation zone identified for " +
+                    (bullish ? "bullish" : "bearish") + " pullback");
+        }
+
+        // Layer 3: 1m Displacement Entry
+        if (!passesLayer3Gate(displacementDetector, bullish, 10)) {
+            return CascadeResult.blocked(3, "No 1m displacement trigger for " +
+                    (bullish ? "bullish" : "bearish") + " entry");
+        }
+
+        // All layers passed
+        boolean isFullTrigger = displacementDetector.hasLayer3EntryTrigger(10, bullish);
+        int zoneScore = continuationDetector != null ?
+                continuationDetector.getZoneConfluenceScore(bullish) : 0;
+        boolean strongTrend = htfTrendAnalyzer != null &&
+                htfTrendAnalyzer.isStrongTrend(bullish);
+
+        return CascadeResult.passed(strongTrend, zoneScore, isFullTrigger);
+    }
+
+    /**
+     * Result of the 3-layer cascade evaluation.
+     */
+    public static class CascadeResult {
+        private final boolean passed;
+        private final int blockedAtLayer;  // 0 = not blocked, 1-3 = which layer blocked
+        private final String blockReason;
+        private final boolean strongHtfTrend;
+        private final int zoneConfluenceScore;
+        private final boolean fullEntryTrigger;
+
+        private CascadeResult(boolean passed, int blockedAtLayer, String blockReason,
+                              boolean strongHtfTrend, int zoneConfluenceScore, boolean fullEntryTrigger) {
+            this.passed = passed;
+            this.blockedAtLayer = blockedAtLayer;
+            this.blockReason = blockReason;
+            this.strongHtfTrend = strongHtfTrend;
+            this.zoneConfluenceScore = zoneConfluenceScore;
+            this.fullEntryTrigger = fullEntryTrigger;
+        }
+
+        public static CascadeResult blocked(int layer, String reason) {
+            return new CascadeResult(false, layer, reason, false, 0, false);
+        }
+
+        public static CascadeResult passed(boolean strongTrend, int zoneScore, boolean fullTrigger) {
+            return new CascadeResult(true, 0, null, strongTrend, zoneScore, fullTrigger);
+        }
+
+        public boolean isPassed() { return passed; }
+        public boolean isBlocked() { return !passed; }
+        public int getBlockedAtLayer() { return blockedAtLayer; }
+        public String getBlockReason() { return blockReason; }
+        public boolean isStrongHtfTrend() { return strongHtfTrend; }
+        public int getZoneConfluenceScore() { return zoneConfluenceScore; }
+        public boolean isFullEntryTrigger() { return fullEntryTrigger; }
+
+        @Override
+        public String toString() {
+            if (passed) {
+                return String.format("CASCADE PASSED [strong=%s, zone=%d, fullTrigger=%s]",
+                        strongHtfTrend, zoneConfluenceScore, fullEntryTrigger);
+            }
+            return String.format("CASCADE BLOCKED at Layer %d: %s", blockedAtLayer, blockReason);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

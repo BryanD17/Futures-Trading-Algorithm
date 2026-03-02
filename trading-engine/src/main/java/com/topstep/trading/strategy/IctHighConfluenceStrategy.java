@@ -5,6 +5,7 @@ import com.topstep.trading.domain.OrderSide;
 import com.topstep.trading.event.EventBus;
 import com.topstep.trading.event.StrategySignalEvent;
 import com.topstep.trading.strategy.BarAggregationManager.Timeframe;
+import com.topstep.trading.strategy.HtfTrendAnalyzer.HtfTrendState;
 import com.topstep.trading.chartstate.RaidDetector;
 import com.topstep.trading.chartstate.LiquidityRaid;
 import com.topstep.trading.chartstate.LevelEngine;
@@ -35,10 +36,18 @@ import java.util.Optional;
  * 8. MULTI-TIMEFRAME ANALYSIS - HTF bias alignment (30m + 15m)
  *
  * TIER SYSTEM (Higher tier = Higher quality = Better R:R):
- * - Tier 4: HTF Aligned + Breaker Block + Power3 + SMT + Displacement = 1:5 R:R
- * - Tier 3: HTF Aligned + (Breaker OR IFVG+OB) + Displacement = 1:4 R:R
- * - Tier 2: 15m Bias + OB + Displacement + SMT = 1:2 R:R
+ * - Tier 4: Strong HTF Trend + Breaker Block + Power3 + SMT + Displacement + 5m Zone + Liquidity Target = 1:5 R:R
+ * - Tier 3: HTF Trend Aligned + 5m Zone Confluence + Displacement + (SMT OR Power3) = 1:4 R:R
+ * - Tier 2: HTF Not Opposing + OB/FVG + Displacement + SMT = 1:3 R:R
  * - Tier 1: DISABLED - Requires minimum Tier 2
+ *
+ * 3-LAYER CASCADE DECISION FRAMEWORK (NEW):
+ * Layer 1: HTF Trend Direction (15m/30m) → Determines IF and WHICH direction to trade
+ * Layer 2: 5m Continuation Zone → Confirms pullback to confluent zone
+ * Layer 3: 1m Displacement Entry → Precise entry trigger with FVG retracement
+ *
+ * Each layer must pass before the next is evaluated. This is a SEQUENTIAL GATE,
+ * not a flat confluence checklist.
  */
 public class IctHighConfluenceStrategy implements TradingStrategy {
 
@@ -64,6 +73,11 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     // Multi-timeframe analysis (NEW)
     private final BarAggregationManager barManager;
     private final MultiTimeframeAnalyzer mtfAnalyzer;
+
+    // 3-Layer Cascade Components (MULTI-TIMEFRAME TREND INTEGRATION)
+    private final HtfTrendAnalyzer htfTrendAnalyzer;            // Layer 1: HTF trend state machine
+    private final ContinuationPatternDetector continuationDetector; // Layer 2: 5m continuation zones
+    private final LiquidityTargetIdentifier liquidityTargetId;     // Liquidity target identification
 
     // Advanced market structure detectors (NEW)
     private final VolumeProfileAnalyzer volumeProfileAnalyzer;
@@ -118,6 +132,10 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private int volatilityBlocked = 0;
     private int neutralBias = 0;
     private int htfBiasNotAligned = 0;  // NEW: HTF bias rejection counter
+    private int htfTrendRanging = 0;  // NEW: HTF trend ranging — no trades
+    private int htfTrendOpposing = 0; // NEW: HTF trend opposing direction
+    private int no5mContinuationZone = 0; // NEW: No 5m continuation zone
+    private int no1mDisplacement = 0; // NEW: No 1m displacement trigger
     private int noSweep = 0;
     private int sweepMismatch = 0;
     private int noEntryZone = 0;
@@ -142,6 +160,13 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private boolean hasHtfAlignment = false;  // NEW: Track HTF alignment
     private int htfConfluenceScore = 0;       // NEW: Track HTF score
     private int recommendedQuantity = 1;
+
+    // 3-Layer Cascade state
+    private HtfTrendState currentHtfTrendState = HtfTrendState.RANGING;
+    private int continuationZoneScore = 0;
+    private boolean hasLayer3EntryTrigger = false;
+    private int liquidityTargetBonus = 0;
+    private LiquidityTargetIdentifier.LiquidityTarget currentLiquidityTarget = null;
 
     // Advanced confluence state (NEW)
     private int volumeConfluenceScore = 0;
@@ -182,6 +207,11 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         this.barManager = new BarAggregationManager(primarySymbol, 100);
         this.mtfAnalyzer = new MultiTimeframeAnalyzer(primarySymbol, barManager);
 
+        // Initialize 3-Layer Cascade Components (MULTI-TIMEFRAME TREND INTEGRATION)
+        this.htfTrendAnalyzer = new HtfTrendAnalyzer(primarySymbol, barManager);
+        this.continuationDetector = new ContinuationPatternDetector(primarySymbol, barManager);
+        // LiquidityTargetIdentifier initialized after LevelEngine (below)
+
         // Initialize advanced market structure detectors (NEW)
         double tickSize = getTickSizeForSymbol(primarySymbol);
         this.volumeProfileAnalyzer = new VolumeProfileAnalyzer(primarySymbol, tickSize);
@@ -193,6 +223,9 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         this.levelEngine = new LevelEngine(primarySymbol, candleSeries);
         this.equalLevelDetector = new EqualLevelDetector(primarySymbol, candleSeries);
         this.raidDetector = new RaidDetector(primarySymbol, levelEngine, equalLevelDetector, candleSeries);
+
+        // Initialize LiquidityTargetIdentifier (needs levelEngine)
+        this.liquidityTargetId = new LiquidityTargetIdentifier(primarySymbol, levelEngine);
 
         // Setup automatic raid confirmation listener
         setupRaidConfirmation();
@@ -533,6 +566,10 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         // Update MTF detectors with any newly completed candles
         mtfAnalyzer.update(completedCandles);
 
+        // Update 3-Layer Cascade components (MULTI-TIMEFRAME TREND INTEGRATION)
+        htfTrendAnalyzer.update(completedCandles);        // Layer 1: HTF trend state
+        continuationDetector.update(completedCandles);    // Layer 2: 5m continuation zones
+
         // Update advanced market structure detectors (NEW)
         candleSeries.addCandle(candle);
         levelEngine.processCandle(candle);
@@ -541,13 +578,20 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         trendlineDetector.update(candle);
         equalLevelDetector.ageAndCleanupLevels();
 
-        // Update raid detector with context for SMT/HTF bias
+        // Update raid detector with context for SMT/HTF bias + cascade data
         MarketBias bias1m = structureDetector.getBias();
         Boolean htfBullish = (bias1m == MarketBias.BULLISH) ? Boolean.TRUE :
                              (bias1m == MarketBias.BEARISH) ? Boolean.FALSE : null;
         boolean hasSmt = correlationTracker.hasSMTDivergence(primarySymbol, smtSymbol, 10);
+        boolean isBullish1mCtx = bias1m == MarketBias.BULLISH;
         RaidDetector.RaidDetectionContext raidContext =
-                RaidDetector.RaidDetectionContext.full(hasSmt, htfBullish);
+                RaidDetector.RaidDetectionContext.fullWithCascade(
+                        hasSmt, htfBullish,
+                        htfTrendAnalyzer.isStrongTrend(isBullish1mCtx),
+                        continuationDetector.getZoneConfluenceScore(isBullish1mCtx),
+                        displacementDetector.hasLayer3EntryTrigger(10, isBullish1mCtx),
+                        liquidityTargetId.getTargetAlignmentBonus(candle.getClose(), isBullish1mCtx)
+                );
         raidDetector.processCandle(candle, raidContext);
 
         // AUTO-CONFIRM RAIDS: Check for displacement/MSS after raid detection
@@ -608,6 +652,12 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         macroAlignment = MacroAlignment.NEUTRAL;
         newsSizeMultiplier = 1.0;
         macroConfluenceAdjustment = 0;
+        // Reset cascade state
+        currentHtfTrendState = htfTrendAnalyzer.getTrendState();
+        continuationZoneScore = 0;
+        hasLayer3EntryTrigger = false;
+        liquidityTargetBonus = 0;
+        currentLiquidityTarget = null;
 
         // ═══════════════════════════════════════════════════════════════════════════
         // 0. MACRO NEWS GATING CHECK (NEW - First check before any other filters)
@@ -676,6 +726,74 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         if (bias1m == MarketBias.NEUTRAL) {
             neutralBias++;
             return false;
+        }
+
+        boolean isBullish1m = bias1m == MarketBias.BULLISH;
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // 3.5. 3-LAYER CASCADE CHECK (PRIMARY DIRECTIONAL FILTER)
+        // This is THE most important check — HTF trend as the dominant gate.
+        // If HTF is ranging, NO trades. If HTF opposes, NO trades.
+        // ═══════════════════════════════════════════════════════════════════════════
+        currentHtfTrendState = htfTrendAnalyzer.getTrendState();
+
+        // LAYER 1: HTF Trend Direction Gate
+        if (!htfTrendAnalyzer.isTrending()) {
+            htfTrendRanging++;
+            if (shouldLog) {
+                System.out.println("[" + primarySymbol + "] CASCADE L1 BLOCKED: HTF ranging (" +
+                        htfTrendAnalyzer.getSummary() + ") — NO TRADES");
+            }
+            return false;
+        }
+
+        if (!htfTrendAnalyzer.allowsDirection(isBullish1m)) {
+            htfTrendOpposing++;
+            if (shouldLog) {
+                System.out.println("[" + primarySymbol + "] CASCADE L1 BLOCKED: HTF trend opposes " +
+                        (isBullish1m ? "LONGS" : "SHORTS") + " (" +
+                        currentHtfTrendState.getDisplayName() + ")");
+            }
+            return false;
+        }
+
+        // LAYER 2: 5m Continuation Zone (optional but boosts tier)
+        ContinuationPatternDetector.ContinuationZone bestZone =
+                continuationDetector.getBestActiveZone(isBullish1m);
+        continuationZoneScore = continuationDetector.getZoneConfluenceScore(isBullish1m);
+
+        if (bestZone != null && shouldLog) {
+            System.out.println("[" + primarySymbol + "] CASCADE L2: 5m zone found — " + bestZone);
+        }
+
+        // LAYER 3: 1m Displacement (checked later in existing displacement detection)
+        hasLayer3EntryTrigger = displacementDetector.hasLayer3EntryTrigger(10, isBullish1m);
+
+        // Liquidity Target Analysis
+        currentLiquidityTarget = liquidityTargetId.findNextTarget(candle.getClose(), isBullish1m)
+                .orElse(null);
+        liquidityTargetBonus = liquidityTargetId.getTargetAlignmentBonus(candle.getClose(), isBullish1m);
+
+        if (currentLiquidityTarget != null && shouldLog) {
+            System.out.println("[" + primarySymbol + "] LIQUIDITY TARGET: " + currentLiquidityTarget);
+        }
+
+        // Check if nearest significant target already swept (move may be exhausted)
+        if (liquidityTargetId.isNearestTargetSwept(candle.getClose(), isBullish1m, maxPriceDistance)) {
+            if (shouldLog) {
+                System.out.println("[" + primarySymbol + "] WARNING: Nearest significant target already swept — move may be exhausted");
+            }
+            // Don't block, but reduce score
+            liquidityTargetBonus = Math.max(0, liquidityTargetBonus - 1);
+        }
+
+        // Log cascade state
+        if (shouldLog) {
+            System.out.println("[" + primarySymbol + "] CASCADE: HTF=" + currentHtfTrendState.getDisplayName() +
+                    ", 5mZone=" + continuationZoneScore + ", L3Trigger=" + hasLayer3EntryTrigger +
+                    ", LiqTarget=" + liquidityTargetBonus +
+                    (htfTrendAnalyzer.isInFavorableZone(candle.getClose(), isBullish1m) ?
+                            " [FAVORABLE ZONE]" : " [UNFAVORABLE ZONE]"));
         }
 
         // 4. Check for recent liquidity sweep
@@ -876,39 +994,64 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         MultiTimeframeAnalyzer.ObResult htfObResult = mtfAnalyzer.findBestHtfOb(candle.getClose(), isBullish, maxPriceDistance);
 
         // ═══════════════════════════════════════════════════════════════════════════
-        // TIER 4: ELITE SETUP - Requires full HTF alignment + premium confluences
-        // HTF Aligned (30m+15m) + Breaker Block + Power3 + SMT + Displacement
+        // TIER 4: ELITE SETUP - Requires STRONG HTF trend + premium confluences + 5m zone + liquidity target
+        // Strong HTF Trend + Breaker Block + Power3 + SMT + Displacement + 5m Zone + Target
         // ═══════════════════════════════════════════════════════════════════════════
-        if (hasHtfAlignment && currentBreaker != null && hasPower3Confirmation && hasSmtDivergence && hasDisplacement) {
-            // Verify HTF requirements for Tier 4
+        boolean isStrongHtf = htfTrendAnalyzer.isStrongTrend(isBullish);
+
+        if (isStrongHtf && hasHtfAlignment && currentBreaker != null && hasPower3Confirmation && hasSmtDivergence && hasDisplacement) {
+            // Tier 4 now requires cascade components for maximum quality
+            boolean hasCascadeBoost = continuationZoneScore >= 2 || liquidityTargetBonus >= 1;
             if (mtfAnalyzer.meetsHtfRequirements(TradeTier.TIER_4, isBullish, candle.getClose(), maxPriceDistance)) {
                 currentTier = TradeTier.TIER_4;
-                printTier4Signal(candle, bias1m, sweep, "HTF+Breaker+Power3+SMT+Displacement", hasSmtDivergence);
+                String entryType = "StrongHTF+Breaker+Power3+SMT+Displacement";
+                if (continuationZoneScore >= 2) entryType += "+5mZone(" + continuationZoneScore + ")";
+                if (liquidityTargetBonus >= 1) entryType += "+LiqTarget";
+                if (hasLayer3EntryTrigger) entryType += "+L3Trigger";
+                printTier4Signal(candle, bias1m, sweep, entryType, hasSmtDivergence);
                 return true;
             }
         }
 
         // ═══════════════════════════════════════════════════════════════════════════
-        // TIER 3: PREMIUM SETUP - Requires HTF alignment + strong confluences
-        // HTF Aligned + Breaker + Displacement + (SMT OR Power3)
-        // OR: HTF Aligned + (IFVG + OB + Displacement + Power3)
+        // TIER 3: PREMIUM SETUP - HTF trending + 5m zone OR strong confluences
+        // HTF Trend + Breaker + Displacement + (SMT OR Power3)
+        // OR: HTF Trend + 5m Zone(2+) + Displacement + (SMT OR Power3)
+        // OR: HTF Trend + IFVG + OB + Displacement + Power3
         // ═══════════════════════════════════════════════════════════════════════════
-        if (hasHtfAlignment) {
+        if (hasHtfAlignment || currentHtfTrendState.isTrending()) {
             // Check for Breaker-based Tier 3
             if (currentBreaker != null && hasDisplacement) {
                 confluenceCount = 2;  // Breaker + Displacement counts as 2
                 if (hasSmtDivergence) confluenceCount++;
                 if (hasPower3Confirmation) confluenceCount++;
+                if (continuationZoneScore >= 2) confluenceCount++;  // 5m zone confluence bonus
+                if (liquidityTargetBonus >= 1) confluenceCount++;   // Liquidity target bonus
 
                 if (confluenceCount >= 3) {
                     if (mtfAnalyzer.meetsHtfRequirements(TradeTier.TIER_3, isBullish, candle.getClose(), maxPriceDistance)) {
                         currentTier = TradeTier.TIER_3;
-                        String entryType = "HTF+Breaker+Displacement";
+                        String entryType = "HTF(" + currentHtfTrendState.getDisplayName() + ")+Breaker+Displacement";
                         if (hasSmtDivergence) entryType += "+SMT";
                         if (hasPower3Confirmation) entryType += "+Power3";
+                        if (continuationZoneScore >= 2) entryType += "+5mZone(" + continuationZoneScore + ")";
+                        if (liquidityTargetBonus >= 1) entryType += "+LiqTarget";
                         printTier3Signal(candle, bias1m, sweep, entryType, hasSmtDivergence);
                         return true;
                     }
+                }
+            }
+
+            // 5m Zone + Displacement + confirmation = Tier 3 (NEW pathway via cascade)
+            if (continuationZoneScore >= 2 && hasDisplacement && (hasSmtDivergence || hasPower3Confirmation)) {
+                if (mtfAnalyzer.meetsHtfRequirements(TradeTier.TIER_3, isBullish, candle.getClose(), maxPriceDistance)) {
+                    currentTier = TradeTier.TIER_3;
+                    String entryType = "HTF(" + currentHtfTrendState.getDisplayName() + ")+5mZone(" + continuationZoneScore + ")+Displacement";
+                    if (hasSmtDivergence) entryType += "+SMT";
+                    if (hasPower3Confirmation) entryType += "+Power3";
+                    if (hasLayer3EntryTrigger) entryType += "+L3Trigger";
+                    printTier3Signal(candle, bias1m, sweep, entryType, hasSmtDivergence);
+                    return true;
                 }
             }
 
@@ -929,17 +1072,19 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
                 String entryType = "HTF_Breaker(5m)+Displacement";
                 if (hasSmtDivergence) entryType += "+SMT";
                 if (hasPower3Confirmation) entryType += "+Power3";
+                if (continuationZoneScore >= 1) entryType += "+5mZone(" + continuationZoneScore + ")";
                 printTier3Signal(candle, bias1m, sweep, entryType, hasSmtDivergence);
                 return true;
             }
         }
 
         // ═══════════════════════════════════════════════════════════════════════════
-        // TIER 2: STANDARD SETUP - 15m bias must not oppose + strong confluences
+        // TIER 2: STANDARD SETUP - HTF trending (even weak) + strong confluences
         // (OB + Displacement + SMT)
         // OR: (Unfilled FVG + SMT + Displacement)
         // OR: (Fresh Mitigation + SMT + Displacement)
         // OR: (HTF FVG/OB + Displacement)
+        // OR: (5m Zone + Displacement) — NEW cascade pathway
         // ═══════════════════════════════════════════════════════════════════════════
         FairValueGap unfilledFvg = fvgDetector.findNearestUnfilledFvg(candle.getClose(), isBullish, maxPriceDistance);
 
@@ -949,14 +1094,21 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         if (htfTier2Ok) {
             if (currentOrderBlock != null && hasDisplacement && hasSmtDivergence) {
                 currentTier = TradeTier.TIER_2;
-                printTier2Signal(candle, bias1m, sweep, "OB+Displacement+SMT (HTF=" + htfConfluenceScore + ")", hasSmtDivergence);
+                String detail = "OB+Displacement+SMT (HTF=" + htfConfluenceScore +
+                        ", trend=" + currentHtfTrendState.getDisplayName() + ")";
+                if (continuationZoneScore >= 1) detail += "+5mZone(" + continuationZoneScore + ")";
+                if (liquidityTargetBonus >= 1) detail += "+LiqTarget";
+                printTier2Signal(candle, bias1m, sweep, detail, hasSmtDivergence);
                 return true;
             }
 
             if (unfilledFvg != null && hasSmtDivergence && hasDisplacement) {
                 currentTier = TradeTier.TIER_2;
                 currentFvg = unfilledFvg;
-                printTier2Signal(candle, bias1m, sweep, "FVG+SMT+Displacement (HTF=" + htfConfluenceScore + ")", hasSmtDivergence);
+                String detail = "FVG+SMT+Displacement (HTF=" + htfConfluenceScore +
+                        ", trend=" + currentHtfTrendState.getDisplayName() + ")";
+                if (continuationZoneScore >= 1) detail += "+5mZone(" + continuationZoneScore + ")";
+                printTier2Signal(candle, bias1m, sweep, detail, hasSmtDivergence);
                 return true;
             }
 
@@ -967,7 +1119,7 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
                 return true;
             }
 
-            // NEW: HTF FVG or OB with displacement qualifies for Tier 2
+            // HTF FVG or OB with displacement qualifies for Tier 2
             if (htfFvgResult != null && hasDisplacement) {
                 currentTier = TradeTier.TIER_2;
                 currentFvg = htfFvgResult.fvg;
@@ -979,6 +1131,16 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
                 currentTier = TradeTier.TIER_2;
                 currentOrderBlock = htfObResult.ob;
                 printTier2Signal(candle, bias1m, sweep, "HTF_OB(" + htfObResult.timeframe.getLabel() + ")+Displacement+SMT (HTF=" + htfConfluenceScore + ")", hasSmtDivergence);
+                return true;
+            }
+
+            // NEW cascade pathway: 5m continuation zone + displacement = Tier 2
+            if (continuationZoneScore >= 1 && hasDisplacement) {
+                currentTier = TradeTier.TIER_2;
+                printTier2Signal(candle, bias1m, sweep,
+                        "5mZone(" + continuationZoneScore + ")+Displacement (HTF=" + htfConfluenceScore +
+                                ", trend=" + currentHtfTrendState.getDisplayName() + ")",
+                        hasSmtDivergence);
                 return true;
             }
         } else {
@@ -1514,6 +1676,11 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         System.out.println("  Volatility blocked:    " + volatilityBlocked + " (" + pct(volatilityBlocked) + ")");
         System.out.println("  Neutral bias (1m):     " + neutralBias + " (" + pct(neutralBias) + ")");
         System.out.println("  HTF bias opposing:     " + htfBiasNotAligned + " (" + pct(htfBiasNotAligned) + ")");
+        System.out.println("  --- 3-LAYER CASCADE FILTERS ---");
+        System.out.println("  HTF trend ranging:     " + htfTrendRanging + " (" + pct(htfTrendRanging) + ")");
+        System.out.println("  HTF trend opposing:    " + htfTrendOpposing + " (" + pct(htfTrendOpposing) + ")");
+        System.out.println("  No 5m continuation:    " + no5mContinuationZone + " (" + pct(no5mContinuationZone) + ")");
+        System.out.println("  No 1m displacement:    " + no1mDisplacement + " (" + pct(no1mDisplacement) + ")");
         System.out.println("  News gating blocked:   " + newsGatingBlocked + " (" + pct(newsGatingBlocked) + ")");
         System.out.println("  Macro opposing blocked:" + macroOpposingBlocked + " (" + pct(macroOpposingBlocked) + ")");
         System.out.println("  --- ASYMMETRIC FILTERS (Longs harder than Shorts) ---");
@@ -1547,6 +1714,15 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     public BarAggregationManager getBarManager() { return barManager; }
     public boolean hasHtfAlignment() { return hasHtfAlignment; }
     public int getHtfConfluenceScore() { return htfConfluenceScore; }
+
+    // 3-Layer Cascade getters (MULTI-TIMEFRAME TREND INTEGRATION)
+    public HtfTrendAnalyzer getHtfTrendAnalyzer() { return htfTrendAnalyzer; }
+    public ContinuationPatternDetector getContinuationDetector() { return continuationDetector; }
+    public LiquidityTargetIdentifier getLiquidityTargetId() { return liquidityTargetId; }
+    public HtfTrendState getCurrentHtfTrendState() { return currentHtfTrendState; }
+    public int getContinuationZoneScore() { return continuationZoneScore; }
+    public boolean hasLayer3Trigger() { return hasLayer3EntryTrigger; }
+    public int getLiquidityTargetBonus() { return liquidityTargetBonus; }
 
     // Advanced market structure getters (NEW)
     public VolumeProfileAnalyzer getVolumeProfileAnalyzer() { return volumeProfileAnalyzer; }

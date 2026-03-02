@@ -16,28 +16,38 @@ import java.util.List;
  * and HTF alignment is far more likely to lead to a profitable reversal than a
  * raid during Asia with no confirmation.
  *
- * SCORING SYSTEM (1-10):
+ * REVISED SCORING SYSTEM (1-10) - HTF TREND ANCHORED:
  *
- * TIER 1: TIMING FACTORS (max +3)
+ * The key insight: HTF trend alignment is the MOST IMPORTANT FACTOR.
+ * Trading with institutional flow (HTF trend) dramatically increases win rate.
+ * Trading against it, even with technically valid setups, fails more often.
+ *
+ * TIER 1: HTF TREND ALIGNMENT (max +3, penalty -4)
+ * - HTF trend aligned (strong): +3  (up from +1 — this is THE dominant factor)
+ * - HTF trend aligned (weak):   +2
+ * - HTF trend opposing:         -4  (up from -2 — severely penalized)
+ *
+ * TIER 2: TIMING FACTORS (max +3)
  * - Killzone timing: +2
  * - Silver Bullet window: +1
- * - Session overlap: +1
  *
- * TIER 2: LEVEL SIGNIFICANCE (max +2)
- * - PDH/PDL levels: +2
+ * TIER 3: LEVEL SIGNIFICANCE (max +2)
+ * - PDH/PDL/PWH/PWL levels: +2
  * - Session extremes: +1
- * - Strong equal levels (cluster ≥3): +1
+ * - Strong equal levels (cluster >= 3): +1
  *
- * TIER 3: CONFIRMATION FACTORS (max +3)
+ * TIER 4: CONFIRMATION FACTORS (max +4)
  * - SMT divergence: +2
- * - HTF bias alignment: +1
+ * - 5m zone confluence (2+ structures overlapping): +2  (NEW)
  *
- * TIER 4: PRICE ACTION QUALITY (max +2)
- * - Strong penetration: +1
- * - Strong rejection (wick ratio): +1
+ * TIER 5: ENTRY QUALITY (max +2)
+ * - 1m displacement confirmation: +2  (NEW)
+ *
+ * TIER 6: TARGET ALIGNMENT (max +2)
+ * - PDH/PDL target alignment: +2  (NEW — trade points toward significant unswept level)
  *
  * PENALTIES:
- * - Opposing HTF bias: -2
+ * - Opposing HTF bias: -4 (up from -2)
  * - Low-probability timing: -1
  *
  * QUALITY INTERPRETATION:
@@ -68,7 +78,25 @@ public class RaidQualityScorer {
         List<String> factors = new ArrayList<>();
 
         // ═══════════════════════════════════════════════════════════════════
-        // TIER 1: TIMING FACTORS (max +3)
+        // TIER 1: HTF TREND ALIGNMENT (THE DOMINANT FACTOR)
+        // This is the most important factor based on multi-timeframe research.
+        // Trading WITH institutional flow is the #1 determinant of success.
+        // ═══════════════════════════════════════════════════════════════════
+
+        boolean expectBullish = raid.getDirection().expectsBullish();
+
+        if (context.isHtfTrendStrong() && context.htfBiasAligns(expectBullish)) {
+            // Strong HTF trend aligned — highest weight
+            score += 3;
+            factors.add("★ HTF Strong Trend Aligned (+3)");
+        } else if (context.htfBiasAligns(expectBullish)) {
+            // Weak HTF alignment (bias matches but not strong trend)
+            score += 2;
+            factors.add("✓ HTF Bias Aligned (+2)");
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // TIER 2: TIMING FACTORS (max +3)
         // ═══════════════════════════════════════════════════════════════════
 
         // Killzone timing (+2)
@@ -83,14 +111,8 @@ public class RaidQualityScorer {
             factors.add("✓ Silver Bullet: " + context.getSilverBulletWindowName());
         }
 
-        // Session overlap (+1, but don't double-count with killzone)
-        if (context.isSessionOverlap() && !context.isInKillzone()) {
-            score += 1;
-            factors.add("✓ Session Overlap");
-        }
-
         // ═══════════════════════════════════════════════════════════════════
-        // TIER 2: LEVEL SIGNIFICANCE (max +2)
+        // TIER 3: LEVEL SIGNIFICANCE (max +2)
         // ═══════════════════════════════════════════════════════════════════
 
         LevelType levelType = raid.getTargetLevel().getType();
@@ -117,7 +139,7 @@ public class RaidQualityScorer {
         }
 
         // ═══════════════════════════════════════════════════════════════════
-        // TIER 3: CONFIRMATION FACTORS (max +3)
+        // TIER 4: CONFIRMATION FACTORS (max +4)
         // ═══════════════════════════════════════════════════════════════════
 
         // SMT divergence (+2)
@@ -126,39 +148,46 @@ public class RaidQualityScorer {
             factors.add("✓ SMT Divergence");
         }
 
-        // HTF bias alignment (+1)
-        boolean expectBullish = raid.getDirection().expectsBullish();
-        if (context.htfBiasAligns(expectBullish)) {
+        // 5m zone confluence — 2+ structures overlapping at pullback zone (+2) (NEW)
+        if (context.getZoneConfluenceScore() >= 2) {
+            score += 2;
+            factors.add("✓ 5m Zone Confluence (score=" + context.getZoneConfluenceScore() + ")");
+        } else if (context.getZoneConfluenceScore() >= 1) {
             score += 1;
-            factors.add("✓ HTF Bias Aligned");
+            factors.add("✓ 5m Zone Present (score=" + context.getZoneConfluenceScore() + ")");
         }
 
         // ═══════════════════════════════════════════════════════════════════
-        // TIER 4: PRICE ACTION QUALITY (max +2)
+        // TIER 5: ENTRY QUALITY (max +2) (NEW)
         // ═══════════════════════════════════════════════════════════════════
 
-        InstrumentRaidConfig config = InstrumentRaidConfig.forSymbol(raid.getInstrument());
-
-        // Strong penetration (+1)
-        if (raid.getPenetrationTicks() >= config.getStrongPenetrationTicks()) {
-            score += 1;
-            factors.add("✓ Strong Penetration (" + String.format("%.1f", raid.getPenetrationTicks()) + " ticks)");
+        // 1m displacement confirmation with FVG + MSS (+2)
+        if (context.hasDisplacementEntry()) {
+            score += 2;
+            factors.add("✓ 1m Displacement Entry (FVG+MSS)");
         }
 
-        // Strong rejection (wick ratio ≥ 0.6) (+1)
-        if (raid.getWickToBodyRatio() >= 0.6) {
+        // ═══════════════════════════════════════════════════════════════════
+        // TIER 6: TARGET ALIGNMENT (max +2) (NEW)
+        // ═══════════════════════════════════════════════════════════════════
+
+        // Trade points toward significant unswept liquidity (+2)
+        if (context.getTargetAlignmentBonus() >= 2) {
+            score += 2;
+            factors.add("✓ PDH/PDL Target Aligned");
+        } else if (context.getTargetAlignmentBonus() >= 1) {
             score += 1;
-            factors.add("✓ Strong Rejection (wick=" + (int)(raid.getWickToBodyRatio() * 100) + "%)");
+            factors.add("✓ Session Target Aligned");
         }
 
         // ═══════════════════════════════════════════════════════════════════
         // PENALTY FACTORS (can reduce score)
         // ═══════════════════════════════════════════════════════════════════
 
-        // Opposing HTF bias (-2)
+        // Opposing HTF trend (-4) — severely penalized (up from -2)
         if (context.htfBiasOpposes(expectBullish)) {
-            score -= 2;
-            factors.add("✗ PENALTY: Opposing HTF Bias (-2)");
+            score -= 4;
+            factors.add("✗ PENALTY: Opposing HTF Trend (-4)");
         }
 
         // Outside killzone and not session overlap and not SB window (-1)
@@ -208,7 +237,8 @@ public class RaidQualityScorer {
 
     /**
      * Context object containing market state for raid scoring.
-     * This decouples the scorer from direct dependencies on other components.
+     * Enhanced with multi-timeframe trend data, 5m zone confluence,
+     * and liquidity target alignment.
      */
     public static class RaidScoringContext {
         private final Instant timestamp;
@@ -221,12 +251,34 @@ public class RaidQualityScorer {
         private final boolean hasSmtDivergence;
         private final Boolean htfBiasBullish;  // null = neutral
 
+        // NEW: Multi-timeframe trend enhancement fields
+        private final boolean htfTrendStrong;           // Is the HTF trend strong (not weak/ranging)?
+        private final int zoneConfluenceScore;          // 5m zone confluence count (0-5)
+        private final boolean hasDisplacementEntry;     // 1m displacement with FVG+MSS
+        private final int targetAlignmentBonus;         // Liquidity target alignment (0-2)
+
         public RaidScoringContext(Instant timestamp,
                                   boolean inKillzone, String killzoneName, KillzonePhase killzonePhase,
                                   boolean inSilverBulletWindow, String silverBulletWindowName,
                                   boolean sessionOverlap,
                                   boolean hasSmtDivergence,
                                   Boolean htfBiasBullish) {
+            this(timestamp, inKillzone, killzoneName, killzonePhase,
+                 inSilverBulletWindow, silverBulletWindowName,
+                 sessionOverlap, hasSmtDivergence, htfBiasBullish,
+                 false, 0, false, 0);
+        }
+
+        public RaidScoringContext(Instant timestamp,
+                                  boolean inKillzone, String killzoneName, KillzonePhase killzonePhase,
+                                  boolean inSilverBulletWindow, String silverBulletWindowName,
+                                  boolean sessionOverlap,
+                                  boolean hasSmtDivergence,
+                                  Boolean htfBiasBullish,
+                                  boolean htfTrendStrong,
+                                  int zoneConfluenceScore,
+                                  boolean hasDisplacementEntry,
+                                  int targetAlignmentBonus) {
             this.timestamp = timestamp;
             this.inKillzone = inKillzone;
             this.killzoneName = killzoneName;
@@ -236,6 +288,10 @@ public class RaidQualityScorer {
             this.sessionOverlap = sessionOverlap;
             this.hasSmtDivergence = hasSmtDivergence;
             this.htfBiasBullish = htfBiasBullish;
+            this.htfTrendStrong = htfTrendStrong;
+            this.zoneConfluenceScore = zoneConfluenceScore;
+            this.hasDisplacementEntry = hasDisplacementEntry;
+            this.targetAlignmentBonus = targetAlignmentBonus;
         }
 
         public Instant getTimestamp() { return timestamp; }
@@ -246,6 +302,10 @@ public class RaidQualityScorer {
         public String getSilverBulletWindowName() { return silverBulletWindowName; }
         public boolean isSessionOverlap() { return sessionOverlap; }
         public boolean hasSmtDivergence() { return hasSmtDivergence; }
+        public boolean isHtfTrendStrong() { return htfTrendStrong; }
+        public int getZoneConfluenceScore() { return zoneConfluenceScore; }
+        public boolean hasDisplacementEntry() { return hasDisplacementEntry; }
+        public int getTargetAlignmentBonus() { return targetAlignmentBonus; }
 
         public boolean htfBiasAligns(boolean expectBullish) {
             if (htfBiasBullish == null) return false;  // Neutral doesn't align
@@ -270,6 +330,10 @@ public class RaidQualityScorer {
             private boolean sessionOverlap;
             private boolean hasSmtDivergence;
             private Boolean htfBiasBullish;
+            private boolean htfTrendStrong;
+            private int zoneConfluenceScore;
+            private boolean hasDisplacementEntry;
+            private int targetAlignmentBonus;
 
             public Builder timestamp(Instant timestamp) {
                 this.timestamp = timestamp;
@@ -304,11 +368,33 @@ public class RaidQualityScorer {
                 return this;
             }
 
+            public Builder htfTrendStrong(boolean strong) {
+                this.htfTrendStrong = strong;
+                return this;
+            }
+
+            public Builder zoneConfluence(int score) {
+                this.zoneConfluenceScore = score;
+                return this;
+            }
+
+            public Builder displacementEntry(boolean hasEntry) {
+                this.hasDisplacementEntry = hasEntry;
+                return this;
+            }
+
+            public Builder targetAlignment(int bonus) {
+                this.targetAlignmentBonus = bonus;
+                return this;
+            }
+
             public RaidScoringContext build() {
                 return new RaidScoringContext(
                         timestamp, inKillzone, killzoneName, killzonePhase,
                         inSilverBulletWindow, silverBulletWindowName,
-                        sessionOverlap, hasSmtDivergence, htfBiasBullish
+                        sessionOverlap, hasSmtDivergence, htfBiasBullish,
+                        htfTrendStrong, zoneConfluenceScore, hasDisplacementEntry,
+                        targetAlignmentBonus
                 );
             }
         }
