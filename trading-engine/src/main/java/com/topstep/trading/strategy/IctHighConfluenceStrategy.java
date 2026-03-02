@@ -174,6 +174,10 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private double newsSizeMultiplier = 1.0;
     private int macroConfluenceAdjustment = 0;
 
+    // Session boundary tracking for HTF candle finalization
+    private java.time.Instant lastCandleTimestamp = null;
+    private static final long SESSION_GAP_THRESHOLD_SECONDS = 120; // 2 minutes — any gap > this triggers session boundary
+
     public IctHighConfluenceStrategy(String primarySymbol, String smtSymbol, EventBus eventBus) {
         this.primarySymbol = primarySymbol;
         this.smtSymbol = smtSymbol;
@@ -536,9 +540,47 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     }
 
     /**
+     * Called when the trading session ends.
+     * Force-finalizes any in-progress HTF candles as partial candles so downstream
+     * analysis doesn't lose the data accumulated in incomplete HTF windows.
+     */
+    @Override
+    public void onSessionEnd() {
+        Map<Timeframe, Candle> partialCandles = barManager.forceCompleteAll();
+        if (!partialCandles.isEmpty()) {
+            System.out.println("[" + primarySymbol + "] SESSION END: Finalized " +
+                    partialCandles.size() + " partial HTF candles: " + partialCandles.keySet());
+            // Feed partial candles to MTF detectors for completeness
+            mtfAnalyzer.update(partialCandles);
+            htfTrendAnalyzer.update(partialCandles);
+            continuationDetector.update(partialCandles);
+        }
+        lastCandleTimestamp = null;
+    }
+
+    /**
      * Update all detectors with new candle data.
      */
     private void updateDetectors(Candle candle) {
+        // SESSION GAP DETECTION: If the time gap between consecutive candles
+        // exceeds the threshold (2 minutes), this indicates a session boundary
+        // or data gap. Force-complete any in-progress HTF candles as partial
+        // before starting the new session's aggregation.
+        if (lastCandleTimestamp != null) {
+            long gapSeconds = java.time.Duration.between(lastCandleTimestamp, candle.getTimestamp()).getSeconds();
+            if (gapSeconds > SESSION_GAP_THRESHOLD_SECONDS) {
+                Map<Timeframe, Candle> partialCandles = barManager.forceCompleteAll();
+                if (!partialCandles.isEmpty()) {
+                    System.out.println("[" + primarySymbol + "] SESSION GAP (" + gapSeconds +
+                            "s): Finalized " + partialCandles.size() + " partial HTF candles");
+                    mtfAnalyzer.update(partialCandles);
+                    htfTrendAnalyzer.update(partialCandles);
+                    continuationDetector.update(partialCandles);
+                }
+            }
+        }
+        lastCandleTimestamp = candle.getTimestamp();
+
         // Update 1-minute detectors
         structureDetector.update(candle);
         liquidityDetector.updatePrimary(candle);
@@ -551,7 +593,7 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         atrCalculator.update(candle);
         correlationTracker.update(candle);
 
-        // Update multi-timeframe analysis (NEW)
+        // Update multi-timeframe analysis
         // Process candle through bar aggregation to get completed higher-TF candles
         Map<Timeframe, Candle> completedCandles = barManager.processCandle(candle);
         // Update MTF detectors with any newly completed candles

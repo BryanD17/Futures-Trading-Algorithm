@@ -96,6 +96,10 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     private String currentTradeSymbol = null;
     private boolean usingMicroContract = false;
 
+    // Session boundary tracking for HTF candle finalization
+    private java.time.Instant lastCandleTimestamp = null;
+    private static final long SESSION_GAP_THRESHOLD_SECONDS = 120;
+
     public InstrumentSpecificStrategy(InstrumentProfile profile, EventBus eventBus,
                                        CorrelationTracker sharedCorrelationTracker) {
         this.profile = profile;
@@ -206,6 +210,20 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
     }
 
     private void updateDetectors(Candle candle) {
+        // SESSION GAP DETECTION: Force-complete in-progress HTF candles on session boundary
+        if (lastCandleTimestamp != null) {
+            long gapSeconds = java.time.Duration.between(lastCandleTimestamp, candle.getTimestamp()).getSeconds();
+            if (gapSeconds > SESSION_GAP_THRESHOLD_SECONDS) {
+                java.util.Map<BarAggregationManager.Timeframe, Candle> partialCandles = barManager.forceCompleteAll();
+                if (!partialCandles.isEmpty()) {
+                    System.out.println("[" + profile.getSymbol() + "] SESSION GAP (" + gapSeconds +
+                            "s): Finalized " + partialCandles.size() + " partial HTF candles");
+                    mtfAnalyzer.update(partialCandles);
+                }
+            }
+        }
+        lastCandleTimestamp = candle.getTimestamp();
+
         structureDetector.update(candle);
         liquidityDetector.updatePrimary(candle);
         fvgDetector.update(candle);
@@ -1239,6 +1257,17 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
             System.out.println("  Max micro contracts: " + profile.getMicroMaxContracts() +
                     " | Tier 3-4: " + profile.getMicroMaxContracts() +
                     " contracts | Tier 2: " + profile.getMicroContracts() + " contracts");
+        }
+    }
+
+    @Override
+    public void onSessionEnd() {
+        java.util.Map<BarAggregationManager.Timeframe, com.topstep.trading.domain.Candle> partialCandles =
+                barManager.forceCompleteAll();
+        if (!partialCandles.isEmpty()) {
+            System.out.println("[" + profile.getSymbol() + "] SESSION END: Finalized " +
+                    partialCandles.size() + " partial HTF candles: " + partialCandles.keySet());
+            mtfAnalyzer.update(partialCandles);
         }
     }
 

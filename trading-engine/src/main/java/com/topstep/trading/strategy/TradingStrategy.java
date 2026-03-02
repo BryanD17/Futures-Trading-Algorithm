@@ -30,6 +30,17 @@ public interface TradingStrategy {
     }
 
     /**
+     * Called when the trading session ends.
+     *
+     * This signals that no more candles will arrive for the current session.
+     * Strategies should finalize any in-progress higher-timeframe candles
+     * and mark them as partial so downstream analysis can handle them appropriately.
+     */
+    default void onSessionEnd() {
+        // Optional session-end handling
+    }
+
+    /**
      * Cleanup and shutdown the strategy (called when trading stops).
      */
     default void shutdown() {
