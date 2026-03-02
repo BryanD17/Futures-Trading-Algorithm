@@ -16,6 +16,20 @@ import java.util.List;
  *
  * Displacement confirms the direction of smart money and often precedes
  * high-probability entries.
+ *
+ * ENHANCED (Multi-Timeframe Trend Integration):
+ * Now also serves as the Layer 3 entry trigger in the 3-layer cascade:
+ *   - Tracks whether displacement created a potential FVG (3-candle gap)
+ *   - Detects Market Structure Shift (MSS) on 1m within the displacement
+ *   - Provides body-to-range ratio for configurable thresholds per instrument
+ *   - Supports configurable thresholds for instrument-specific tuning
+ *
+ * Layer 3 Entry Model:
+ *   1. Wait for displacement (large candle + 1m MSS in trend direction)
+ *   2. Look for FVG created by the displacement
+ *   3. Enter when price retraces into the 1m FVG
+ *   4. Stop below/above the 5m zone that was retested
+ *   5. Target is the next liquidity pool identified by HTF analysis
  */
 public class DisplacementDetector {
 
@@ -28,10 +42,28 @@ public class DisplacementDetector {
     private int candleCountAtLastDisplacement;
     private int totalCandleCount;
 
+    // Layer 3 entry model tracking
+    private boolean lastDisplacementCreatedFvg;
+    private double displacementFvgHigh;
+    private double displacementFvgLow;
+    private Double priorSwingHigh;  // Swing point before displacement for MSS check
+    private Double priorSwingLow;
+
     public DisplacementDetector(int lookbackPeriod) {
+        this(lookbackPeriod, 1.5, 0.65);
+    }
+
+    /**
+     * Constructor with configurable thresholds for instrument-specific tuning.
+     *
+     * @param lookbackPeriod Candle lookback window
+     * @param displacementMultiplier Min ATR multiplier for displacement (default 1.5)
+     * @param minBodyRatio Min body/range ratio (default 0.65, use 0.70 for stricter)
+     */
+    public DisplacementDetector(int lookbackPeriod, double displacementMultiplier, double minBodyRatio) {
         this.lookbackPeriod = lookbackPeriod;
-        this.displacementMultiplier = 1.5;  // 1.5x average range
-        this.minBodyRatio = 0.65;           // Body must be 65% of total range
+        this.displacementMultiplier = displacementMultiplier;
+        this.minBodyRatio = minBodyRatio;
         this.candles = new ArrayList<>();
     }
 
@@ -39,6 +71,9 @@ public class DisplacementDetector {
      * Update with a new candle.
      */
     public void update(Candle candle) {
+        // Track swing points before adding candle (for MSS detection)
+        trackSwingPoints();
+
         candles.add(candle);
         totalCandleCount++;
 
@@ -48,6 +83,27 @@ public class DisplacementDetector {
 
         if (candles.size() >= 3) {
             detectDisplacement(candle);
+        }
+    }
+
+    /**
+     * Track swing points for MSS detection within displacement.
+     */
+    private void trackSwingPoints() {
+        if (candles.size() < 3) return;
+
+        int size = candles.size();
+        Candle prev = candles.get(size - 3);
+        Candle mid = candles.get(size - 2);
+        Candle curr = candles.get(size - 1);
+
+        // Swing high
+        if (mid.getHigh() > prev.getHigh() && mid.getHigh() > curr.getHigh()) {
+            priorSwingHigh = mid.getHigh();
+        }
+        // Swing low
+        if (mid.getLow() < prev.getLow() && mid.getLow() < curr.getLow()) {
+            priorSwingLow = mid.getLow();
         }
     }
 
@@ -113,18 +169,73 @@ public class DisplacementDetector {
 
         // Confirm displacement
         if (totalMove >= minDisplacementMove) {
+            // Check for FVG creation (Layer 3 entry model)
+            boolean createdFvg = checkForFvgCreation(bullish);
+
+            // Check for MSS (1m swing point broken in trend direction)
+            boolean brokeMss = checkForMss(latestCandle, bullish);
+
             lastDisplacement = new Displacement(
                     bullish,
                     totalMove,
                     consecutiveCount,
-                    latestCandle.getTimestamp()
+                    latestCandle.getTimestamp(),
+                    bodyRatio,
+                    createdFvg,
+                    brokeMss
             );
             candleCountAtLastDisplacement = totalCandleCount;
+            lastDisplacementCreatedFvg = createdFvg;
 
             System.out.println("[DISPLACEMENT] " + (bullish ? "BULLISH" : "BEARISH") +
                     " displacement detected - Move: " + String.format("%.2f", totalMove) +
-                    " points over " + consecutiveCount + " candles (min required: " +
-                    String.format("%.2f", minDisplacementMove) + ")");
+                    " points over " + consecutiveCount + " candles" +
+                    " (bodyRatio=" + String.format("%.0f%%", bodyRatio * 100) +
+                    ", FVG=" + createdFvg + ", MSS=" + brokeMss + ")");
+        }
+    }
+
+    /**
+     * Check if the displacement created a Fair Value Gap.
+     * An FVG occurs when candle 1's wick and candle 3's wick don't overlap.
+     */
+    private boolean checkForFvgCreation(boolean bullish) {
+        if (candles.size() < 3) return false;
+
+        int size = candles.size();
+        Candle c1 = candles.get(size - 3);
+        Candle c2 = candles.get(size - 2);
+        Candle c3 = candles.get(size - 1);
+
+        if (bullish) {
+            // Bullish FVG: c1's high < c3's low (gap between c1 high and c3 low)
+            if (c1.getHigh() < c3.getLow()) {
+                displacementFvgHigh = c3.getLow();
+                displacementFvgLow = c1.getHigh();
+                return true;
+            }
+        } else {
+            // Bearish FVG: c1's low > c3's high (gap between c3 high and c1 low)
+            if (c1.getLow() > c3.getHigh()) {
+                displacementFvgHigh = c1.getLow();
+                displacementFvgLow = c3.getHigh();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if the displacement broke a 1m swing point (MSS confirmation).
+     */
+    private boolean checkForMss(Candle latestCandle, boolean bullish) {
+        if (bullish) {
+            // Bullish MSS: price broke above a prior swing high
+            return priorSwingHigh != null && latestCandle.getClose() > priorSwingHigh;
+        } else {
+            // Bearish MSS: price broke below a prior swing low
+            return priorSwingLow != null && latestCandle.getClose() < priorSwingLow;
         }
     }
 
@@ -150,6 +261,28 @@ public class DisplacementDetector {
     }
 
     /**
+     * Check if the last displacement is a full Layer 3 entry trigger.
+     * Full trigger = displacement + FVG creation + MSS break in trend direction.
+     *
+     * @param withinCandles Lookback window
+     * @param bullish Expected direction
+     * @return true if all three conditions met
+     */
+    public boolean hasLayer3EntryTrigger(int withinCandles, boolean bullish) {
+        if (!hasRecentDisplacement(withinCandles, bullish)) return false;
+        return lastDisplacement.createdFvg() && lastDisplacement.brokeMss();
+    }
+
+    /**
+     * Get the FVG zone created by the last displacement (for entry retracement).
+     * Returns null if no FVG was created.
+     */
+    public double[] getDisplacementFvgZone() {
+        if (!lastDisplacementCreatedFvg) return null;
+        return new double[]{displacementFvgLow, displacementFvgHigh};
+    }
+
+    /**
      * Get the last detected displacement.
      */
     public Displacement getLastDisplacement() {
@@ -164,44 +297,60 @@ public class DisplacementDetector {
         lastDisplacement = null;
         candleCountAtLastDisplacement = 0;
         totalCandleCount = 0;
+        lastDisplacementCreatedFvg = false;
+        priorSwingHigh = null;
+        priorSwingLow = null;
     }
 
     /**
      * Inner class representing a displacement event.
+     * Enhanced with Layer 3 entry model data.
      */
     public static class Displacement {
         private final boolean bullish;
         private final double moveSize;
         private final int candleCount;
         private final Instant timestamp;
+        private final double bodyRatio;
+        private final boolean createdFvg;
+        private final boolean brokeMss;
 
         public Displacement(boolean bullish, double moveSize, int candleCount, Instant timestamp) {
+            this(bullish, moveSize, candleCount, timestamp, 0.0, false, false);
+        }
+
+        public Displacement(boolean bullish, double moveSize, int candleCount, Instant timestamp,
+                            double bodyRatio, boolean createdFvg, boolean brokeMss) {
             this.bullish = bullish;
             this.moveSize = moveSize;
             this.candleCount = candleCount;
             this.timestamp = timestamp;
+            this.bodyRatio = bodyRatio;
+            this.createdFvg = createdFvg;
+            this.brokeMss = brokeMss;
         }
 
-        public boolean isBullish() {
-            return bullish;
-        }
+        public boolean isBullish() { return bullish; }
+        public double getMoveSize() { return moveSize; }
+        public int getCandleCount() { return candleCount; }
+        public Instant getTimestamp() { return timestamp; }
+        public double getBodyRatio() { return bodyRatio; }
+        public boolean createdFvg() { return createdFvg; }
+        public boolean brokeMss() { return brokeMss; }
 
-        public double getMoveSize() {
-            return moveSize;
-        }
-
-        public int getCandleCount() {
-            return candleCount;
-        }
-
-        public Instant getTimestamp() {
-            return timestamp;
+        /**
+         * Check if this displacement qualifies as a full Layer 3 trigger.
+         * Full trigger: displacement + FVG + MSS.
+         */
+        public boolean isFullEntryTrigger() {
+            return createdFvg && brokeMss;
         }
 
         @Override
         public String toString() {
-            return String.format("Displacement[%s, %.2f pts over %d candles]",
-                    bullish ? "BULLISH" : "BEARISH", moveSize, candleCount);
+            return String.format("Displacement[%s, %.2f pts over %d candles, body=%.0f%%, fvg=%s, mss=%s]",
+                    bullish ? "BULLISH" : "BEARISH", moveSize, candleCount,
+                    bodyRatio * 100, createdFvg, brokeMss);
         }
     }
 }

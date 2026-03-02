@@ -6,6 +6,8 @@ import com.topstep.trading.chartstate.RaidDirection;
 import com.topstep.trading.chartstate.RaidQualityScorer;
 import com.topstep.trading.strategy.DisplacementDetector;
 import com.topstep.trading.strategy.HtfConfirmationResult;
+import com.topstep.trading.strategy.HtfTrendAnalyzer;
+import com.topstep.trading.strategy.HtfTrendAnalyzer.HtfTrendState;
 import com.topstep.trading.strategy.MarketBias;
 import com.topstep.trading.strategy.MultiTimeframeAnalyzer;
 
@@ -17,14 +19,15 @@ import java.util.Optional;
  * Mandatory Confluence Validator - Enforces ALL required confluences for trade entry.
  *
  * Based on real trade analysis comparing winning vs losing setups, this validator
- * enforces 6 MANDATORY requirements:
+ * enforces 7 MANDATORY requirements:
  *
- * 1. BIAS/SWEEP ALIGNMENT: Bias and sweep must be opposite directions
- * 2. CONFIRMED DISPLACEMENT: Displacement must be confirmed (not partial)
- * 3. RAID QUALITY ≥ 5: Must have valid liquidity raid with score ≥ 5/10
- * 4. HTF CONFIRMATION: Must have higher timeframe confirmation
- * 5. MARKET CONDITION ≥ 0: Market condition score must be non-negative
- * 6. NOT PROMOTED: Trade must have natural confluence, not artificially promoted
+ * 1. HTF TREND DIRECTION: HTF trend must allow this trade direction (Layer 1 of cascade)
+ * 2. BIAS/SWEEP ALIGNMENT: Bias and sweep must be opposite directions
+ * 3. CONFIRMED DISPLACEMENT: Displacement must be confirmed (not partial)
+ * 4. RAID QUALITY ≥ 5: Must have valid liquidity raid with score ≥ 5/10
+ * 5. HTF CONFIRMATION: Must have higher timeframe confirmation
+ * 6. MARKET CONDITION ≥ 0: Market condition score must be non-negative
+ * 7. NOT PROMOTED: Trade must have natural confluence, not artificially promoted
  *
  * ALL checks must pass. If ANY check fails, the trade is REJECTED.
  *
@@ -51,13 +54,22 @@ public class MandatoryConfluenceValidator {
     private final MultiTimeframeAnalyzer mtfAnalyzer;
     private final DisplacementDetector displacementDetector;
     private final ChartStateQueryAPI chartState;
+    private final HtfTrendAnalyzer htfTrendAnalyzer;  // Layer 1 cascade gate
 
     public MandatoryConfluenceValidator(MultiTimeframeAnalyzer mtfAnalyzer,
                                         DisplacementDetector displacementDetector,
                                         ChartStateQueryAPI chartState) {
+        this(mtfAnalyzer, displacementDetector, chartState, null);
+    }
+
+    public MandatoryConfluenceValidator(MultiTimeframeAnalyzer mtfAnalyzer,
+                                        DisplacementDetector displacementDetector,
+                                        ChartStateQueryAPI chartState,
+                                        HtfTrendAnalyzer htfTrendAnalyzer) {
         this.mtfAnalyzer = mtfAnalyzer;
         this.displacementDetector = displacementDetector;
         this.chartState = chartState;
+        this.htfTrendAnalyzer = htfTrendAnalyzer;
     }
 
     /**
@@ -83,6 +95,23 @@ public class MandatoryConfluenceValidator {
 
         List<String> failures = new ArrayList<>();
         List<String> confirmations = new ArrayList<>();
+
+        // ═══════════════════════════════════════════════════════════════
+        // CHECK 0: HTF Trend Direction (MANDATORY — Layer 1 of cascade)
+        // This is THE most important check. If HTF doesn't allow this
+        // direction, nothing else matters.
+        // ═══════════════════════════════════════════════════════════════
+        if (htfTrendAnalyzer != null) {
+            HtfTrendState trendState = htfTrendAnalyzer.getTrendState();
+            if (!htfTrendAnalyzer.allowsDirection(isBullish)) {
+                failures.add(String.format("✗ HTF Trend blocks %s. State=%s. Trading WITH the trend is mandatory.",
+                        isBullish ? "LONGS" : "SHORTS", trendState.getDisplayName()));
+            } else {
+                confirmations.add(String.format("★ HTF Trend: %s (allows %s, size=%.0f%%)",
+                        trendState.getDisplayName(), isBullish ? "longs" : "shorts",
+                        trendState.getSizeMultiplier() * 100));
+            }
+        }
 
         // ═══════════════════════════════════════════════════════════════
         // CHECK 1: Bias/Sweep Alignment (MANDATORY)
