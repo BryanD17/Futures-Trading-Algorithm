@@ -57,27 +57,6 @@ public class TopstepConnector implements TradingConnector {
         TICK_SIZES.put("SI", 0.005);
         TICK_SIZES.put("MGC", 0.10);   // Micro Gold (same tick size as GC)
         TICK_SIZES.put("SIL", 0.001);  // Micro Silver
-
-        // Energy - Crude Oil tick size 0.01, Natural Gas tick size 0.001
-        TICK_SIZES.put("CL", 0.01);
-        TICK_SIZES.put("NG", 0.001);
-        TICK_SIZES.put("HO", 0.0001);
-        TICK_SIZES.put("MCL", 0.01);   // Micro Crude Oil (same tick size as CL)
-        TICK_SIZES.put("MNG", 0.001);  // Micro Natural Gas
-
-        // Currency futures - Euro FX tick size 0.00005
-        TICK_SIZES.put("6E", 0.00005);
-        TICK_SIZES.put("6J", 0.0000005);
-        TICK_SIZES.put("6B", 0.0001);
-        TICK_SIZES.put("6C", 0.00005);
-        TICK_SIZES.put("6A", 0.0001);
-
-        // Micro currency futures (different tick sizes from full-size)
-        TICK_SIZES.put("M6E", 0.0001);     // Micro Euro (larger tick than 6E)
-        TICK_SIZES.put("M6B", 0.0001);     // Micro British Pound
-        TICK_SIZES.put("M6A", 0.0001);     // Micro Australian Dollar
-        TICK_SIZES.put("M6C", 0.00005);    // Micro Canadian Dollar
-        TICK_SIZES.put("MJY", 0.000001);   // E-micro Japanese Yen (larger tick than 6J)
     }
 
     // Configuration
@@ -438,14 +417,14 @@ public class TopstepConnector implements TradingConnector {
      */
     private String findCachedContractForSymbol(String symbol) {
         // Direct match by symbol name pattern
-        // Contracts have names like "ESH6", "NQH6", "6EH6", "CLG6", etc.
+        // Contracts have names like "ESH6", "NQH6", "GCG6", etc.
         String upperSymbol = symbol.toUpperCase();
 
         for (Map.Entry<String, String> entry : discoveredContracts.entrySet()) {
             String contractName = entry.getKey().toUpperCase();
             String contractId = entry.getValue();
 
-            // Match by symbol prefix (e.g., "ES" matches "ESH6", "6E" matches "6EH6")
+            // Match by symbol prefix (e.g., "ES" matches "ESH6", "GC" matches "GCG6")
             if (contractName.startsWith(upperSymbol)) {
                 return contractId;
             }
@@ -550,7 +529,7 @@ public class TopstepConnector implements TradingConnector {
 
         // Different products have different expiration patterns:
         // - Index futures (ES, NQ): Quarterly (H, M, U, Z)
-        // - Energy (CL, NG): Monthly
+        // - Energy (NG): Monthly
         // - Metals (GC, SI): Specific months (Feb, Apr, Jun, Aug, Oct, Dec for GC)
         // - Currencies: Quarterly (H, M, U, Z)
 
@@ -603,11 +582,6 @@ public class TopstepConnector implements TradingConnector {
                 break;
 
             // ENERGY - Monthly expiration (use next month's contract)
-            case "CL":
-                root = "CLE";  // ProjectX uses CLE, not CL
-                monthCode = getNextMonthCode(month);
-                if (month == 12) year++;
-                break;
             case "NG":
                 root = "NGE";  // ProjectX uses NGE, not NG
                 monthCode = getNextMonthCode(month);
@@ -615,11 +589,6 @@ public class TopstepConnector implements TradingConnector {
                 break;
             case "HO":  // Heating Oil
                 root = "HOE";
-                monthCode = getNextMonthCode(month);
-                if (month == 12) year++;
-                break;
-            case "MCL":  // Micro Crude Oil
-                root = "MCL";
                 monthCode = getNextMonthCode(month);
                 if (month == 12) year++;
                 break;
@@ -646,60 +615,6 @@ public class TopstepConnector implements TradingConnector {
                 break;
             case "SIL":  // Micro Silver (1000 oz)
                 root = "SIL";
-                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
-                if (month == 12 && now.getDayOfMonth() > 15) year++;
-                break;
-
-            // CURRENCY FUTURES - Quarterly (using CORRECT ProjectX roots!)
-            case "6E":
-                root = "EU6";  // ProjectX uses EU6, not E6
-                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
-                if (month == 12 && now.getDayOfMonth() > 15) year++;
-                break;
-            case "6J":
-                root = "JY6";  // ProjectX uses JY6, not J6
-                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
-                if (month == 12 && now.getDayOfMonth() > 15) year++;
-                break;
-            case "6B":
-                root = "BP6";  // ProjectX uses BP6, not B6
-                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
-                if (month == 12 && now.getDayOfMonth() > 15) year++;
-                break;
-            case "6C":
-                root = "CA6";  // ProjectX uses CA6, not C6
-                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
-                if (month == 12 && now.getDayOfMonth() > 15) year++;
-                break;
-            case "6A":
-                root = "DA6";  // ProjectX uses DA6, not A6
-                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
-                if (month == 12 && now.getDayOfMonth() > 15) year++;
-                break;
-
-            // MICRO CURRENCY FUTURES - Quarterly
-            case "M6E":  // Micro Euro
-                root = "M6E";
-                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
-                if (month == 12 && now.getDayOfMonth() > 15) year++;
-                break;
-            case "M6B":  // Micro British Pound
-                root = "M6B";
-                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
-                if (month == 12 && now.getDayOfMonth() > 15) year++;
-                break;
-            case "M6A":  // Micro Australian Dollar
-                root = "M6A";
-                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
-                if (month == 12 && now.getDayOfMonth() > 15) year++;
-                break;
-            case "M6C":  // Micro Canadian Dollar
-                root = "M6C";
-                monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
-                if (month == 12 && now.getDayOfMonth() > 15) year++;
-                break;
-            case "MJY":  // E-micro Japanese Yen
-                root = "MJY";
                 monthCode = getQuarterlyMonthCode(month, now.getDayOfMonth());
                 if (month == 12 && now.getDayOfMonth() > 15) year++;
                 break;
@@ -944,7 +859,7 @@ public class TopstepConnector implements TradingConnector {
      * Round a price to the nearest valid tick size for the given symbol.
      * CRITICAL: Prices not aligned to tick size will be REJECTED by the exchange.
      *
-     * @param symbol The trading symbol (e.g., "GC", "6E", "ES")
+     * @param symbol The trading symbol (e.g., "GC", "ES", "NQ")
      * @param price The raw price to round
      * @return The price rounded to the nearest tick
      */

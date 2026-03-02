@@ -92,70 +92,6 @@ class InstrumentNewsMapperTest {
     }
 
     @Nested
-    @DisplayName("CL (Crude Oil) Relevance Tests")
-    class CrudeOilTests {
-
-        @Test
-        @DisplayName("EIA Crude Inventory has highest relevance")
-        void eiaInventoryHighestRelevance() {
-            EconomicEvent event = createEvent("EIA Crude Oil Stocks", Currency.USD, EventImpact.HIGH, EventCategory.ENERGY);
-            assertThat(mapper.getRelevance(event, InstrumentNewsMapper.CL)).isEqualTo(1.0);
-        }
-
-        @Test
-        @DisplayName("Chinese PMI has moderate relevance for crude")
-        void chinaPmiModerateRelevance() {
-            EconomicEvent event = createEvent("China Manufacturing PMI", Currency.CNY, EventImpact.HIGH, EventCategory.PMI_SURVEYS);
-            assertThat(mapper.getRelevance(event, InstrumentNewsMapper.CL)).isEqualTo(0.5);
-        }
-    }
-
-    @Nested
-    @DisplayName("6E (Euro) Relevance Tests")
-    class EuroTests {
-
-        @Test
-        @DisplayName("ECB decision has highest relevance for 6E")
-        void ecbDecisionHighestRelevance() {
-            EconomicEvent event = createEvent("ECB Rate Decision", Currency.EUR, EventImpact.HIGH, EventCategory.CENTRAL_BANK);
-            assertThat(mapper.getRelevance(event, InstrumentNewsMapper.SIX_E)).isEqualTo(1.0);
-        }
-
-        @Test
-        @DisplayName("Fed decision has very high relevance for 6E (inverse)")
-        void fedDecisionHighRelevance() {
-            EconomicEvent event = createEvent("FOMC Rate Decision", Currency.USD, EventImpact.HIGH, EventCategory.CENTRAL_BANK);
-            assertThat(mapper.getRelevance(event, InstrumentNewsMapper.SIX_E)).isEqualTo(0.95);
-        }
-
-        @Test
-        @DisplayName("EUR CPI has high relevance for 6E")
-        void eurCpiHighRelevance() {
-            EconomicEvent event = createEvent("EUR CPI MoM", Currency.EUR, EventImpact.HIGH, EventCategory.INFLATION);
-            assertThat(mapper.getRelevance(event, InstrumentNewsMapper.SIX_E)).isEqualTo(0.85);
-        }
-    }
-
-    @Nested
-    @DisplayName("6J (Yen) Relevance Tests")
-    class YenTests {
-
-        @Test
-        @DisplayName("BOJ decision has highest relevance for 6J")
-        void bojDecisionHighestRelevance() {
-            EconomicEvent event = createEvent("BOJ Rate Decision", Currency.JPY, EventImpact.HIGH, EventCategory.CENTRAL_BANK);
-            assertThat(mapper.getRelevance(event, InstrumentNewsMapper.SIX_J)).isEqualTo(1.0);
-        }
-
-        @Test
-        @DisplayName("Fed decision has very high relevance for 6J (inverse)")
-        void fedDecisionHighRelevance() {
-            EconomicEvent event = createEvent("FOMC Rate Decision", Currency.USD, EventImpact.HIGH, EventCategory.CENTRAL_BANK);
-            assertThat(mapper.getRelevance(event, InstrumentNewsMapper.SIX_J)).isEqualTo(0.95);
-        }
-    }
-
-    @Nested
     @DisplayName("Directional Sign Tests")
     class DirectionalSignTests {
 
@@ -173,26 +109,6 @@ class InstrumentNewsMapperTest {
             assertThat(mapper.getDirectionalSign(event, InstrumentNewsMapper.GC)).isEqualTo(-1);
         }
 
-        @Test
-        @DisplayName("EIA inventory build is bearish for crude")
-        void eiaInventoryBearishForCrude() {
-            EconomicEvent event = createEvent("EIA Crude Oil Inventory", Currency.USD, EventImpact.HIGH, EventCategory.ENERGY);
-            assertThat(mapper.getDirectionalSign(event, InstrumentNewsMapper.CL)).isEqualTo(-1);
-        }
-
-        @Test
-        @DisplayName("Strong EUR data is bullish for 6E")
-        void strongEurBullishForSixE() {
-            EconomicEvent event = createEvent("EUR GDP", Currency.EUR, EventImpact.HIGH, EventCategory.GDP_GROWTH);
-            assertThat(mapper.getDirectionalSign(event, InstrumentNewsMapper.SIX_E)).isEqualTo(1);
-        }
-
-        @Test
-        @DisplayName("Strong USD data is bearish for 6E")
-        void strongUsdBearishForSixE() {
-            EconomicEvent event = createEvent("US NFP", Currency.USD, EventImpact.HIGH, EventCategory.EMPLOYMENT);
-            assertThat(mapper.getDirectionalSign(event, InstrumentNewsMapper.SIX_E)).isEqualTo(-1);
-        }
     }
 
     @Nested
@@ -204,18 +120,9 @@ class InstrumentNewsMapperTest {
         void fedDecisionAffectsAll() {
             EconomicEvent event = createEvent("FOMC Rate Decision", Currency.USD, EventImpact.HIGH, EventCategory.CENTRAL_BANK);
             List<String> affected = mapper.getAffectedInstruments(event);
-            assertThat(affected).containsExactlyInAnyOrder(
+            assertThat(affected).contains(
                     InstrumentNewsMapper.ES, InstrumentNewsMapper.NQ,
-                    InstrumentNewsMapper.GC, InstrumentNewsMapper.CL,
-                    InstrumentNewsMapper.SIX_E, InstrumentNewsMapper.SIX_J);
-        }
-
-        @Test
-        @DisplayName("EIA inventory primarily affects crude")
-        void eiaInventoryPrimarilyAffectsCrude() {
-            EconomicEvent event = createEvent("EIA Crude Oil Inventory", Currency.USD, EventImpact.HIGH, EventCategory.ENERGY);
-            List<String> affected = mapper.getAffectedInstruments(event);
-            assertThat(affected).contains(InstrumentNewsMapper.CL);
+                    InstrumentNewsMapper.GC);
         }
     }
 

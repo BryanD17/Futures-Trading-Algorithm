@@ -157,26 +157,6 @@ class SurpriseCalculatorTest {
             assertThat(release.getSurpriseDirection()).isEqualTo(SurpriseDirection.BETTER_THAN_EXPECTED);
         }
 
-        @Test
-        @DisplayName("Lower EIA inventory is BETTER (for crude)")
-        void lowerInventoryIsBetter() {
-            EconomicEvent event = EconomicEvent.builder()
-                    .id("test-event")
-                    .name("EIA Crude Oil Inventory")
-                    .currency(Currency.USD)
-                    .impact(EventImpact.HIGH)
-                    .category(EventCategory.ENERGY)
-                    .scheduledTime(Instant.now())
-                    .forecast(2.0) // Expected 2M build
-                    .build();
-
-            EconomicRelease release = createRelease(event, -1.0); // 1M draw
-
-            calculator.calculateSurprise(release);
-
-            // Draw (negative) is better than expected build
-            assertThat(release.getSurpriseDirection()).isEqualTo(SurpriseDirection.BETTER_THAN_EXPECTED);
-        }
     }
 
     @Nested
@@ -235,7 +215,6 @@ class SurpriseCalculatorTest {
         void isLowerBetterTest() {
             assertThat(calculator.isLowerBetter("US Unemployment Rate")).isTrue();
             assertThat(calculator.isLowerBetter("Initial Jobless Claims")).isTrue();
-            assertThat(calculator.isLowerBetter("EIA Crude Inventory Change")).isTrue();
             assertThat(calculator.isLowerBetter("US CPI MoM")).isFalse();
             assertThat(calculator.isLowerBetter("Nonfarm Payrolls")).isFalse();
         }

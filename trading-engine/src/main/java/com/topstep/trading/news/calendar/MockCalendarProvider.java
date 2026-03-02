@@ -349,8 +349,7 @@ public class MockCalendarProvider implements EconomicCalendarProvider {
         } catch (Exception e) {
             // Try to infer from string
             String upper = value.toUpperCase();
-            if (upper.contains("FED") || upper.contains("ECB") || upper.contains("BOJ") ||
-                upper.contains("FOMC") || upper.contains("RATE")) {
+            if (upper.contains("FED") || upper.contains("FOMC") || upper.contains("RATE")) {
                 return EventCategory.CENTRAL_BANK;
             }
             if (upper.contains("CPI") || upper.contains("PPI") || upper.contains("INFLATION") ||
@@ -375,10 +374,6 @@ public class MockCalendarProvider implements EconomicCalendarProvider {
             }
             if (upper.contains("TRADE") || upper.contains("BALANCE")) {
                 return EventCategory.TRADE;
-            }
-            if (upper.contains("EIA") || upper.contains("OIL") || upper.contains("CRUDE") ||
-                upper.contains("INVENTORY")) {
-                return EventCategory.ENERGY;
             }
             return EventCategory.OTHER;
         }

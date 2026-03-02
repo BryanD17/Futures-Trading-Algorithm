@@ -58,9 +58,6 @@ public class MarketConditionFilter {
             LocalTime.of(13, 0)    // FOMC announcements often at 14:00 ET
     );
 
-    // Oil inventory release (Wednesdays at 10:30 ET = 9:30 CT)
-    private static final LocalTime OIL_INVENTORY_TIME = LocalTime.of(9, 30);
-
     private final KillzoneClock killzoneClock;
     private final SilverBulletClock silverBulletClock;
 
@@ -279,14 +276,6 @@ public class MarketConditionFilter {
             }
         }
 
-        // Oil inventory (Wednesdays)
-        if (day == DayOfWeek.WEDNESDAY && "CL".equals(symbol)) {
-            if (isNearTime(time, OIL_INVENTORY_TIME, 15)) {
-                return new ConditionFactor("News", -3,
-                        "Oil inventory release window - SKIP CL");
-            }
-        }
-
         // First Friday of month = NFP (major news for all markets)
         if (day == DayOfWeek.FRIDAY && zdt.getDayOfMonth() <= 7) {
             LocalTime nfpTime = LocalTime.of(7, 30);  // 8:30 ET = 7:30 CT
@@ -355,9 +344,9 @@ public class MarketConditionFilter {
      * Non-optimal symbols get -10 penalty (automatic SKIP).
      *
      * Optimal symbols per window:
-     * - London SB (3-4 AM ET): 6E, 6B, 6J, GC, SI (Forex & Metals)
-     * - NY AM SB (10-11 AM ET): ES, NQ, CL, GC, NG (Indices & Energy)
-     * - NY PM SB (2-3 PM ET): ES, NQ, RTY, YM (Indices only)
+     * - London SB (3-4 AM ET): GC, MGC, SI (Metals)
+     * - NY AM SB (10-11 AM ET): ES, MES, NQ, MNQ, GC, MGC (Indices & Gold)
+     * - NY PM SB (2-3 PM ET): ES, MES, NQ, MNQ (Indices only)
      */
     private ConditionFactor evaluateOptimalSymbol(Instant timestamp, String symbol,
                                                    boolean inSilverBulletWindow,

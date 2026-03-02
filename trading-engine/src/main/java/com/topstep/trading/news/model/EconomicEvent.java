@@ -20,7 +20,7 @@ public final class EconomicEvent {
     private final Double previous;                // Previous release value (nullable)
     private final String unit;                    // "%" or "K" or "B" etc.
     private final EventCategory category;         // INFLATION, EMPLOYMENT, CENTRAL_BANK, etc.
-    private final List<String> affectedInstruments;  // ["ES", "NQ", "GC", "6E"]
+    private final List<String> affectedInstruments;  // ["ES", "NQ", "GC"]
 
     private EconomicEvent(Builder builder) {
         this.id = Objects.requireNonNull(builder.id, "id cannot be null");

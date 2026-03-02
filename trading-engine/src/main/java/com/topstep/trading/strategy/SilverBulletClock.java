@@ -11,11 +11,11 @@ import java.time.*;
  *
  * Time Windows (All in Eastern Time / New York):
  * 1. London Open Silver Bullet: 3:00 AM - 4:00 AM EST
- *    - Best for Gold (GC), Euro (6E), British Pound (6B)
+ *    - Best for Gold (GC), Silver (SI)
  *    - Targets London session liquidity
  *
  * 2. New York AM Silver Bullet: 10:00 AM - 11:00 AM EST
- *    - Best for Indices (ES, NQ), Crude (CL), Gold (GC)
+ *    - Best for Indices (ES, NQ), Gold (GC)
  *    - Targets NY open liquidity pools
  *
  * 3. New York PM Silver Bullet: 2:00 PM - 3:00 PM EST
@@ -59,8 +59,8 @@ public class SilverBulletClock {
      * Represents best instruments for each SB window.
      */
     public enum SilverBulletSymbolGroup {
-        FOREX_METALS(new String[]{"6E", "6B", "6J", "GC", "SI"}),      // London Open
-        INDICES_ENERGY(new String[]{"ES", "NQ", "CL", "GC", "NG"}),    // NY AM
+        METALS(new String[]{"GC", "SI"}),                                // London Open
+        INDICES_METALS(new String[]{"ES", "NQ", "GC"}),                 // NY AM
         INDICES(new String[]{"ES", "NQ", "RTY", "YM"});                 // NY PM
 
         private final String[] symbols;
@@ -138,9 +138,9 @@ public class SilverBulletClock {
 
         switch (window) {
             case LONDON_OPEN:
-                return SilverBulletSymbolGroup.FOREX_METALS.includes(symbol);
+                return SilverBulletSymbolGroup.METALS.includes(symbol);
             case NY_AM:
-                return SilverBulletSymbolGroup.INDICES_ENERGY.includes(symbol);
+                return SilverBulletSymbolGroup.INDICES_METALS.includes(symbol);
             case NY_PM:
                 return SilverBulletSymbolGroup.INDICES.includes(symbol);
             default:

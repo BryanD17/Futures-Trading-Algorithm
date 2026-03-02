@@ -80,32 +80,6 @@ class NewsBiasModifierTest {
             assertThat(bias).isLessThan(0);
         }
 
-        @Test
-        @DisplayName("Returns positive bias after strong EUR data for 6E")
-        void positiveBiasForEurData() {
-            EconomicEvent event = EconomicEvent.builder()
-                    .id("eur-gdp-test")
-                    .name("EUR GDP QoQ")
-                    .currency(Currency.EUR)
-                    .impact(EventImpact.HIGH)
-                    .category(EventCategory.GDP_GROWTH)
-                    .scheduledTime(Instant.now())
-                    .forecast(0.2)
-                    .build();
-
-            EconomicRelease release = EconomicRelease.builder()
-                    .event(event)
-                    .actual(0.8) // Strong GDP
-                    .releaseTime(Instant.now())
-                    .build();
-
-            impactModel.processRelease(release);
-
-            double bias = biasModifier.getBiasModifier(InstrumentNewsMapper.SIX_E);
-
-            // Strong EUR data is bullish for 6E
-            assertThat(bias).isGreaterThan(0);
-        }
     }
 
     @Nested
@@ -147,35 +121,6 @@ class NewsBiasModifierTest {
             // With negative news (hot inflation = bearish gold), bearish tech should align
             // This tests the general mechanism
             assertThat(alignment).isIn(MacroAlignment.ALIGNED, MacroAlignment.NEUTRAL);
-        }
-
-        @Test
-        @DisplayName("Returns OPPOSING when news contradicts technical bias")
-        void opposingWhenNewsContradicts() {
-            // Create a strong positive USD surprise
-            EconomicEvent event = EconomicEvent.builder()
-                    .id("nfp-test")
-                    .name("US NFP")
-                    .currency(Currency.USD)
-                    .impact(EventImpact.HIGH)
-                    .category(EventCategory.EMPLOYMENT)
-                    .scheduledTime(Instant.now())
-                    .forecast(200.0)
-                    .build();
-
-            EconomicRelease release = EconomicRelease.builder()
-                    .event(event)
-                    .actual(350.0) // Strong NFP = USD bullish = EUR bearish
-                    .releaseTime(Instant.now())
-                    .build();
-
-            impactModel.processRelease(release);
-
-            // Strong USD is bearish for 6E
-            MacroAlignment alignment = biasModifier.checkAlignment(InstrumentNewsMapper.SIX_E, true);
-
-            // Bullish tech bias contradicted by bearish news = OPPOSING
-            assertThat(alignment).isIn(MacroAlignment.OPPOSING, MacroAlignment.NEUTRAL);
         }
 
         @Test

@@ -234,10 +234,8 @@ public class VariantSelector {
      * Accounts for different volatility characteristics.
      *
      * Based on typical ATR behavior and stop hunt frequency:
-     * - GC (Gold): Very volatile, frequent stop hunts → 1.25x
-     * - CL (Crude): Extremely volatile → 1.50x
-     * - NQ/ES: Standard index behavior → 1.00x
-     * - FX pairs: Lower volatility → 0.75-0.85x
+     * - GC/MGC (Gold): Very volatile, frequent stop hunts → 1.25x
+     * - NQ/MNQ/ES/MES: Standard index behavior → 1.00x
      */
     public static double getInstrumentTrailMultiplier(String instrument) {
         if (instrument == null) return 1.0;
@@ -247,21 +245,8 @@ public class VariantSelector {
         // Gold futures
         if (symbol.contains("GC")) return 1.25;
 
-        // Crude oil futures
-        if (symbol.contains("CL")) return 1.50;
-
         // Index futures (standard)
         if (symbol.contains("NQ") || symbol.contains("ES")) return 1.00;
-
-        // Russell (slightly more volatile)
-        if (symbol.contains("RTY")) return 1.10;
-
-        // FX futures (less volatile)
-        if (symbol.contains("6E")) return 0.75;  // Euro
-        if (symbol.contains("6J")) return 0.80;  // Yen
-        if (symbol.contains("6B")) return 0.85;  // Pound
-        if (symbol.contains("6A")) return 0.80;  // Aussie
-        if (symbol.contains("6C")) return 0.80;  // Canadian
 
         // Default for unknown instruments
         return 1.00;
@@ -287,16 +272,6 @@ public class VariantSelector {
         // Metals have higher tick values, smaller buffer needed
         if (symbol.contains("GC") || symbol.contains("SI")) {
             return baseBuffer * 0.75;
-        }
-
-        // Crude has high slippage, larger buffer needed
-        if (symbol.contains("CL")) {
-            return baseBuffer * 1.5;
-        }
-
-        // FX has lower commissions, smaller buffer OK
-        if (symbol.startsWith("6")) {
-            return baseBuffer * 0.8;
         }
 
         return baseBuffer;

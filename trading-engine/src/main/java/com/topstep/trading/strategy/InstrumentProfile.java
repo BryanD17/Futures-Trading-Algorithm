@@ -41,8 +41,6 @@ public class InstrumentProfile {
     private final double smtCorrelation;      // Expected correlation (0 to 1)
     private final String inverseCorrSymbol;   // Inverse correlation (e.g., DXY for Gold)
     private final double inverseCorrelation;  // Expected inverse correlation (-1 to 0)
-    private final String correlatedCurrency;  // Related currency (e.g., 6C for CL)
-    private final double currencyCorrelation;
 
     // OTE Zone settings (Optimal Trade Entry)
     private final double oteLow;              // Lower bound of OTE (e.g., 0.62)
@@ -100,8 +98,6 @@ public class InstrumentProfile {
         this.smtCorrelation = builder.smtCorrelation;
         this.inverseCorrSymbol = builder.inverseCorrSymbol;
         this.inverseCorrelation = builder.inverseCorrelation;
-        this.correlatedCurrency = builder.correlatedCurrency;
-        this.currencyCorrelation = builder.currencyCorrelation;
         this.oteLow = builder.oteLow;
         this.oteHigh = builder.oteHigh;
         this.typicalDailyAtr = builder.typicalDailyAtr;
@@ -144,8 +140,6 @@ public class InstrumentProfile {
     public double getSmtCorrelation() { return smtCorrelation; }
     public String getInverseCorrSymbol() { return inverseCorrSymbol; }
     public double getInverseCorrelation() { return inverseCorrelation; }
-    public String getCorrelatedCurrency() { return correlatedCurrency; }
-    public double getCurrencyCorrelation() { return currencyCorrelation; }
     public double getOteLow() { return oteLow; }
     public double getOteHigh() { return oteHigh; }
     public double getTypicalDailyAtr() { return typicalDailyAtr; }
@@ -360,8 +354,6 @@ public class InstrumentProfile {
         private double smtCorrelation = 0.0;
         private String inverseCorrSymbol;
         private double inverseCorrelation = 0.0;
-        private String correlatedCurrency;
-        private double currencyCorrelation = 0.0;
         private double oteLow = 0.62;
         private double oteHigh = 0.705;
         private double typicalDailyAtr;
@@ -401,8 +393,6 @@ public class InstrumentProfile {
         public Builder smtCorrelation(double smtCorrelation) { this.smtCorrelation = smtCorrelation; return this; }
         public Builder inverseCorrSymbol(String inverseCorrSymbol) { this.inverseCorrSymbol = inverseCorrSymbol; return this; }
         public Builder inverseCorrelation(double inverseCorrelation) { this.inverseCorrelation = inverseCorrelation; return this; }
-        public Builder correlatedCurrency(String correlatedCurrency) { this.correlatedCurrency = correlatedCurrency; return this; }
-        public Builder currencyCorrelation(double currencyCorrelation) { this.currencyCorrelation = currencyCorrelation; return this; }
         public Builder oteLow(double oteLow) { this.oteLow = oteLow; return this; }
         public Builder oteHigh(double oteHigh) { this.oteHigh = oteHigh; return this; }
         public Builder typicalDailyAtr(double typicalDailyAtr) { this.typicalDailyAtr = typicalDailyAtr; return this; }

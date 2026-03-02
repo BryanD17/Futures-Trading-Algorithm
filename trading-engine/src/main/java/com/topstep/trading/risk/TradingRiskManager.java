@@ -76,10 +76,6 @@ public class TradingRiskManager {
         CORRELATION_GROUPS.put("NQ", Arrays.asList("ES"));
         CORRELATION_GROUPS.put("ES", Arrays.asList("NQ"));
 
-        // Currency futures
-        CORRELATION_GROUPS.put("6E", Arrays.asList("6B"));  // Euro and Pound move together
-        CORRELATION_GROUPS.put("6B", Arrays.asList("6E"));
-
         // Commodities - Gold and Silver (include micro versions)
         CORRELATION_GROUPS.put("GC", Arrays.asList("SI", "MGC"));
         CORRELATION_GROUPS.put("MGC", Arrays.asList("SI", "GC"));  // MGC correlates with GC and SI
@@ -95,8 +91,6 @@ public class TradingRiskManager {
         INVERSE_CORRELATIONS.put("MGC", Arrays.asList("DX"));  // MGC same inverse as GC
         INVERSE_CORRELATIONS.put("DX", Arrays.asList("GC", "MGC"));
 
-        // Yen is a safe haven - inverse to risk assets
-        INVERSE_CORRELATIONS.put("6J", Arrays.asList("ES", "NQ"));
     }
 
     // Topstep restricted full-size instruments (Feb 2026 - volatility/margin restrictions)

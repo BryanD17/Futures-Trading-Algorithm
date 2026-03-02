@@ -8,10 +8,10 @@ import java.util.*;
  * Automatically selects the best instruments to trade based on session.
  *
  * Sessions and their optimal instruments:
- * - Sydney (5 PM - 2 AM ET): AUD pairs, NZD
- * - Tokyo (7 PM - 4 AM ET): Nikkei, Yen, Asian currencies
- * - London (3 AM - 12 PM ET): Gold, Euro, Oil, GBP - HIGHEST VOLATILITY
- * - New York (8 AM - 5 PM ET): NQ, ES, Oil - US Indices
+ * - Sydney (5 PM - 2 AM ET): Minimal trading
+ * - Tokyo (7 PM - 4 AM ET): Minimal trading
+ * - London (3 AM - 12 PM ET): Gold - HIGHEST VOLATILITY
+ * - New York (8 AM - 5 PM ET): NQ, ES - US Indices
  *
  * Overlap periods have increased volatility:
  * - Tokyo/London overlap: 3 AM - 4 AM ET
@@ -71,16 +71,13 @@ public class SessionManager {
             // Minimal trading during Sydney - low volatility
         ));
 
-        // Tokyo session: Yen pairs, Nikkei
+        // Tokyo session: Minimal trading (no supported instruments)
         sessionInstruments.put(Session.TOKYO, Arrays.asList(
-            InstrumentConfig.japaneseYen()
         ));
 
-        // London session: Gold, Euro, Oil - highest volatility
+        // London session: Gold - highest volatility
         sessionInstruments.put(Session.LONDON, Arrays.asList(
-            InstrumentConfig.gold(),
-            InstrumentConfig.euroFx(),
-            InstrumentConfig.crudeOil()
+            InstrumentConfig.gold()
         ));
 
         // New York session: US indices
