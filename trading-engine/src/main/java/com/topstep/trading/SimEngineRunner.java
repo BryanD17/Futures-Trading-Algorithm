@@ -191,7 +191,8 @@ public class SimEngineRunner {
 
         running.set(false);
 
-        // Shutdown strategy
+        // Finalize any in-progress HTF candles before shutdown
+        strategy.onSessionEnd();
         strategy.shutdown();
 
         // CRITICAL: Stop EventBus to prevent thread leaks

@@ -136,6 +136,7 @@ public class BacktestRunner implements ExecutionEngine.ExecutionListener {
             }
         }
 
+        strategy.onSessionEnd();
         strategy.shutdown();
 
         // CRITICAL: Stop EventBus to prevent thread leaks

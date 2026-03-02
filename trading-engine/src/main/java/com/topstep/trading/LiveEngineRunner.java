@@ -1364,10 +1364,12 @@ public class LiveEngineRunner {
         // Stop EventBus
         eventBus.stop();
 
-        // Shutdown multi-instrument engine or single strategy
+        // Finalize any in-progress HTF candles before shutdown
         if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
+            multiEngine.onSessionEnd();
             multiEngine.stop();
         } else {
+            strategy.onSessionEnd();
             strategy.shutdown();
         }
 

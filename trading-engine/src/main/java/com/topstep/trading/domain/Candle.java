@@ -16,9 +16,15 @@ public final class Candle {
     private final double close;
     private final long volume;
     private final TradingSession session;
+    private final boolean partial;
 
     public Candle(String symbol, Instant timestamp, double open, double high,
                   double low, double close, long volume, TradingSession session) {
+        this(symbol, timestamp, open, high, low, close, volume, session, false);
+    }
+
+    public Candle(String symbol, Instant timestamp, double open, double high,
+                  double low, double close, long volume, TradingSession session, boolean partial) {
         this.symbol = Objects.requireNonNull(symbol, "symbol cannot be null");
         this.timestamp = Objects.requireNonNull(timestamp, "timestamp cannot be null");
         this.open = open;
@@ -27,6 +33,7 @@ public final class Candle {
         this.close = close;
         this.volume = volume;
         this.session = session;
+        this.partial = partial;
     }
 
     /**
@@ -34,7 +41,7 @@ public final class Candle {
      */
     public Candle(String symbol, Instant timestamp, double open, double high,
                   double low, double close, long volume) {
-        this(symbol, timestamp, open, high, low, close, volume, TradingSession.REGULAR);
+        this(symbol, timestamp, open, high, low, close, volume, TradingSession.REGULAR, false);
     }
 
     public String getSymbol() { return symbol; }
@@ -45,6 +52,13 @@ public final class Candle {
     public double getClose() { return close; }
     public long getVolume() { return volume; }
     public TradingSession getSession() { return session; }
+
+    /**
+     * Whether this candle is partial (session ended before the HTF window completed).
+     * Partial candles should not be used for confirmed structural analysis
+     * (swing points, FVGs, order blocks) but can provide real-time context.
+     */
+    public boolean isPartial() { return partial; }
 
     public boolean isBullish() {
         return close > open;
@@ -83,7 +97,8 @@ public final class Candle {
 
     @Override
     public String toString() {
-        return String.format("Candle{symbol='%s', time=%s, O=%.2f, H=%.2f, L=%.2f, C=%.2f, V=%d, session=%s}",
-                symbol, timestamp, open, high, low, close, volume, session);
+        return String.format("Candle{symbol='%s', time=%s, O=%.2f, H=%.2f, L=%.2f, C=%.2f, V=%d, session=%s%s}",
+                symbol, timestamp, open, high, low, close, volume, session,
+                partial ? ", PARTIAL" : "");
     }
 }

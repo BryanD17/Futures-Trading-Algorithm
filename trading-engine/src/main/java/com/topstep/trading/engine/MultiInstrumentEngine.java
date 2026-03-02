@@ -358,6 +358,14 @@ public class MultiInstrumentEngine {
     }
 
     /**
+     * Notify all strategies that the session is ending.
+     * This force-finalizes in-progress HTF candles as partial candles.
+     */
+    public void onSessionEnd() {
+        strategies.values().forEach(TradingStrategy::onSessionEnd);
+    }
+
+    /**
      * Stop the multi-instrument engine.
      */
     public void stop() {
@@ -375,6 +383,9 @@ public class MultiInstrumentEngine {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+
+        // Finalize any in-progress HTF candles before shutdown
+        strategies.values().forEach(TradingStrategy::onSessionEnd);
 
         // Shutdown all strategies
         strategies.values().forEach(TradingStrategy::shutdown);
