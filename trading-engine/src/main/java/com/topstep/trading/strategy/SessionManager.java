@@ -5,17 +5,18 @@ import java.util.*;
 
 /**
  * Manages trading sessions across different global markets.
- * Automatically selects the best instruments to trade based on session.
  *
- * Sessions and their optimal instruments:
- * - Sydney (5 PM - 2 AM ET): Minimal trading
- * - Tokyo (7 PM - 4 AM ET): Minimal trading
- * - London (3 AM - 12 PM ET): Gold - HIGHEST VOLATILITY
- * - New York (8 AM - 5 PM ET): NQ, ES - US Indices
+ * SESSION-AGNOSTIC: All instruments are active in ALL sessions.
+ * If a confluence tier aligns for an instrument, it executes regardless of session.
+ * Session detection is used for informational logging and bonus scoring only.
  *
- * Overlap periods have increased volatility:
+ * Sessions and their overlap periods:
+ * - Sydney (5 PM - 2 AM ET)
+ * - Tokyo (7 PM - 4 AM ET)
+ * - London (3 AM - 12 PM ET)
+ * - New York (8 AM - 5 PM ET)
  * - Tokyo/London overlap: 3 AM - 4 AM ET
- * - London/NY overlap: 8 AM - 12 PM ET (BEST TIME)
+ * - London/NY overlap: 8 AM - 12 PM ET
  */
 public class SessionManager {
 
@@ -63,28 +64,21 @@ public class SessionManager {
     }
 
     /**
-     * Initialize the mapping of sessions to their optimal instruments.
+     * Initialize the mapping of sessions to instruments.
+     * SESSION-AGNOSTIC: All instruments are available in ALL sessions.
      */
     private void initializeSessionInstruments() {
-        // Sydney session: Quiet, focus on carry trades
-        sessionInstruments.put(Session.SYDNEY, Arrays.asList(
-            // Minimal trading during Sydney - low volatility
-        ));
-
-        // Tokyo session: Minimal trading (no supported instruments)
-        sessionInstruments.put(Session.TOKYO, Arrays.asList(
-        ));
-
-        // London session: Gold - highest volatility
-        sessionInstruments.put(Session.LONDON, Arrays.asList(
-            InstrumentConfig.gold()
-        ));
-
-        // New York session: US indices
-        sessionInstruments.put(Session.NEW_YORK, Arrays.asList(
+        List<InstrumentConfig> allInstruments = Arrays.asList(
             InstrumentConfig.nq(),
-            InstrumentConfig.es()
-        ));
+            InstrumentConfig.es(),
+            InstrumentConfig.gold()
+        );
+
+        // All sessions have all instruments available
+        sessionInstruments.put(Session.SYDNEY, allInstruments);
+        sessionInstruments.put(Session.TOKYO, allInstruments);
+        sessionInstruments.put(Session.LONDON, allInstruments);
+        sessionInstruments.put(Session.NEW_YORK, allInstruments);
     }
 
     /**
@@ -247,20 +241,13 @@ public class SessionManager {
     }
 
     /**
-     * Check if it's a good time to trade (any major session active).
+     * Check if it's a good time to trade.
+     * SESSION-AGNOSTIC: Any active session is a good trading time.
      */
     public boolean isGoodTradingTime(Instant instant) {
         List<Session> sessions = getActiveSessions(instant);
-
-        // Avoid Sydney-only periods (low volatility)
-        if (sessions.size() == 1 && sessions.contains(Session.SYDNEY)) {
-            return false;
-        }
-
-        // At least one major session should be active
-        return sessions.contains(Session.LONDON) ||
-               sessions.contains(Session.NEW_YORK) ||
-               sessions.contains(Session.TOKYO);
+        // Any active session is valid — if a tier aligns, execute
+        return !sessions.isEmpty();
     }
 
     /**
