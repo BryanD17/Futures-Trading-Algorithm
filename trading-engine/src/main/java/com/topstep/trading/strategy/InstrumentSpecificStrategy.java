@@ -590,32 +590,15 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
             return true;
         }
 
-        // 1. Check if this instrument prefers the current killzone/session
-        String killzoneName = killzoneClock.getKillzoneName(candle.getTimestamp());
-        boolean isPreferredSession = isPreferredSession(killzoneName);
-
-        boolean inKillzone = killzoneClock.isInKillzone(candle.getTimestamp());
-        KillzonePhase phase = killzoneClock.getKillzonePhase(candle.getTimestamp());
-
-        // For instruments with specific session preferences, allow trading even outside standard killzones
-        if (!inKillzone && !isPreferredSession) {
-            if (shouldLog) {
-                System.out.println("[" + profile.getSymbol() + "] Not in preferred session - waiting");
-            }
-            return false;
-        }
-
+        // 1. Only check that markets are open (weekend = no data anyway)
         if (!killzoneClock.isTradingDay(candle.getTimestamp())) {
             return false;
         }
 
-        // Check killzone phase (if in a standard killzone)
-        if (inKillzone && !phase.allowsNewEntries()) {
-            if (shouldLog) {
-                System.out.println("[" + profile.getSymbol() + "] Killzone phase: " + phase + " - no new entries");
-            }
-            return false;
-        }
+        // SESSION-AGNOSTIC: All instruments can trade in any session.
+        // If a tier aligns, the instrument executes regardless of killzone or session.
+        // The session bonus (tier upgrade) still applies when in preferred session,
+        // but being outside a preferred session is NOT a blocking condition.
 
         // 2. Check volatility - use instrument-specific thresholds
         double currentAtr = atrCalculator.getCurrentAtr();
@@ -681,9 +664,6 @@ public class InstrumentSpecificStrategy implements TradingStrategy {
 
         // Use original sweep detection if no ChartState raid (backward compat)
         if (!hasRecentSweep && currentActiveRaid == null) {
-            if (phase == KillzonePhase.OPENING) {
-                return false;
-            }
             if (shouldLog) {
                 System.out.println("[" + profile.getSymbol() + "] ✓ Session | ✓ Bias: " + bias + " | ✗ No sweep/raid");
             }

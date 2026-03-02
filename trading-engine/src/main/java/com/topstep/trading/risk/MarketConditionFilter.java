@@ -12,43 +12,37 @@ import java.util.*;
 /**
  * Market Condition Filter - Additional safeguards to improve win percentage.
  *
+ * SESSION-AGNOSTIC DESIGN: All instruments can trade in any session.
+ * If a confluence tier aligns for an instrument, it executes regardless of session.
+ * Session/killzone timing provides BONUSES only (never penalties or hard blocks).
+ *
  * This filter checks various market conditions that affect trade quality:
  *
- * 1. SESSION QUALITY:
- *    - Avoid first/last 15 minutes of major sessions
- *    - Higher quality during session overlaps
- *    - Skip low-liquidity periods
+ * 1. SESSION QUALITY (bonuses only):
+ *    - Bonus for session overlaps (maximum liquidity)
+ *    - Bonus for Silver Bullet windows and prime killzone phases
+ *    - No penalties for outside killzone, opening/closing phases, or transitions
  *
  * 2. VOLATILITY FILTERING:
  *    - Skip during extreme volatility (ATR > 2x normal)
- *    - Increase targets during low volatility
  *    - Adjust position sizing based on current volatility
  *
- * 3. DAY-OF-WEEK FILTERING:
- *    - Monday mornings often have gaps/whipsaws
- *    - Friday afternoons have reduced liquidity
- *    - Mid-week (Tue-Thu) tends to be most reliable
+ * 3. DAY-OF-WEEK:
+ *    - Weekend = hard block (markets closed)
+ *    - Mid-week (Tue-Thu) gets bonus
+ *    - Monday/Friday = neutral (no penalty)
  *
  * 4. NEWS EVENT AVOIDANCE:
  *    - Skip 15 minutes before/after major news
- *    - Reduce size during high-impact news days
  *
- * 5. RANGE/TREND DETECTION:
- *    - Avoid trades when market is in tight range
- *    - Prefer trending conditions for ICT setups
- *
- * 6. CONFLUENCE QUALITY GATE:
- *    - Require minimum number of confluences
- *    - Premium hours require fewer confluences
- *    - Off-hours require more confluences
+ * 5. SYMBOL FIT (bonuses only):
+ *    - Optimal symbols for SB windows get +1 bonus
+ *    - Non-optimal symbols are neutral (no penalty)
  */
 public class MarketConditionFilter {
 
     // Chicago timezone for futures
     private static final ZoneId CT_ZONE = ZoneId.of("America/Chicago");
-
-    // Session transition times to avoid (first/last 15 min)
-    private static final int SESSION_BUFFER_MINUTES = 15;
 
     // Major news event times (ET/CT)
     private static final List<LocalTime> HIGH_IMPACT_TIMES = Arrays.asList(
@@ -84,24 +78,20 @@ public class MarketConditionFilter {
         SilverBulletClock.SilverBulletWindow sbWindow = silverBulletClock.getCurrentWindow(timestamp);
         int minutesRemaining = silverBulletClock.getMinutesRemaining(timestamp);
 
-        // ═══════════════════════════════════════════════════════════════════════════
-        // TIGHTENED FILTERS (added after losing trades to improve win rate)
-        // ═══════════════════════════════════════════════════════════════════════════
+        // SESSION-AGNOSTIC: All instruments can trade in any session.
+        // Session/killzone checks are bonuses only, never penalties.
+        // If a tier aligns, the instrument executes regardless of session.
 
-        // TIGHTENED CHECK 1: Only trade optimal symbols for each session
-        // Non-optimal symbols get -10 penalty (automatic SKIP)
+        // SB window symbol fit — bonus only, no penalty for non-optimal
         condition.addFactor(evaluateOptimalSymbol(timestamp, symbol, inSilverBulletWindow, sbWindow));
 
-        // TIGHTENED CHECK 2: Only trade in first 30 minutes of SB window
-        // After 30 min, the setup window quality decreases
+        // SB window timing — bonus only, no late-window penalty
         condition.addFactor(evaluateSBWindowTiming(inSilverBulletWindow, minutesRemaining));
 
-        // ═══════════════════════════════════════════════════════════════════════════
-
-        // 1. Check day of week quality (with SB exemption)
+        // 1. Check day of week quality (weekends still hard-blocked)
         condition.addFactor(evaluateDayOfWeek(dayOfWeek, time, inSilverBulletWindow));
 
-        // 2. Check session timing (with SB exemption)
+        // 2. Check session timing (bonuses for overlaps/SB, no penalties)
         condition.addFactor(evaluateSessionTiming(timestamp, time, inSilverBulletWindow, sbWindow));
 
         // 3. Check volatility
@@ -126,32 +116,16 @@ public class MarketConditionFilter {
     private ConditionFactor evaluateDayOfWeek(DayOfWeek day, LocalTime time, boolean inSilverBulletWindow) {
         switch (day) {
             case MONDAY:
-                // Monday morning is risky (gaps, whipsaws) - BUT exempt during Silver Bullet windows
-                if (time.isBefore(LocalTime.of(9, 0))) {
-                    if (inSilverBulletWindow) {
-                        // Silver Bullet windows are valid even on Monday morning
-                        return new ConditionFactor("Day/Time", 0,
-                                "Monday morning - Silver Bullet window active (exempt)");
-                    }
-                    return new ConditionFactor("Day/Time", -2,
-                            "Monday morning - higher whipsaw risk");
-                }
-                return new ConditionFactor("Day/Time", 0, "Monday - normal");
+            case FRIDAY:
+                // No penalties — if tier aligns, execute
+                return new ConditionFactor("Day/Time", 0, day + " - normal");
 
             case TUESDAY:
             case WEDNESDAY:
             case THURSDAY:
-                // Mid-week is typically best
+                // Mid-week is typically best — bonus
                 return new ConditionFactor("Day/Time", 1,
                         day + " - optimal trading day");
-
-            case FRIDAY:
-                // Friday afternoon is risky (reduced liquidity)
-                if (time.isAfter(LocalTime.of(12, 0))) {
-                    return new ConditionFactor("Day/Time", -1,
-                            "Friday afternoon - reduced liquidity");
-                }
-                return new ConditionFactor("Day/Time", 0, "Friday AM - normal");
 
             case SATURDAY:
             case SUNDAY:
@@ -164,66 +138,41 @@ public class MarketConditionFilter {
     }
 
     /**
-     * Evaluate session timing (avoid transitions).
-     * Silver Bullet windows are exempt from session transition penalties.
+     * Evaluate session timing — bonuses only, no penalties.
+     * SESSION-AGNOSTIC: If a tier aligns, execute regardless of session timing.
      */
     private ConditionFactor evaluateSessionTiming(Instant timestamp, LocalTime time,
                                                    boolean inSilverBulletWindow,
                                                    SilverBulletClock.SilverBulletWindow sbWindow) {
         String killzone = killzoneClock.getKillzoneName(timestamp);
 
-        // Session overlaps are premium
+        // Session overlaps are premium — bonus
         if (killzone.contains("OVERLAP")) {
             return new ConditionFactor("Session", 2,
                     "Session overlap - maximum liquidity");
         }
 
-        // Silver Bullet windows are PREMIUM trading times - give bonus
+        // Silver Bullet windows are PREMIUM trading times — bonus
         if (inSilverBulletWindow && sbWindow != null && sbWindow.isActive()) {
             return new ConditionFactor("Session", 2,
                     "Silver Bullet window: " + sbWindow.getName() + " - premium ICT setup time");
         }
 
-        // Check if we're in a killzone
+        // Check if we're in a killzone — bonus for prime, neutral otherwise
         boolean inKillzone = killzoneClock.isInKillzone(timestamp);
         if (inKillzone) {
             KillzonePhase phase = killzoneClock.getKillzonePhase(timestamp);
             if (phase == KillzonePhase.PRIME) {
                 return new ConditionFactor("Session", 2,
                         "Prime phase of " + killzone);
-            } else if (phase == KillzonePhase.OPENING) {
-                return new ConditionFactor("Session", 0,
-                        "Opening phase - waiting for sweep");
-            } else if (phase == KillzonePhase.CLOSING) {
-                return new ConditionFactor("Session", -1,
-                        "Closing phase - avoid new entries");
             }
+            // Opening/closing phases — neutral, no penalty
+            return new ConditionFactor("Session", 0,
+                    "Killzone " + (phase != null ? phase : "active") + " - " + killzone);
         }
 
-        // Check session transitions (first/last 15 min of major opens)
-        // BUT exempt during Silver Bullet windows - these ARE the setup times
-
-        // NY Open (9:30 ET = 8:30 CT)
-        LocalTime nyOpen = LocalTime.of(8, 30);
-        if (isNearTime(time, nyOpen, SESSION_BUFFER_MINUTES) && !inSilverBulletWindow) {
-            return new ConditionFactor("Session", -1,
-                    "Near NY open - high volatility transition");
-        }
-
-        // London Open (3:00 AM ET = 2:00 AM CT)
-        // The London SB window IS 2-3 AM CT, so don't penalize during SB
-        LocalTime londonOpen = LocalTime.of(2, 0);
-        if (isNearTime(time, londonOpen, SESSION_BUFFER_MINUTES) && !inSilverBulletWindow) {
-            return new ConditionFactor("Session", -1,
-                    "Near London open - transition period");
-        }
-
-        if (!inKillzone && !inSilverBulletWindow) {
-            return new ConditionFactor("Session", -1,
-                    "Outside killzones");
-        }
-
-        return new ConditionFactor("Session", 0, "Normal session");
+        // Outside killzone — neutral, no penalty
+        return new ConditionFactor("Session", 0, "Outside killzone - session-agnostic");
     }
 
     /**
@@ -289,61 +238,53 @@ public class MarketConditionFilter {
     }
 
     /**
-     * Evaluate killzone phase OR Silver Bullet window quality.
-     * Silver Bullet windows are treated as premium trading windows.
+     * Evaluate killzone phase OR Silver Bullet window quality — bonuses only, no penalties.
+     * SESSION-AGNOSTIC: Outside killzone/SB is neutral (0), not penalized.
      */
     private ConditionFactor evaluateKillzoneOrSilverBullet(Instant timestamp,
                                                            boolean inSilverBulletWindow,
                                                            SilverBulletClock.SilverBulletWindow sbWindow) {
-        // Silver Bullet windows are PREMIUM - give significant bonus
+        // Silver Bullet windows are PREMIUM — give significant bonus
         if (inSilverBulletWindow && sbWindow != null && sbWindow.isActive()) {
             int minutesRemaining = silverBulletClock.getMinutesRemaining(timestamp);
             if (minutesRemaining >= 30) {
-                // Plenty of time in SB window - optimal
                 return new ConditionFactor("Killzone/SB", 2,
                         "Silver Bullet PRIME - " + minutesRemaining + " min remaining");
             } else if (minutesRemaining >= 15) {
-                // Still good time
                 return new ConditionFactor("Killzone/SB", 1,
                         "Silver Bullet active - " + minutesRemaining + " min remaining");
             } else {
-                // Running low on time
                 return new ConditionFactor("Killzone/SB", 0,
                         "Silver Bullet closing - " + minutesRemaining + " min remaining");
             }
         }
 
-        // Fall back to traditional killzone evaluation
-        if (!killzoneClock.isInKillzone(timestamp)) {
-            return new ConditionFactor("Killzone/SB", -1, "Outside killzone and SB window");
+        // Killzone evaluation — bonuses for prime, neutral otherwise
+        if (killzoneClock.isInKillzone(timestamp)) {
+            KillzonePhase phase = killzoneClock.getKillzonePhase(timestamp);
+            if (phase == null) {
+                return new ConditionFactor("Killzone/SB", 0, "Killzone phase unavailable");
+            }
+            if (phase == KillzonePhase.PRIME) {
+                return new ConditionFactor("Killzone/SB", 2, "PRIME phase - optimal");
+            }
+            // Opening/closing — neutral, no penalty
+            return new ConditionFactor("Killzone/SB", 0, phase + " phase - neutral");
         }
 
-        KillzonePhase phase = killzoneClock.getKillzonePhase(timestamp);
-        // CRITICAL: Null check for phase to avoid NPE
-        if (phase == null) {
-            return new ConditionFactor("Killzone/SB", 0, "Killzone phase unavailable");
-        }
-        switch (phase) {
-            case PRIME:
-                return new ConditionFactor("Killzone/SB", 2, "PRIME phase - optimal");
-            case OPENING:
-                return new ConditionFactor("Killzone/SB", 0, "Opening phase - wait for sweep");
-            case CLOSING:
-                return new ConditionFactor("Killzone/SB", -1, "Closing phase - no new entries");
-            default:
-                return new ConditionFactor("Killzone/SB", 0, "Unknown phase");
-        }
+        // Outside killzone and SB — neutral, no penalty
+        return new ConditionFactor("Killzone/SB", 0, "Outside killzone/SB - session-agnostic");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // TIGHTENED FILTERS - Added to improve win rate after losing trades
+    // SILVER BULLET QUALITY BONUSES (session-agnostic: bonuses only, no penalties)
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * TIGHTENED: Only trade OPTIMAL symbols for each Silver Bullet window.
-     * Non-optimal symbols get -10 penalty (automatic SKIP).
+     * Evaluate symbol fit for Silver Bullet window — bonus only, no penalty.
+     * SESSION-AGNOSTIC: Non-optimal symbols are neutral (0), not rejected.
      *
-     * Optimal symbols per window:
+     * Optimal symbols per window (get +1 bonus):
      * - London SB (3-4 AM ET): GC, MGC, SI (Metals)
      * - NY AM SB (10-11 AM ET): ES, MES, NQ, MNQ, GC, MGC (Indices & Gold)
      * - NY PM SB (2-3 PM ET): ES, MES, NQ, MNQ (Indices only)
@@ -352,7 +293,6 @@ public class MarketConditionFilter {
                                                    boolean inSilverBulletWindow,
                                                    SilverBulletClock.SilverBulletWindow sbWindow) {
         if (!inSilverBulletWindow || sbWindow == null || !sbWindow.isActive()) {
-            // Not in SB window - this check doesn't apply
             return new ConditionFactor("Symbol Fit", 0, "Outside SB window");
         }
 
@@ -362,38 +302,30 @@ public class MarketConditionFilter {
             return new ConditionFactor("Symbol Fit", 1,
                     symbol + " is OPTIMAL for " + sbWindow.getName());
         } else {
-            // NON-OPTIMAL SYMBOL - SKIP TRADE
-            // This is a hard rejection (-10 guarantees SKIP recommendation)
-            return new ConditionFactor("Symbol Fit", -10,
-                    symbol + " is NOT optimal for " + sbWindow.getName() + " - SKIP");
+            // Non-optimal — neutral, no penalty. If tier aligns, execute.
+            return new ConditionFactor("Symbol Fit", 0,
+                    symbol + " is non-optimal for " + sbWindow.getName() + " - no penalty");
         }
     }
 
     /**
-     * TIGHTENED: Only trade in FIRST 30 MINUTES of Silver Bullet window.
-     * After 30 min, the setup window quality decreases significantly.
+     * Evaluate Silver Bullet window timing — bonus only, no penalty.
+     * SESSION-AGNOSTIC: Late SB window is neutral (0), not rejected.
      *
-     * Reasoning:
-     * - First 30 min: Fresh liquidity, cleaner setups, higher probability
-     * - Last 30 min: Fading momentum, choppier price action, lower win rate
+     * First 30 min of SB window gets a +1 bonus for fresh liquidity.
      */
     private ConditionFactor evaluateSBWindowTiming(boolean inSilverBulletWindow, int minutesRemaining) {
         if (!inSilverBulletWindow) {
             return new ConditionFactor("SB Timing", 0, "Outside SB window");
         }
 
-        // SB windows are 60 minutes
-        // If 30+ minutes remain, we're in the first 30 minutes (optimal)
-        // If < 30 minutes remain, we're in the last 30 minutes (skip)
-
         if (minutesRemaining >= 30) {
             return new ConditionFactor("SB Timing", 1,
                     "First 30 min of SB window - OPTIMAL (" + minutesRemaining + " min left)");
         } else {
-            // LATE IN SB WINDOW - SKIP TRADE
-            // This is a hard rejection (-10 guarantees SKIP recommendation)
-            return new ConditionFactor("SB Timing", -10,
-                    "Last 30 min of SB window - SKIP (" + minutesRemaining + " min left)");
+            // Late in SB window — neutral, no penalty. If tier aligns, execute.
+            return new ConditionFactor("SB Timing", 0,
+                    "Late SB window (" + minutesRemaining + " min left) - no penalty");
         }
     }
 

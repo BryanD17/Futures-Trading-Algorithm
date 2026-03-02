@@ -716,25 +716,15 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
             }
         }
 
-        // 1. Check killzone and phase
-        boolean inKillzone = killzoneClock.isInKillzone(candle.getTimestamp());
-        KillzonePhase phase = killzoneClock.getKillzonePhase(candle.getTimestamp());
-
-        if (!inKillzone) {
-            outsideKillzone++;
-            return false;
-        }
-
+        // 1. Only check that markets are open (weekend = no data)
         if (!killzoneClock.isTradingDay(candle.getTimestamp())) {
             notTradingDay++;
             return false;
         }
 
-        // Check killzone phase - only trade during PRIME phase
-        if (!phase.allowsNewEntries()) {
-            wrongPhase++;
-            return false;
-        }
+        // SESSION-AGNOSTIC: All instruments can trade in any session.
+        // If a tier aligns, the instrument executes regardless of killzone or session.
+        // Killzone/phase checks removed — confluence quality gates are sufficient.
 
         // 2. Check volatility - is it tradeable?
         if (!atrCalculator.isTradeable()) {
