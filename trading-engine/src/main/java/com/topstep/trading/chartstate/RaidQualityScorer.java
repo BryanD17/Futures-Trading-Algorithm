@@ -181,6 +181,19 @@ public class RaidQualityScorer {
         }
 
         // ═══════════════════════════════════════════════════════════════════
+        // TIER 7: MULTI-TOUCH BONUS (max +3) (FIX 5)
+        // ═══════════════════════════════════════════════════════════════════
+
+        int touchCount = raid.getTargetLevel().getTouchCount();
+        if (touchCount >= 3) {
+            score += 3;
+            factors.add("★ 3rd+ touch (" + touchCount + " touches) — highest probability (+3)");
+        } else if (touchCount == 2) {
+            score += 1;
+            factors.add("✓ 2nd touch (" + touchCount + " touches) (+1)");
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
         // PENALTY FACTORS (can reduce score)
         // ═══════════════════════════════════════════════════════════════════
 

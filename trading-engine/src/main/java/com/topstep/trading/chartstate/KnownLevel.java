@@ -29,6 +29,13 @@ public class KnownLevel {
     private Instant raidedAt;                   // When was it raided
     private int barsSinceCreation;              // Updated each candle
 
+    // Zone flip tracking (FIX 3: demand/supply zone flips)
+    private boolean flipped = false;            // Has this level flipped polarity?
+    private Instant flipTimestamp = null;        // When was it flipped?
+
+    // Touch tracking (FIX 5: multi-touch scoring)
+    private final java.util.List<Instant> touchTimestamps = new java.util.ArrayList<>();
+
     /**
      * Create a standard level (PDH/PDL, session levels, etc.)
      */
@@ -155,6 +162,49 @@ public class KnownLevel {
      */
     public void incrementTouchCount() {
         this.touchCount++;
+    }
+
+    /**
+     * Record a touch with timestamp for multi-touch scoring (FIX 5).
+     */
+    public void recordTouch(Instant timestamp) {
+        this.touchCount++;
+        this.touchTimestamps.add(timestamp);
+    }
+
+    /**
+     * Get touch timestamps for analysis.
+     */
+    public java.util.List<Instant> getTouchTimestamps() {
+        return java.util.Collections.unmodifiableList(touchTimestamps);
+    }
+
+    /**
+     * Check if this level has been flipped (zone flip detected).
+     */
+    public boolean isFlipped() {
+        return flipped;
+    }
+
+    /**
+     * Mark this level as flipped.
+     */
+    public void setFlipped(boolean flipped) {
+        this.flipped = flipped;
+    }
+
+    /**
+     * Get the timestamp when this level was flipped.
+     */
+    public Instant getFlipTimestamp() {
+        return flipTimestamp;
+    }
+
+    /**
+     * Set the flip timestamp.
+     */
+    public void setFlipTimestamp(Instant flipTimestamp) {
+        this.flipTimestamp = flipTimestamp;
     }
 
     /**

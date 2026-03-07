@@ -214,6 +214,41 @@ public class FvgDetector {
     }
 
     /**
+     * Find the best IFVG within a price range (e.g., within an Order Block).
+     * Returns null if no IFVG found in the range. (FIX 9)
+     *
+     * @param rangeLow Bottom of the range
+     * @param rangeHigh Top of the range
+     * @param bullish Direction to match
+     * @return The best IFVG within the range, or null
+     */
+    public FairValueGap findIfvgWithinRange(double rangeLow, double rangeHigh, boolean bullish) {
+        FairValueGap best = null;
+        double bestDistance = Double.MAX_VALUE;
+
+        for (FairValueGap fvg : fvgs) {
+            if (!fvg.isInverted()) continue;
+            if (fvg.isBullish() != bullish) continue;
+
+            // Check if FVG overlaps with the given range
+            boolean overlaps = fvg.getBottom() < rangeHigh && fvg.getTop() > rangeLow;
+            if (!overlaps) continue;
+
+            // Prefer the FVG closest to the premium/discount edge
+            double midpoint = (fvg.getTop() + fvg.getBottom()) / 2.0;
+            double distance = bullish
+                    ? midpoint - rangeLow   // For longs, prefer FVG near the bottom
+                    : rangeHigh - midpoint; // For shorts, prefer FVG near the top
+
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = fvg;
+            }
+        }
+        return best;
+    }
+
+    /**
      * Reset the detector.
      */
     public void reset() {

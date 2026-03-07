@@ -10,6 +10,7 @@ import com.topstep.trading.strategy.HtfTrendAnalyzer;
 import com.topstep.trading.strategy.HtfTrendAnalyzer.HtfTrendState;
 import com.topstep.trading.strategy.MarketBias;
 import com.topstep.trading.strategy.MultiTimeframeAnalyzer;
+import com.topstep.trading.strategy.TradeTier;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -226,11 +227,38 @@ public class MandatoryConfluenceValidator {
     }
 
     /**
+     * Get the minimum raid quality for a specific tier (FIX 6: tiered minimums).
+     * Tier 4 (Elite) requires quality >= 6
+     * Tier 3 (Premium) requires quality >= 5
+     * Tier 2 (Standard) requires quality >= 3
+     * Tier 1 requires quality >= 3
+     */
+    public static int getMinimumRaidQuality(TradeTier tier) {
+        if (tier == null) return MINIMUM_RAID_QUALITY;
+        switch (tier) {
+            case TIER_4: return 6;
+            case TIER_3: return 5;
+            case TIER_2: return 3;
+            case TIER_1: return 3;
+            default: return 5;
+        }
+    }
+
+    /**
      * Quick check if raid quality meets minimum threshold.
      */
     public boolean raidMeetsMinimumQuality() {
         Optional<LiquidityRaid> raid = chartState.getBestActiveRaid();
         return raid.isPresent() && raid.get().getQualityScore() >= MINIMUM_RAID_QUALITY;
+    }
+
+    /**
+     * Quick check if raid quality meets tiered minimum threshold (FIX 6).
+     */
+    public boolean raidMeetsMinimumQuality(TradeTier tier) {
+        int minQuality = getMinimumRaidQuality(tier);
+        Optional<LiquidityRaid> raid = chartState.getBestActiveRaid();
+        return raid.isPresent() && raid.get().getQualityScore() >= minQuality;
     }
 
     /**

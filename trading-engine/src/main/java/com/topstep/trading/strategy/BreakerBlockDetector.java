@@ -188,6 +188,43 @@ public class BreakerBlockDetector {
     }
 
     /**
+     * Register a zone flip as a synthetic breaker block (FIX 3).
+     * When a demand/supply level is broken by displacement, it becomes a breaker.
+     *
+     * @param level The level that was flipped
+     * @param isBullish true if the breaker is now bullish (broken upward)
+     */
+    public void registerZoneFlipBreaker(com.topstep.trading.chartstate.KnownLevel level, boolean isBullish) {
+        double tickSize = 0.25; // Default for NQ/ES
+        double zoneSize = tickSize * 10; // Create a zone around the level
+
+        double high = level.getPrice() + zoneSize / 2;
+        double low = level.getPrice() - zoneSize / 2;
+
+        if (breakerExistsAtLevel(low, high)) {
+            return;
+        }
+
+        // Create a synthetic OrderBlock for the breaker
+        OrderBlock syntheticOb = new OrderBlock(!isBullish, high, low,
+                level.getFlipTimestamp() != null ? level.getFlipTimestamp() : java.time.Instant.now());
+
+        BreakerBlock breaker = new BreakerBlock(
+                isBullish, high, low,
+                level.getFlipTimestamp() != null ? level.getFlipTimestamp() : java.time.Instant.now(),
+                syntheticOb
+        );
+
+        breakerBlocks.add(breaker);
+        System.out.println("[BREAKER_BLOCK] ZONE FLIP BREAKER: " + (isBullish ? "BULLISH" : "BEARISH") +
+                " from " + level.getType().getDisplayName() + " @ " + String.format("%.2f", level.getPrice()));
+
+        while (breakerBlocks.size() > maxBreakerBlocks) {
+            breakerBlocks.remove(0);
+        }
+    }
+
+    /**
      * Reset the detector.
      */
     public void reset() {

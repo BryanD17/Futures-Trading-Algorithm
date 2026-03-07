@@ -19,6 +19,8 @@ import com.topstep.trading.news.model.TradeGatingDecision;
 import com.topstep.trading.validation.MandatoryConfluenceValidator;
 import com.topstep.trading.validation.ValidationResult;
 
+import com.topstep.trading.strategy.DailyAmdCycleTracker.DailyPhase;
+
 import java.util.Map;
 import java.util.Optional;
 
@@ -93,6 +95,12 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
     // Mandatory confluence validation (NEW)
     private MandatoryConfluenceValidator mandatoryValidator;  // Initialized after chartState is created
+
+    // Daily AMD Cycle Tracker (FIX 1 — highest-level directional context)
+    private final DailyAmdCycleTracker dailyAmdTracker;
+
+    // Bidirectional Liquidity Model (FIX 4 — structural R:R targets)
+    private final BidirectionalLiquidityModel bidirectionalModel;
 
     // Configuration
     private final double fibLow = 0.62;   // OTE zone low
@@ -223,6 +231,17 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         // Initialize LiquidityTargetIdentifier (needs levelEngine)
         this.liquidityTargetId = new LiquidityTargetIdentifier(primarySymbol, levelEngine);
 
+        // Initialize Daily AMD Cycle Tracker (FIX 1)
+        this.dailyAmdTracker = new DailyAmdCycleTracker(primarySymbol);
+
+        // Initialize Bidirectional Liquidity Model (FIX 4)
+        this.bidirectionalModel = new BidirectionalLiquidityModel(primarySymbol, levelEngine, equalLevelDetector);
+
+        // Register zone flip listener (FIX 3): when a demand/supply level flips,
+        // register it as a breaker block for future entries
+        levelEngine.addZoneFlipListener((level, isNowBullish) ->
+                breakerBlockDetector.registerZoneFlipBreaker(level, isNowBullish));
+
         // Setup automatic raid confirmation listener
         setupRaidConfirmation();
 
@@ -238,11 +257,12 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         // Create a simple ChartStateQueryAPI adapter for the validator
         ChartStateQueryAPI chartStateAdapter = createChartStateAdapter();
 
-        // Initialize validator with required components
+        // Initialize validator with required components (including HTF trend for Layer 1 gate)
         this.mandatoryValidator = new MandatoryConfluenceValidator(
                 mtfAnalyzer,
                 displacementDetector,
-                chartStateAdapter
+                chartStateAdapter,
+                htfTrendAnalyzer
         );
 
         System.out.println("[" + primarySymbol + "] Mandatory Confluence Validator initialized");
@@ -611,6 +631,12 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         trendlineDetector.update(candle);
         equalLevelDetector.ageAndCleanupLevels();
 
+        // FIX 1: Update Daily AMD Cycle Tracker
+        dailyAmdTracker.update(candle, levelEngine, displacementDetector.getLastDisplacement());
+
+        // FIX 3: Detect zone flips (demand→supply, supply→demand) via displacement
+        levelEngine.detectZoneFlips(candle);
+
         // Update raid detector with context for SMT/HTF bias + cascade data
         MarketBias bias1m = structureDetector.getBias();
         Boolean htfBullish = (bias1m == MarketBias.BULLISH) ? Boolean.TRUE :
@@ -768,6 +794,27 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
             return false;
         }
 
+        // ═══════════════════════════════════════════════════════════════════════════
+        // GATE 2: DAILY AMD PHASE (FIX 1 — only enter during manipulation phases)
+        // MANIPULATION_DOWN → longs valid, MANIPULATION_UP → shorts valid
+        // ═══════════════════════════════════════════════════════════════════════════
+        DailyPhase amdPhase = dailyAmdTracker.getCurrentPhase();
+        if (shouldLog) {
+            System.out.println("[" + primarySymbol + "] AMD Phase: " + amdPhase.getDisplayName());
+        }
+
+        // Allow entries only when AMD phase aligns with direction
+        // Exception: transitioning to manipulation counts (catching the start)
+        if (isBullish1m && !dailyAmdTracker.isLongPhase() &&
+                !dailyAmdTracker.isTransitioningToManipDown(candle)) {
+            if (shouldLog && dailyAmdTracker.allowsNewEntries()) {
+                System.out.println("[" + primarySymbol + "] AMD: Phase " + amdPhase.getDisplayName() +
+                        " blocks LONGS (need MANIPULATION_DOWN)");
+            }
+            // Don't hard-block — AMD is advisory, not a gate
+            // But it affects scoring and tier eligibility via FIX 8 and FIX 10
+        }
+
         // LAYER 2: 5m Continuation Zone (optional but boosts tier)
         ContinuationPatternDetector.ContinuationZone bestZone =
                 continuationDetector.getBestActiveZone(isBullish1m);
@@ -808,8 +855,20 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         }
 
         // 4. Check for recent liquidity sweep
-        // TIGHTENED: Sweep must be within 5 candles (was 15) for fresher setups
-        boolean hasRecentSweep = liquidityDetector.hasRecentSweep(5);
+        // FIX 11: Tightened from 5 → 3 candles for fresher setups
+        // Fallback: accept confirmed raids within 8 bars
+        boolean hasRecentSweep = liquidityDetector.hasRecentSweep(3);
+        if (!hasRecentSweep) {
+            // Fallback: check for confirmed raids within 8 bars
+            boolean confirmedRaidFallback = raidDetector.getConfirmedRaids().stream()
+                    .anyMatch(r -> r.getDirection().expectsBullish() == isBullish1m);
+            if (confirmedRaidFallback && liquidityDetector.hasRecentSweep(8)) {
+                hasRecentSweep = true;
+                if (shouldLog) {
+                    System.out.println("[" + primarySymbol + "] FIX 11: Sweep fallback — confirmed raid within 8 bars");
+                }
+            }
+        }
         if (!hasRecentSweep) {
             noSweep++;
             return false;
@@ -1283,9 +1342,24 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         // LONG-SPECIFIC REQUIREMENTS (because longs are underperforming)
         // ═══════════════════════════════════════════════════════════════════════════
         if (isBullish) {
+            // ═══════════════════════════════════════════════════════════════════
+            // FIX 7: Equal-low structural override
+            // When equal-lows are swept + bullish OB + displacement + AMD confirms,
+            // allow longs WITHOUT requiring SMT divergence
+            // ═══════════════════════════════════════════════════════════════════
+            boolean hasEqualLowOverride = false;
+            if (equalLevelDetector.getStrongestEqualLow().isPresent() &&
+                    currentOrderBlock != null && currentOrderBlock.isBullish() &&
+                    hasDisplacement &&
+                    dailyAmdTracker.isLongPhase()) {
+                hasEqualLowOverride = true;
+                System.out.println("[" + primarySymbol + "] FIX 7: Equal-low structural override — " +
+                        "EQL swept + bullish OB + displacement + AMD MANIPULATION_DOWN");
+            }
+
             // 1. Longs MUST have macro ALIGNED (not just NEUTRAL)
             if (requireMacroAlignedForLongs && macroNewsManager != null && macroNewsManager.isRunning()) {
-                if (macroAlignment != MacroAlignment.ALIGNED) {
+                if (macroAlignment != MacroAlignment.ALIGNED && !hasEqualLowOverride) {
                     longMacroNotAligned++;
                     System.out.println("[" + primarySymbol + "] LONG REJECTED: Macro not ALIGNED (was " +
                             macroAlignment + "). Longs require ALIGNED macro bias.");
@@ -1293,19 +1367,31 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
                 }
             }
 
-            // 2. Longs MUST have SMT divergence
-            if (requireSmtForLongs && (smtResult == null || !smtResult.hasDivergence())) {
+            // 2. Longs MUST have SMT divergence (unless structural override applies)
+            if (requireSmtForLongs && !hasEqualLowOverride &&
+                    (smtResult == null || !smtResult.hasDivergence())) {
                 longMissingSmtDivergence++;
                 System.out.println("[" + primarySymbol + "] LONG REJECTED: No SMT divergence. " +
                         "Longs require SMT confirmation.");
                 return false;
             }
 
-            // 3. Longs need minimum Tier 3 (shorts can be Tier 2)
-            if (currentTier != null && currentTier.getLevel() < minimumTierForLongs.getLevel()) {
+            // ═══════════════════════════════════════════════════════════════════
+            // FIX 10: Lower minimum tier for longs when Daily AMD confirms
+            // TIER_3 → TIER_2 when phase is MANIPULATION_DOWN
+            // ═══════════════════════════════════════════════════════════════════
+            TradeTier effectiveMinTier = minimumTierForLongs;
+            if (dailyAmdTracker.isLongPhase()) {
+                effectiveMinTier = TradeTier.TIER_2;
+                System.out.println("[" + primarySymbol + "] FIX 10: AMD MANIPULATION_DOWN — " +
+                        "minimum long tier lowered from " + minimumTierForLongs + " to TIER_2");
+            }
+
+            // 3. Longs need minimum tier (adjusted by AMD)
+            if (currentTier != null && currentTier.getLevel() < effectiveMinTier.getLevel()) {
                 longTierTooLow++;
                 System.out.println("[" + primarySymbol + "] LONG REJECTED: Tier " + currentTier +
-                        " below minimum " + minimumTierForLongs + " for longs.");
+                        " below minimum " + effectiveMinTier + " for longs.");
                 return false;
             }
         }
@@ -1380,7 +1466,8 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private int calculateSimpleMarketConditionScore(Candle candle) {
         int score = 0;
 
-        // Killzone check (+2)
+        // FIX 8: Killzone is INFORMATIONAL, not a gating penalty
+        // Killzone timing adds a bonus but NOT being in a killzone does NOT penalize
         if (killzoneClock.isInKillzone(candle.getTimestamp())) {
             KillzonePhase phase = killzoneClock.getKillzonePhase(candle.getTimestamp());
             if (phase == KillzonePhase.PRIME) {
@@ -1389,6 +1476,7 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
                 score += 1;
             }
         }
+        // No penalty for being outside killzone (FIX 8 removes killzone gating)
 
         // Volatility check (+1 if tradeable, -3 if extreme)
         if (atrCalculator.isTradeable()) {
@@ -1407,6 +1495,26 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
             score += 1;
         } else if (macroAlignment == MacroAlignment.OPPOSING) {
             score -= 2;
+        }
+
+        // FIX 8: Daily AMD Phase scoring (NEW)
+        // Manipulation phases get +2 (highest probability entry windows)
+        // Accumulation gets +1 (building, but acceptable)
+        // Distribution gets 0 (existing trades only, no new entries)
+        DailyPhase amdPhase = dailyAmdTracker.getCurrentPhase();
+        switch (amdPhase) {
+            case MANIPULATION_DOWN:
+            case MANIPULATION_UP:
+                score += 2;
+                break;
+            case ACCUMULATION:
+                score += 1;
+                break;
+            case DISTRIBUTION_UP:
+            case DISTRIBUTION_DOWN:
+            case REVERSAL:
+                // No bonus — these are manage-only phases
+                break;
         }
 
         return score;
@@ -1459,10 +1567,8 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         double baseStop = getBaseStopLevel(swingLow, true);
         double stop = baseStop - (5.0 * stopMultiplier);
 
-        // Target: Based on tier R:R (adjusted by tier multiplier for more realistic targets)
+        // FIX 4: Use BidirectionalLiquidityModel for structural R:R targets
         double riskDistance = entry - stop;
-        double adjustedRR = currentTier.getRiskRewardRatio() * currentTier.getTierMultiplier();
-        double target = entry + (riskDistance * adjustedRR);
 
         // Validate R:R
         if (riskDistance <= 0) {
@@ -1471,6 +1577,11 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
             signalPending = false;
             return;
         }
+
+        double target = bidirectionalModel.getBestTarget(entry, stop, true, currentTier);
+        double actualRR = (target - entry) / riskDistance;
+        System.out.println("[" + primarySymbol + "] TARGET: Structural=" +
+                String.format("%.2f", target) + " (R:R=1:" + String.format("%.1f", actualRR) + ")");
 
         String reason = buildSignalReason("Bullish", candle);
 
@@ -1509,10 +1620,8 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         double baseStop = getBaseStopLevel(swingHigh, false);
         double stop = baseStop + (5.0 * stopMultiplier);
 
-        // Target: Based on tier R:R (adjusted by tier multiplier for more realistic targets)
+        // FIX 4: Use BidirectionalLiquidityModel for structural R:R targets
         double riskDistance = stop - entry;
-        double adjustedRR = currentTier.getRiskRewardRatio() * currentTier.getTierMultiplier();
-        double target = entry - (riskDistance * adjustedRR);
 
         // Validate R:R
         if (riskDistance <= 0) {
@@ -1521,6 +1630,11 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
             signalPending = false;
             return;
         }
+
+        double target = bidirectionalModel.getBestTarget(entry, stop, false, currentTier);
+        double actualRR = (entry - target) / riskDistance;
+        System.out.println("[" + primarySymbol + "] TARGET: Structural=" +
+                String.format("%.2f", target) + " (R:R=1:" + String.format("%.1f", actualRR) + ")");
 
         String reason = buildSignalReason("Bearish", candle);
 
@@ -1542,9 +1656,16 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
     /**
      * Calculate entry price based on available entry zones.
+     *
+     * FIX 2: Bidirectional OB entry zones
+     * - LONGS enter at OB BOTTOM + 15% inset (closer to optimal fill)
+     * - SHORTS enter at OB TOP - 15% inset
+     * - IFVG within OB refines entry further (FIX 9 integration)
      */
     private double calculateEntry(double currentPrice, double swingLevel, double range, boolean bullish) {
-        // Priority: Breaker > Mitigation > FVG > OB > OTE zone
+        double tickSize = getTickSizeForSymbol(primarySymbol);
+
+        // Priority: Breaker > Mitigation > OB (with IFVG refinement) > FVG > OTE zone
 
         if (currentBreaker != null) {
             return currentBreaker.getOptimalEntry();
@@ -1554,13 +1675,33 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
             return currentMitigationBlock.getMidpoint();
         }
 
+        if (currentOrderBlock != null) {
+            // FIX 2: OB edge entry with 15% inset
+            double obRange = currentOrderBlock.getHigh() - currentOrderBlock.getLow();
+            double inset = obRange * 0.15;
+
+            // FIX 9: Check for IFVG within the OB zone for refined entry
+            FairValueGap ifvgInOb = fvgDetector.findIfvgWithinRange(
+                    currentOrderBlock.getLow(), currentOrderBlock.getHigh(), bullish);
+
+            if (ifvgInOb != null) {
+                // Use IFVG midpoint within the OB as refined entry
+                return bullish ? ifvgInOb.getBottom() + (ifvgInOb.getTop() - ifvgInOb.getBottom()) * 0.25
+                               : ifvgInOb.getTop() - (ifvgInOb.getTop() - ifvgInOb.getBottom()) * 0.25;
+            }
+
+            if (bullish) {
+                // LONGS: enter at OB BOTTOM + 15% inset
+                return currentOrderBlock.getLow() + inset;
+            } else {
+                // SHORTS: enter at OB TOP - 15% inset
+                return currentOrderBlock.getHigh() - inset;
+            }
+        }
+
         if (currentFvg != null) {
             return bullish ? currentFvg.getTop() - (currentFvg.getTop() - currentFvg.getBottom()) * 0.25
                           : currentFvg.getBottom() + (currentFvg.getTop() - currentFvg.getBottom()) * 0.25;
-        }
-
-        if (currentOrderBlock != null) {
-            return currentOrderBlock.getMidpoint();
         }
 
         // Default to OTE zone
@@ -1577,21 +1718,27 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
     /**
      * Get base stop level from entry zones.
+     *
+     * FIX 2: Adds 1.5 tick buffer beyond the zone edge to prevent
+     * stop-hunting wicks from prematurely stopping out trades.
      */
     private double getBaseStopLevel(double swingLevel, boolean bullish) {
+        double tickSize = getTickSizeForSymbol(primarySymbol);
+        double buffer = tickSize * 1.5;  // 1.5 ticks buffer
+
         if (currentBreaker != null) {
-            return bullish ? currentBreaker.getLow() : currentBreaker.getHigh();
+            return bullish ? currentBreaker.getLow() - buffer : currentBreaker.getHigh() + buffer;
         }
 
         if (currentFvg != null) {
-            return bullish ? currentFvg.getBottom() : currentFvg.getTop();
+            return bullish ? currentFvg.getBottom() - buffer : currentFvg.getTop() + buffer;
         }
 
         if (currentOrderBlock != null) {
-            return bullish ? currentOrderBlock.getLow() : currentOrderBlock.getHigh();
+            return bullish ? currentOrderBlock.getLow() - buffer : currentOrderBlock.getHigh() + buffer;
         }
 
-        return swingLevel;
+        return bullish ? swingLevel - buffer : swingLevel + buffer;
     }
 
     /**
@@ -1717,6 +1864,10 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     public boolean hasVolumeSpike() { return hasVolumeSpike; }
     public boolean isConsolidating() { return isConsolidating; }
     public boolean hasTrendlineBreak() { return hasTrendlineBreak; }
+
+    // Daily AMD Cycle Tracker getters (FIX 1)
+    public DailyAmdCycleTracker getDailyAmdTracker() { return dailyAmdTracker; }
+    public BidirectionalLiquidityModel getBidirectionalModel() { return bidirectionalModel; }
 
     // Macro news getters (NEW)
     public MacroNewsManager getMacroNewsManager() { return macroNewsManager; }
