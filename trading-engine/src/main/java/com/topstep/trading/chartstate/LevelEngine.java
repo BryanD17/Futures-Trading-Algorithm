@@ -44,6 +44,9 @@ public class LevelEngine {
 
     private final Map<LevelType, KnownLevel> levels = new ConcurrentHashMap<>();
 
+    // Zone flip listeners (FIX 3: demand/supply zone flip detection)
+    private final List<ZoneFlipListener> zoneFlipListeners = new ArrayList<>();
+
     // Daily tracking
     private LocalDate currentTradingDay;
     private double todayHigh = Double.MIN_VALUE;
@@ -478,6 +481,91 @@ public class LevelEngine {
                         .append(" (cluster=").append(l.getClusterSize()).append(")\n"));
 
         return sb.toString();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ZONE FLIP DETECTION (FIX 3)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Add a listener for zone flip events.
+     */
+    public void addZoneFlipListener(ZoneFlipListener listener) {
+        zoneFlipListeners.add(listener);
+    }
+
+    /**
+     * Detect zone flips — when a demand level gets broken by displacement,
+     * it flips to a supply (bearish breaker), and vice versa.
+     */
+    public synchronized void detectZoneFlips(Candle candle) {
+        double atrBaseline = candleSeries.getAverageRange(20);
+
+        // Check bullish (low) levels for bearish flip
+        for (KnownLevel level : new ArrayList<>(levels.values())) {
+            if (level.isFlipped()) continue;
+
+            if (level.getType().isLowLevel() && !level.getType().name().contains("OPEN")) {
+                boolean brokenByDisplacement =
+                        candle.getClose() < level.getPrice() - config.getTolerancePrice()
+                        && (candle.getHigh() - candle.getLow()) > atrBaseline * 1.5;
+
+                if (brokenByDisplacement) {
+                    level.setFlipped(true);
+                    level.setFlipTimestamp(candle.getTimestamp());
+                    for (ZoneFlipListener l : zoneFlipListeners) {
+                        l.onZoneFlip(level, false); // false = now bearish
+                    }
+                }
+            }
+
+            if (level.getType().isHighLevel() && !level.getType().name().contains("OPEN")) {
+                boolean brokenByDisplacement =
+                        candle.getClose() > level.getPrice() + config.getTolerancePrice()
+                        && (candle.getHigh() - candle.getLow()) > atrBaseline * 1.5;
+
+                if (brokenByDisplacement) {
+                    level.setFlipped(true);
+                    level.setFlipTimestamp(candle.getTimestamp());
+                    for (ZoneFlipListener l : zoneFlipListeners) {
+                        l.onZoneFlip(level, true); // true = now bullish
+                    }
+                }
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ENHANCED QUERY API (FIX 12)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Get the nearest unraided high-type level above a price.
+     */
+    public synchronized Optional<KnownLevel> getNearestUnraidedLevelAbove(double price) {
+        return levels.values().stream()
+                .filter(l -> l.getType().isHighLevel())
+                .filter(l -> !l.isRaided())
+                .filter(l -> l.getPrice() > price)
+                .min(java.util.Comparator.comparingDouble(l -> l.getPrice() - price));
+    }
+
+    /**
+     * Get the nearest unraided low-type level below a price.
+     */
+    public synchronized Optional<KnownLevel> getNearestUnraidedLevelBelow(double price) {
+        return levels.values().stream()
+                .filter(l -> l.getType().isLowLevel())
+                .filter(l -> !l.isRaided())
+                .filter(l -> l.getPrice() < price)
+                .min(java.util.Comparator.comparingDouble(l -> price - l.getPrice()));
+    }
+
+    /**
+     * Get average candle range from the candle series.
+     */
+    public double getAverageRange(int lookback) {
+        return candleSeries.getAverageRange(lookback);
     }
 
     @Override
