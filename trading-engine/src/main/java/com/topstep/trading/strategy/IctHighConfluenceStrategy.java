@@ -8,6 +8,7 @@ import com.topstep.trading.strategy.BarAggregationManager.Timeframe;
 import com.topstep.trading.strategy.HtfTrendAnalyzer.HtfTrendState;
 import com.topstep.trading.chartstate.RaidDetector;
 import com.topstep.trading.chartstate.LiquidityRaid;
+import com.topstep.trading.chartstate.KnownLevel;
 import com.topstep.trading.chartstate.LevelEngine;
 import com.topstep.trading.chartstate.EqualLevelDetector;
 import com.topstep.trading.chartstate.CandleSeries;
@@ -21,6 +22,7 @@ import com.topstep.trading.validation.ValidationResult;
 
 import com.topstep.trading.strategy.DailyAmdCycleTracker.DailyPhase;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -176,6 +178,9 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     private boolean isConsolidating = false;
     private boolean hasTrendlineBreak = false;
     private SmtDivergenceResult smtResult = null;
+
+    // AMD Override state — allows trades against HTF when AMD + sweep + displacement confirm
+    private boolean amdOverridesHtf = false;
 
     // Macro news state (NEW)
     private MacroAlignment macroAlignment = MacroAlignment.NEUTRAL;
@@ -529,6 +534,13 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
             return;
         }
 
+        // Cap tier when AMD overrode HTF — HTF not yet confirmed, conservative sizing
+        if (amdOverridesHtf && currentTier != null && currentTier.getLevel() > 2) {
+            System.out.println("[" + primarySymbol + "] AMD OVERRIDE: Capping tier from " +
+                    currentTier + " to TIER_2 (HTF not yet confirmed)");
+            currentTier = TradeTier.TIER_2;
+        }
+
         // ═══════════════════════════════════════════════════════════════════════════
         // FINAL VALIDATION: Asymmetric Long/Short Requirements
         // Based on trade recap: Longs 37.5% WR (-$1,106), Shorts 60% WR (+$2,509)
@@ -711,6 +723,7 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         macroAlignment = MacroAlignment.NEUTRAL;
         newsSizeMultiplier = 1.0;
         macroConfluenceAdjustment = 0;
+        amdOverridesHtf = false;
         // Reset cascade state
         currentHtfTrendState = htfTrendAnalyzer.getTrendState();
         continuationZoneScore = 0;
@@ -771,32 +784,13 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         // 3.5. 3-LAYER CASCADE CHECK (PRIMARY DIRECTIONAL FILTER)
         // This is THE most important check — HTF trend as the dominant gate.
         // If HTF is ranging, NO trades. If HTF opposes, NO trades.
+        // EXCEPTION: AMD override can bypass HTF when manipulation/distribution
+        // phase + sweep + displacement confirm a reversal or retest.
         // ═══════════════════════════════════════════════════════════════════════════
         currentHtfTrendState = htfTrendAnalyzer.getTrendState();
 
-        // LAYER 1: HTF Trend Direction Gate
-        if (!htfTrendAnalyzer.isTrending()) {
-            htfTrendRanging++;
-            if (shouldLog) {
-                System.out.println("[" + primarySymbol + "] CASCADE L1 BLOCKED: HTF ranging (" +
-                        htfTrendAnalyzer.getSummary() + ") — NO TRADES");
-            }
-            return false;
-        }
-
-        if (!htfTrendAnalyzer.allowsDirection(isBullish1m)) {
-            htfTrendOpposing++;
-            if (shouldLog) {
-                System.out.println("[" + primarySymbol + "] CASCADE L1 BLOCKED: HTF trend opposes " +
-                        (isBullish1m ? "LONGS" : "SHORTS") + " (" +
-                        currentHtfTrendState.getDisplayName() + ")");
-            }
-            return false;
-        }
-
         // ═══════════════════════════════════════════════════════════════════════════
-        // GATE 2: DAILY AMD PHASE (FIX 1 — only enter during manipulation phases)
-        // MANIPULATION_DOWN → longs valid, MANIPULATION_UP → shorts valid
+        // GATE 2: DAILY AMD PHASE (FIX 1 — evaluated BEFORE HTF gate)
         // ═══════════════════════════════════════════════════════════════════════════
         DailyPhase amdPhase = dailyAmdTracker.getCurrentPhase();
         if (shouldLog) {
@@ -813,6 +807,100 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
             }
             // Don't hard-block — AMD is advisory, not a gate
             // But it affects scoring and tier eligibility via FIX 8 and FIX 10
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // GATE 2.5 — AMD OVERRIDE EVALUATION
+        // When Daily AMD is in a MANIPULATION or DISTRIBUTION phase and a confirmed
+        // sweep + displacement exists in the reversal/retest direction, the HTF gate
+        // is overridden. Reason: HTF trend LAGS by 30-45 min during manipulation
+        // reversals and distribution retests. AMD phase + sweep + displacement is
+        // a LEADING signal.
+        // ═══════════════════════════════════════════════════════════════════════════
+        amdOverridesHtf = false;
+
+        if (dailyAmdTracker != null) {
+            // === MANIPULATION PHASE OVERRIDES ===
+
+            if (amdPhase == DailyPhase.MANIPULATION_DOWN && isBullish1m) {
+                // 15m is BEARISH from the selloff, but price JUST swept lows — reversal starting
+                boolean hasConfirmedSweep = raidDetector.hasActiveRaidForDirection(true);
+                boolean hasDispConfirmation = displacementDetector.hasRecentDisplacement(5, true);
+                amdOverridesHtf = hasConfirmedSweep && hasDispConfirmation;
+
+                if (amdOverridesHtf && shouldLog) {
+                    System.out.println("[" + primarySymbol + "] ★ AMD OVERRIDE (MANIP): HTF=" +
+                            currentHtfTrendState.getDisplayName() +
+                            " but AMD=MANIPULATION_DOWN + sweep + displacement — ALLOWING LONG");
+                }
+            }
+            else if (amdPhase == DailyPhase.MANIPULATION_UP && !isBullish1m) {
+                // 15m is BULLISH/RANGING, but price JUST swept highs — reversal starting
+                boolean hasConfirmedSweep = raidDetector.hasActiveRaidForDirection(false);
+                boolean hasDispConfirmation = displacementDetector.hasRecentDisplacement(5, false);
+                amdOverridesHtf = hasConfirmedSweep && hasDispConfirmation;
+
+                if (amdOverridesHtf && shouldLog) {
+                    System.out.println("[" + primarySymbol + "] ★ AMD OVERRIDE (MANIP): HTF=" +
+                            currentHtfTrendState.getDisplayName() +
+                            " but AMD=MANIPULATION_UP + sweep + displacement — ALLOWING SHORT");
+                }
+            }
+
+            // === DISTRIBUTION PHASE RETESTS ===
+            // During DISTRIBUTION_DOWN: price has already broken support. If price rallies
+            // back to the broken level (zone-flip breaker) and we detect rejection,
+            // allow the short even though HTF shows bullish from the rally.
+            // This is a RETEST pattern — the structural break already happened.
+
+            else if (amdPhase == DailyPhase.DISTRIBUTION_DOWN && !isBullish1m) {
+                boolean hasZoneFlipBreaker = hasNearbyZoneFlipBreaker(candle, false);
+                boolean priceAtBreaker = isPriceAtBreakerZone(candle, false);
+                boolean hasBearishRejection = displacementDetector.hasRecentDisplacement(3, false)
+                        || hasRejectionCandle(candle, false);
+
+                amdOverridesHtf = hasZoneFlipBreaker && priceAtBreaker && hasBearishRejection;
+
+                if (amdOverridesHtf && shouldLog) {
+                    System.out.println("[" + primarySymbol + "] ★ AMD OVERRIDE (RETEST): HTF=" +
+                            currentHtfTrendState.getDisplayName() +
+                            " but AMD=DISTRIBUTION_DOWN + zone-flip breaker retest — ALLOWING SHORT");
+                }
+            }
+            else if (amdPhase == DailyPhase.DISTRIBUTION_UP && isBullish1m) {
+                boolean hasZoneFlipBreaker = hasNearbyZoneFlipBreaker(candle, true);
+                boolean priceAtBreaker = isPriceAtBreakerZone(candle, true);
+                boolean hasBullishRejection = displacementDetector.hasRecentDisplacement(3, true)
+                        || hasRejectionCandle(candle, true);
+
+                amdOverridesHtf = hasZoneFlipBreaker && priceAtBreaker && hasBullishRejection;
+
+                if (amdOverridesHtf && shouldLog) {
+                    System.out.println("[" + primarySymbol + "] ★ AMD OVERRIDE (RETEST): HTF=" +
+                            currentHtfTrendState.getDisplayName() +
+                            " but AMD=DISTRIBUTION_UP + zone-flip breaker retest — ALLOWING LONG");
+                }
+            }
+        }
+
+        // LAYER 1: HTF Trend Direction Gate (with AMD override bypass)
+        if (!htfTrendAnalyzer.isTrending() && !amdOverridesHtf) {
+            htfTrendRanging++;
+            if (shouldLog) {
+                System.out.println("[" + primarySymbol + "] CASCADE L1 BLOCKED: HTF ranging (" +
+                        htfTrendAnalyzer.getSummary() + ") — NO TRADES");
+            }
+            return false;
+        }
+
+        if (!htfTrendAnalyzer.allowsDirection(isBullish1m) && !amdOverridesHtf) {
+            htfTrendOpposing++;
+            if (shouldLog) {
+                System.out.println("[" + primarySymbol + "] CASCADE L1 BLOCKED: HTF trend opposes " +
+                        (isBullish1m ? "LONGS" : "SHORTS") + " (" +
+                        currentHtfTrendState.getDisplayName() + ")");
+            }
+            return false;
         }
 
         // LAYER 2: 5m Continuation Zone (optional but boosts tier)
@@ -1435,14 +1523,15 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         // Check if this trade was promoted (currently always false - future enhancement)
         boolean wasPromoted = false;
 
-        // Run mandatory validation
+        // Run mandatory validation (pass AMD override to skip HTF check when active)
         ValidationResult result = mandatoryValidator.validateEntry(
                 primarySymbol,
                 bias,
                 raidDirection,
                 isBullish,
                 marketConditionScore,
-                wasPromoted
+                wasPromoted,
+                amdOverridesHtf
         );
 
         if (result.failed()) {
@@ -1744,6 +1833,79 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     /**
      * Build signal reason string.
      */
+    // ═══════════════════════════════════════════════════════════════════════════
+    // AMD OVERRIDE HELPER METHODS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Check if a zone-flip breaker exists near the current price.
+     * Uses LevelEngine's flipped levels (from Fix 3).
+     *
+     * @param candle Current candle
+     * @param bullish true = looking for bullish breaker (broken resistance now support)
+     *                false = looking for bearish breaker (broken support now resistance)
+     */
+    private boolean hasNearbyZoneFlipBreaker(Candle candle, boolean bullish) {
+        double tolerance = getTickSizeForSymbol(primarySymbol) * 20; // ~5 points on NQ
+        List<KnownLevel> allLevels = levelEngine.getAllLevels();
+
+        for (KnownLevel level : allLevels) {
+            if (!level.isFlipped()) continue;
+
+            if (!bullish && level.getType().isLowLevel()) {
+                // Was a low/support level, now flipped to resistance (bearish breaker)
+                if (Math.abs(candle.getClose() - level.getPrice()) <= tolerance) {
+                    return true;
+                }
+            }
+            if (bullish && level.getType().isHighLevel()) {
+                // Was a high/resistance level, now flipped to support (bullish breaker)
+                if (Math.abs(candle.getClose() - level.getPrice()) <= tolerance) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check if price is currently at/inside a breaker block zone.
+     * This means price has rallied (or dropped) back to the broken level.
+     */
+    private boolean isPriceAtBreakerZone(Candle candle, boolean bullish) {
+        if (currentBreaker != null) {
+            double bLow = currentBreaker.getLow();
+            double bHigh = currentBreaker.getHigh();
+            return candle.getClose() >= bLow && candle.getClose() <= bHigh;
+        }
+        // Also check BreakerBlockDetector for zone-flip breakers
+        BreakerBlock nearest = breakerBlockDetector.findNearestBreaker(
+                candle.getClose(), !bullish, // !bullish because bearish breaker for short
+                getTickSizeForSymbol(primarySymbol) * 20
+        );
+        return nearest != null;
+    }
+
+    /**
+     * Check if the current candle shows rejection characteristics.
+     * Long upper wick for bearish rejection, long lower wick for bullish rejection.
+     */
+    private boolean hasRejectionCandle(Candle candle, boolean bullish) {
+        double body = Math.abs(candle.getClose() - candle.getOpen());
+        double fullRange = candle.getHigh() - candle.getLow();
+        if (fullRange < 0.0001) return false;
+
+        if (!bullish) {
+            // Bearish rejection: upper wick >= 60% of total range
+            double upperWick = candle.getHigh() - Math.max(candle.getOpen(), candle.getClose());
+            return (upperWick / fullRange) >= 0.6;
+        } else {
+            // Bullish rejection: lower wick >= 60% of total range
+            double lowerWick = Math.min(candle.getOpen(), candle.getClose()) - candle.getLow();
+            return (lowerWick / fullRange) >= 0.6;
+        }
+    }
+
     private String buildSignalReason(String direction, Candle candle) {
         StringBuilder reason = new StringBuilder();
         reason.append(direction).append(": ").append(currentTier);

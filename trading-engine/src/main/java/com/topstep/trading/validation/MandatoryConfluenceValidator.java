@@ -93,16 +93,32 @@ public class MandatoryConfluenceValidator {
             boolean isBullish,
             int marketConditionScore,
             boolean wasPromoted) {
+        return validateEntry(symbol, bias, sweep, isBullish, marketConditionScore, wasPromoted, false);
+    }
+
+    /**
+     * Validates all mandatory confluences for trade entry.
+     * Overloaded version that accepts AMD override flag.
+     *
+     * @param amdOverride True if AMD override is active (HTF gate bypassed)
+     */
+    public ValidationResult validateEntry(
+            String symbol,
+            MarketBias bias,
+            RaidDirection sweep,
+            boolean isBullish,
+            int marketConditionScore,
+            boolean wasPromoted,
+            boolean amdOverride) {
 
         List<String> failures = new ArrayList<>();
         List<String> confirmations = new ArrayList<>();
 
         // ═══════════════════════════════════════════════════════════════
         // CHECK 0: HTF Trend Direction (MANDATORY — Layer 1 of cascade)
-        // This is THE most important check. If HTF doesn't allow this
-        // direction, nothing else matters.
+        // Skipped when AMD override is active (sweep + displacement confirmed)
         // ═══════════════════════════════════════════════════════════════
-        if (htfTrendAnalyzer != null) {
+        if (htfTrendAnalyzer != null && !amdOverride) {
             HtfTrendState trendState = htfTrendAnalyzer.getTrendState();
             if (!htfTrendAnalyzer.allowsDirection(isBullish)) {
                 failures.add(String.format("✗ HTF Trend blocks %s. State=%s. Trading WITH the trend is mandatory.",
@@ -112,6 +128,8 @@ public class MandatoryConfluenceValidator {
                         trendState.getDisplayName(), isBullish ? "longs" : "shorts",
                         trendState.getSizeMultiplier() * 100));
             }
+        } else if (amdOverride) {
+            confirmations.add("★ AMD Override active — HTF gate bypassed (sweep + displacement confirmed)");
         }
 
         // ═══════════════════════════════════════════════════════════════
