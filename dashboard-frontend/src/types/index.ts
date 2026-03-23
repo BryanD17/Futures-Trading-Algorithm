@@ -49,3 +49,75 @@ export interface DailyMetrics {
   winRate: number
   maxDrawdown: number
 }
+
+export interface LifecycleState {
+  phase: string
+  phaseDisplayName: string
+  currentEquity: number
+  startingBalance: number
+  profitTarget: number
+  maxLossLimit: number
+  dailyLossLimit: number
+  distanceToTarget: number
+  distanceToBlowup: number
+  targetCompletionPct: number
+  drawdownUsagePct: number
+  riskBudgetRemaining: number
+  riskZone: string
+  riskZoneDescription: string
+  riskZoneColor: string
+  riskZoneMultiplier: number
+  tradingDaysElapsed: number
+  totalTradesTaken: number
+  consecutiveLosses: number
+  tradingPausedForDay: boolean
+  highWaterMark: number
+}
+
+export interface PassProbability {
+  passProbability: number
+  blowupProbability: number
+  timeoutProbability: number
+  expectedPayout: number
+  iterations: number
+}
+
+export interface EquityFanBand {
+  day: number
+  p5: number
+  p25: number
+  p50: number
+  p75: number
+  p95: number
+}
+
+export interface SimulationResult {
+  passRate: number
+  blowupRate: number
+  timeoutRate: number
+  avgTradesToPass: number
+  avgDaysToPass: number
+  expectedPayout: number
+  maxDrawdownP50: number
+  maxDrawdownP95: number
+  maxDrawdownP99: number
+}
+
+export interface OptimizationPoint {
+  riskPct: number
+  passRate: number
+  blowupRate: number
+  expectedPayout: number
+  avgTradesToPass: number
+  maxDrawdownP95: number
+}
+
+export interface ChallengeEconomics {
+  challengesPassed: number
+  challengesTotal: number
+  passRate: number
+  totalFeesPaid: number
+  totalPayoutsReceived: number
+  totalNetProfit: number
+  roi: number
+}

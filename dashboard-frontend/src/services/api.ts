@@ -64,6 +64,50 @@ export const JournalService = {
   }
 }
 
+export const LifecycleService = {
+  async getLifecycle(): Promise<any> {
+    const response = await api.get('/lifecycle')
+    return response.data
+  },
+
+  async getPassProbability(): Promise<any> {
+    const response = await api.get('/lifecycle/pass-probability')
+    return response.data
+  },
+
+  async getEquityFan(): Promise<any> {
+    const response = await api.get('/lifecycle/equity-fan')
+    return response.data
+  },
+
+  async getEconomics(): Promise<any> {
+    const response = await api.get('/lifecycle/economics')
+    return response.data
+  }
+}
+
+export const SimulationService = {
+  async runSimulation(params: any): Promise<any> {
+    const response = await api.post('/simulate', params)
+    return response.data
+  },
+
+  async runOptimization(params: any): Promise<any> {
+    const response = await api.post('/optimize', params)
+    return response.data
+  },
+
+  async getResult(id: number): Promise<any> {
+    const response = await api.get(`/simulate/results/${id}`)
+    return response.data
+  },
+
+  async getRecentResults(): Promise<any[]> {
+    const response = await api.get('/simulate/results')
+    return response.data
+  }
+}
+
 export const ControlService = {
   async start(mode: string = 'SIM'): Promise<{ status: string; message: string; warning?: string }> {
     const response = await api.post(`/control/start?mode=${mode}`)

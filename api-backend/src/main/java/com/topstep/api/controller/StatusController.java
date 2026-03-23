@@ -53,6 +53,16 @@ public class StatusController {
                     status.put("totalPnL", account.getRealizedPnL());
                     status.put("openPositions", account.getPositions().size());
                     status.put("accountInGoodStanding", engine.isAccountInGoodStanding());
+
+                    // Add lifecycle info if available
+                    if (engine.getCurrentPhase() != null) {
+                        status.put("phase", engine.getCurrentPhase().name());
+                        status.put("phaseDisplayName", engine.getCurrentPhase().getDisplayName());
+                        status.put("riskZone", engine.getCurrentRiskZone().name());
+                        status.put("targetCompletionPct", engine.getTargetCompletionPct());
+                        status.put("drawdownUsagePct", engine.getDrawdownUsagePct());
+                        status.put("distanceToTarget", engine.getDistanceToTarget());
+                    }
                 } catch (IllegalStateException e) {
                     // Engine not fully initialized yet
                     status.put("accountStatus", "Initializing...");

@@ -6,6 +6,11 @@ import Trades from './components/Trades'
 import Risk from './components/Risk'
 import Journal from './components/Journal'
 import Controls from './components/Controls'
+import PhaseTracker from './components/PhaseTracker'
+import PassProbabilityGauge from './components/PassProbabilityGauge'
+import EquityFanChart from './components/EquityFanChart'
+import SimulatorView from './components/SimulatorView'
+import ChallengeEconomicsPanel from './components/ChallengeEconomicsPanel'
 import { StatusService } from './services/api'
 
 function App() {
@@ -71,15 +76,36 @@ function App() {
         >
           Journal
         </button>
+        <button
+          className={activeTab === 'simulator' ? 'active' : ''}
+          onClick={() => setActiveTab('simulator')}
+        >
+          Simulator
+        </button>
+        <button
+          className={activeTab === 'economics' ? 'active' : ''}
+          onClick={() => setActiveTab('economics')}
+        >
+          Economics
+        </button>
       </nav>
 
       <main className="content">
         <Controls />
-        {activeTab === 'overview' && <Overview />}
+        <PhaseTracker />
+        <PassProbabilityGauge />
+        {activeTab === 'overview' && (
+          <>
+            <EquityFanChart />
+            <Overview />
+          </>
+        )}
         {activeTab === 'positions' && <Positions />}
         {activeTab === 'trades' && <Trades />}
         {activeTab === 'risk' && <Risk />}
         {activeTab === 'journal' && <Journal />}
+        {activeTab === 'simulator' && <SimulatorView />}
+        {activeTab === 'economics' && <ChallengeEconomicsPanel />}
       </main>
     </div>
   )
