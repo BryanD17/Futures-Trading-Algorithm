@@ -5,7 +5,12 @@ import com.topstep.trading.domain.Position;
 import com.topstep.trading.domain.RiskLimits;
 import com.topstep.trading.domain.Trade;
 import com.topstep.trading.execution.ExecutionEngine;
+import com.topstep.trading.lifecycle.AccountLifecycle;
+import com.topstep.trading.lifecycle.AccountPhase;
+import com.topstep.trading.lifecycle.RiskZone;
+import com.topstep.trading.risk.PhaseAwareRiskCalculator;
 import com.topstep.trading.risk.PropFirmRiskEngine;
+import com.topstep.trading.risk.RiskProfile;
 import com.topstep.trading.strategy.TradingStrategy;
 
 import java.util.Collections;
@@ -44,6 +49,11 @@ public class EngineFacade {
     private PropFirmRiskEngine riskEngine;
     private SimEngineRunner simRunner;
     private LiveEngineRunner liveRunner;
+
+    // Convex Payoff Optimization Layer
+    private AccountLifecycle accountLifecycle;
+    private RiskProfile activeRiskProfile;
+    private PhaseAwareRiskCalculator phaseAwareRiskCalculator;
 
     /**
      * Private constructor for singleton.
@@ -484,5 +494,87 @@ public class EngineFacade {
      */
     public PropFirmRiskEngine getRiskEngine() {
         return riskEngine;
+    }
+
+    // ==================== Lifecycle Operations ====================
+
+    /**
+     * Initialize the account lifecycle for convex payoff optimization.
+     */
+    public void initializeLifecycle(AccountLifecycle lifecycle) {
+        this.accountLifecycle = lifecycle;
+        this.phaseAwareRiskCalculator = new PhaseAwareRiskCalculator();
+        this.activeRiskProfile = getProfileForPhase(lifecycle.getCurrentPhase());
+    }
+
+    /**
+     * Get the active account lifecycle.
+     */
+    public AccountLifecycle getAccountLifecycle() {
+        return accountLifecycle;
+    }
+
+    /**
+     * Get the active risk profile for the current phase.
+     */
+    public RiskProfile getActiveRiskProfile() {
+        if (activeRiskProfile == null && accountLifecycle != null) {
+            activeRiskProfile = getProfileForPhase(accountLifecycle.getCurrentPhase());
+        }
+        return activeRiskProfile;
+    }
+
+    /**
+     * Get the phase-aware risk calculator.
+     */
+    public PhaseAwareRiskCalculator getPhaseAwareRiskCalculator() {
+        return phaseAwareRiskCalculator;
+    }
+
+    /**
+     * Get current account phase.
+     */
+    public AccountPhase getCurrentPhase() {
+        return accountLifecycle != null ? accountLifecycle.getCurrentPhase() : null;
+    }
+
+    /**
+     * Get current risk zone.
+     */
+    public RiskZone getCurrentRiskZone() {
+        return accountLifecycle != null ? accountLifecycle.getCurrentRiskZone() : RiskZone.NORMAL;
+    }
+
+    /**
+     * Get distance to profit target.
+     */
+    public double getDistanceToTarget() {
+        return accountLifecycle != null ? accountLifecycle.distanceToTarget() : 0.0;
+    }
+
+    /**
+     * Get drawdown usage percentage.
+     */
+    public double getDrawdownUsagePct() {
+        return accountLifecycle != null ? accountLifecycle.drawdownUsagePct() : 0.0;
+    }
+
+    /**
+     * Get target completion percentage.
+     */
+    public double getTargetCompletionPct() {
+        return accountLifecycle != null ? accountLifecycle.targetCompletionPct() : 0.0;
+    }
+
+    /**
+     * Get the risk profile for a given account phase.
+     */
+    private RiskProfile getProfileForPhase(AccountPhase phase) {
+        switch (phase) {
+            case EVALUATION:        return RiskProfile.topstep50kEvaluation();
+            case FUNDED_PROBATION:  return RiskProfile.topstep50kFunded();
+            case FUNDED_SCALING:    return RiskProfile.topstep50kScaling();
+            default:                return RiskProfile.topstep50kEvaluation();
+        }
     }
 }
