@@ -34,6 +34,7 @@ public class PropFirmRiskEngine {
 
     /**
      * Evaluate a strategy signal against account state and risk limits.
+     * Uses the static riskPerTrade from RiskLimits (backward compatible).
      *
      * @param signal Strategy signal with entry, stop, and target
      * @param account Current account state
@@ -41,6 +42,24 @@ public class PropFirmRiskEngine {
      * @return RiskDecision indicating whether trade is allowed
      */
     public RiskDecision evaluate(StrategySignalEvent signal, AccountState account, RiskLimits limits) {
+        return evaluate(signal, account, limits, limits.getRiskPerTrade());
+    }
+
+    /**
+     * Evaluate a strategy signal with dynamic risk per trade from PhaseAwareRiskCalculator.
+     * The dynamic risk replaces the static $250 value based on account phase, zone, and setup quality.
+     *
+     * CRITICAL: All existing DLL/MLL/max contract checks remain unchanged.
+     * The dynamic risk is an ADDITIONAL layer on top of existing safety checks.
+     *
+     * @param signal Strategy signal with entry, stop, and target
+     * @param account Current account state
+     * @param limits Risk limits to enforce
+     * @param dynamicRiskPerTrade Dollar risk for this specific trade (from PhaseAwareRiskCalculator)
+     * @return RiskDecision indicating whether trade is allowed
+     */
+    public RiskDecision evaluate(StrategySignalEvent signal, AccountState account, RiskLimits limits,
+                                  double dynamicRiskPerTrade) {
 
         // 1. Check Daily Loss Limit (DLL)
         double netDailyPnl = account.getNetDailyPnl();
@@ -88,9 +107,9 @@ public class PropFirmRiskEngine {
             return RiskDecision.deny("Invalid risk calculation: " + dollarRiskPerContract);
         }
 
-        // Position size: Use a fraction of DLL per trade (e.g., 25% of DLL)
-        // CRITICAL: Cap risk to remaining daily loss room to avoid exceeding DLL
-        double riskPerTrade = Math.min(limits.getRiskPerTrade(), remainingDailyLoss);
+        // Position size: Use dynamic risk (from PhaseAwareRiskCalculator) instead of static value
+        // CRITICAL: Still cap risk to remaining daily loss room to avoid exceeding DLL
+        double riskPerTrade = Math.min(dynamicRiskPerTrade, remainingDailyLoss);
         int quantity = (int) Math.floor(riskPerTrade / dollarRiskPerContract);
 
         // MINIMUM 1 CONTRACT: If calculation gives 0 but risk is within acceptable limit, allow 1 contract
@@ -154,9 +173,10 @@ public class PropFirmRiskEngine {
                 .build();
 
         String approvalReason = String.format(
-                "Approved: %d contracts, $%.2f risk/trade, R:R %.2f:1, DLL room: $%.2f",
+                "Approved: %d contracts, $%.2f dynamic risk/trade (base $%.2f), R:R %.2f:1, DLL room: $%.2f",
                 quantity,
-                dollarRiskPerContract * quantity,
+                dynamicRiskPerTrade,
+                limits.getRiskPerTrade(),
                 rewardRiskRatio,
                 remainingDailyLoss
         );

@@ -303,6 +303,29 @@ public class AccountLifecycle {
     public List<Double> getEquityPathHistory() { return Collections.unmodifiableList(equityPathHistory); }
     public List<PhaseTransitionEvent> getTransitionHistory() { return Collections.unmodifiableList(transitionHistory); }
 
+    // ==================== Live Equity Sync ====================
+
+    /**
+     * Sync equity from the live AccountState.
+     * Called periodically (e.g., on each candle) to keep lifecycle metrics current.
+     * Updates currentEquity and high water mark based on live balance.
+     *
+     * @param liveEquity The current equity from AccountState
+     */
+    public void syncEquityFromLive(double liveEquity) {
+        this.currentEquity = liveEquity;
+        if (liveEquity > currentHighWaterMark) {
+            currentHighWaterMark = liveEquity;
+        }
+    }
+
+    /**
+     * Reset consecutive loss counter (e.g., at start of new trading day).
+     */
+    public void resetConsecutiveLosses() {
+        this.consecutiveLosses = 0;
+    }
+
     // ==================== Factories ====================
 
     /**
