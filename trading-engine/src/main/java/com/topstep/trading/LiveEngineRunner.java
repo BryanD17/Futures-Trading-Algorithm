@@ -10,8 +10,12 @@ import com.topstep.trading.event.StrategySignalEvent;
 import com.topstep.trading.execution.ExecutionEngine;
 import com.topstep.trading.execution.BracketOrderManager;
 import com.topstep.trading.journal.TradeJournalService;
+import com.topstep.trading.lifecycle.AccountLifecycle;
+import com.topstep.trading.lifecycle.RiskZone;
+import com.topstep.trading.risk.PhaseAwareRiskCalculator;
 import com.topstep.trading.risk.PropFirmRiskEngine;
 import com.topstep.trading.risk.RiskDecision;
+import com.topstep.trading.risk.RiskProfile;
 import com.topstep.trading.risk.TradingRiskManager;
 import com.topstep.trading.strategy.DefaultStrategyContext;
 import com.topstep.trading.strategy.IctHighConfluenceStrategy;
@@ -108,6 +112,13 @@ public class LiveEngineRunner {
     // EXPRESS Funded Account flag - these accounts start at $0 balance (not $50K)
     // Balance represents P&L accumulated since account creation
     private final boolean isExpressAccount;
+
+    // === Convex Payoff Optimization: Lifecycle-aware dynamic risk sizing ===
+    private final AccountLifecycle lifecycle;
+    private final PhaseAwareRiskCalculator riskCalculator;
+    private final RiskProfile riskProfile;
+    private volatile int tradesToday = 0;
+    private volatile LocalDate lastTradingDate = null;
 
     /**
      * Create a new LIVE engine with Topstep 50K configuration.
@@ -283,6 +294,23 @@ public class LiveEngineRunner {
         } else {
             this.multiEngine = null;
         }
+
+        // === Convex Payoff Optimization: Initialize lifecycle-aware risk components ===
+        this.lifecycle = AccountLifecycle.topstep50kEvaluation();
+        this.riskProfile = RiskProfile.topstep50kEvaluation();
+        this.riskCalculator = new PhaseAwareRiskCalculator();
+
+        // Register lifecycle with the facade for dashboard access
+        EngineFacade.getInstance().initializeLifecycle(lifecycle);
+
+        System.out.println("\n  CONVEX PAYOFF OPTIMIZATION: ACTIVE");
+        System.out.println("  - Dynamic risk sizing based on account zone & setup quality");
+        System.out.println("  - Zone multipliers: NORMAL=1.0x, PROTECTION=0.6x, CAUTION=0.7x, DANGER=0.4x, CRUISE=0.3x");
+        System.out.println("  - Quality gates: min quality " + riskProfile.getMinSetupQuality() +
+            " (cruise: " + riskProfile.getCruiseMinQuality() + ")");
+        System.out.println("  - Base risk: " + String.format("%.2f%%", riskProfile.getBaseRiskPct() * 100) +
+            " of $" + String.format("%.0f", lifecycle.getStartingBalance()) +
+            " = $" + String.format("%.0f", lifecycle.getStartingBalance() * riskProfile.getBaseRiskPct()));
 
         // Subscribe to strategy signals
         eventBus.subscribe(StrategySignalEvent.class, this::handleStrategySignal);
@@ -502,6 +530,25 @@ public class LiveEngineRunner {
             // Update context time
             strategyContext.setCurrentTime(candle.getTimestamp());
 
+            // === Convex Payoff: Detect new trading day and sync lifecycle equity ===
+            LocalDate candleDate = candle.getTimestamp()
+                .atZone(CT_ZONE).toLocalDate();
+            if (lastTradingDate == null || !candleDate.equals(lastTradingDate)) {
+                if (lastTradingDate != null) {
+                    // End of previous day: record daily PnL
+                    double dayPnl = accountState.getNetDailyPnl();
+                    lifecycle.onDayEnd(dayPnl);
+                    System.out.println("[LIFECYCLE] New trading day detected. Previous day PnL: $" +
+                        String.format("%.2f", dayPnl));
+                }
+                tradesToday = 0;
+                lastTradingDate = candleDate;
+            }
+
+            // Sync lifecycle equity from live account state on every candle
+            lifecycle.syncEquityFromLive(accountState.getEquity());
+            lifecycle.updateIntradayPnl(accountState.getNetDailyPnl());
+
             // Process through execution engine first (fills, stops, targets)
             executionEngine.onNewCandle(candle);
 
@@ -616,12 +663,41 @@ public class LiveEngineRunner {
             }
         }
 
-        // STEP 2: Evaluate against prop firm risk limits (DLL, MLL, position sizing)
-        RiskDecision decision = riskEngine.evaluate(signal, accountState, riskLimits);
+        // STEP 2: Calculate dynamic risk via PhaseAwareRiskCalculator
+        int setupQuality = extractSetupQuality(signal);
+        RiskZone currentZone = lifecycle.getCurrentRiskZone();
+
+        // Log lifecycle state before every risk decision
+        System.out.println(String.format(
+            "[LIFECYCLE] Phase=%s Zone=%s Target=%.1f%% DD=%.1f%% ConsecLoss=%d Budget=$%.0f DLLRoom=$%.0f",
+            lifecycle.getCurrentPhase(), currentZone,
+            lifecycle.targetCompletionPct() * 100,
+            lifecycle.drawdownUsagePct() * 100,
+            lifecycle.getConsecutiveLosses(),
+            lifecycle.riskBudgetRemaining(),
+            lifecycle.dailyLossRoomRemaining()
+        ));
+
+        PhaseAwareRiskCalculator.RiskCalculation riskCalc =
+            riskCalculator.calculateRisk(lifecycle, riskProfile, setupQuality, tradesToday);
+
+        System.out.println("[DYNAMIC RISK] " + riskCalc);
+
+        if (!riskCalc.isTradingAllowed()) {
+            System.out.println("\n❌ Signal DENIED by PhaseAwareRiskCalculator: " + signal.getReason());
+            System.out.println("  Reason: " + riskCalc.getBlockReason());
+            return;
+        }
+
+        // STEP 3: Evaluate against prop firm risk limits with dynamic risk amount
+        double dynamicRisk = riskCalc.getRiskDollars();
+        RiskDecision decision = riskEngine.evaluate(signal, accountState, riskLimits, dynamicRisk);
 
         if (decision.isAllowed()) {
             System.out.println("\n✓ LIVE Signal APPROVED: " + signal.getReason());
             System.out.println("  Tier: " + signal.getTier() + " | R:R: 1:" + signal.getRiskRewardRatio());
+            System.out.println("  Dynamic Risk: $" + String.format("%.2f", dynamicRisk) +
+                " (zone=" + currentZone + ", quality=" + setupQuality + ")");
             System.out.println("  Quantity: " + signal.getQuantity() + " | " + decision.getReason());
 
             try {
@@ -907,13 +983,21 @@ public class LiveEngineRunner {
     }
 
     /**
-     * Notify risk manager when a position is closed.
+     * Notify risk manager and lifecycle when a position is closed.
      * Should be called when a trade completes (stop hit or target hit).
      */
     public void notifyPositionClosed(String symbol, double pnl) {
         if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
             multiEngine.notifyPositionClosed(symbol, pnl);
         }
+
+        // === Convex Payoff: Track trade in lifecycle for zone transitions ===
+        lifecycle.recordTrade(pnl);
+        tradesToday++;
+        System.out.println(String.format(
+            "[LIFECYCLE] Trade recorded: $%.2f | ConsecLoss=%d | TradesToday=%d | Zone=%s",
+            pnl, lifecycle.getConsecutiveLosses(), tradesToday, lifecycle.getCurrentRiskZone()
+        ));
     }
 
     /**
@@ -1425,6 +1509,31 @@ public class LiveEngineRunner {
         System.out.println("  Completed Trades: " + executionEngine.getCompletedTrades().size());
         System.out.println("  Open Positions: " + accountState.getPositions().size());
     }
+
+    /**
+     * Extract a numeric setup quality score (0-10) from the strategy signal.
+     * Derives quality from the trade tier since signals don't carry a separate quality score.
+     *
+     * Tier mapping:
+     *   TIER_4 (Elite) = 9, TIER_3 (Premium) = 7, TIER_2 (Standard) = 5, TIER_1 = 3
+     */
+    private int extractSetupQuality(StrategySignalEvent signal) {
+        TradeTier tier = signal.getTier();
+        if (tier == null) return 5;  // default to standard
+
+        switch (tier) {
+            case TIER_4: return 9;   // Elite: highest quality
+            case TIER_3: return 7;   // Premium: high quality
+            case TIER_2: return 5;   // Standard: acceptable
+            case TIER_1: return 3;   // Low: will be filtered by quality gate
+            default:     return 5;
+        }
+    }
+
+    // === Convex Payoff Optimization getters ===
+    public AccountLifecycle getLifecycle() { return lifecycle; }
+    public PhaseAwareRiskCalculator getRiskCalculator() { return riskCalculator; }
+    public RiskProfile getRiskProfile() { return riskProfile; }
 
     // Getters for facade access
     public AccountState getAccountState() { return accountState; }

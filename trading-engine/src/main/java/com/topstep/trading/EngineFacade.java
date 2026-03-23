@@ -164,6 +164,11 @@ public class EngineFacade {
                 null  // RiskEngine reference not needed by API
         );
 
+        // Wire lifecycle components from LiveEngineRunner for dashboard access
+        this.accountLifecycle = liveRunner.getLifecycle();
+        this.phaseAwareRiskCalculator = liveRunner.getRiskCalculator();
+        this.activeRiskProfile = liveRunner.getRiskProfile();
+
         Thread liveThread = new Thread(() -> {
             liveRunner.start();
         }, "LIVE-Engine-Thread");
