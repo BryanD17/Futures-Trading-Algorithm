@@ -104,6 +104,12 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     // Bidirectional Liquidity Model (FIX 4 — structural R:R targets)
     private final BidirectionalLiquidityModel bidirectionalModel;
 
+    // Statistical retracement system (replaces fixed Fibonacci OTE)
+    private final StatisticalRetracementEngine statisticalRetracement;
+    private final AdaptiveStopCalculator adaptiveStop;
+    private final ImpulseExtensionAnalyzer impulseAnalyzer;
+    private final VolatilityRegimeDetector volatilityRegime;
+
     // Configuration
     private final double fibLow = 0.62;   // OTE zone low
     private final double fibHigh = 0.705; // OTE zone high
@@ -241,6 +247,31 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
 
         // Initialize Bidirectional Liquidity Model (FIX 4)
         this.bidirectionalModel = new BidirectionalLiquidityModel(primarySymbol, levelEngine, equalLevelDetector);
+
+        // Initialize statistical retracement system (replaces fixed Fibonacci OTE)
+        this.statisticalRetracement = new StatisticalRetracementEngine(primarySymbol, 40);
+        this.adaptiveStop = new AdaptiveStopCalculator(primarySymbol, 20);
+        this.impulseAnalyzer = new ImpulseExtensionAnalyzer(primarySymbol, 30);
+        this.volatilityRegime = new VolatilityRegimeDetector(primarySymbol, 10, 50);
+
+        // Wire impulse analyzer into bidirectional model for target validation
+        this.bidirectionalModel.setImpulseAnalyzer(impulseAnalyzer);
+
+        // Register statistical retracement as swing point listener for pullback data
+        this.structureDetector.addSwingPointListener(statisticalRetracement);
+        // Register impulse analyzer as swing point listener for impulse data
+        this.structureDetector.addSwingPointListener(new SwingPointListener() {
+            @Override
+            public void onPullbackCompleted(double impulseRange, double pullbackRange,
+                                             int durationBars, boolean continued) {
+                // Handled by StatisticalRetracementEngine
+            }
+
+            @Override
+            public void onImpulseCompleted(double impulseSize, boolean bullish) {
+                impulseAnalyzer.recordImpulse(impulseSize);
+            }
+        });
 
         // Register zone flip listener (FIX 3): when a demand/supply level flips,
         // register it as a breaker block for future entries
@@ -625,6 +656,12 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         atrCalculator.update(candle);
         correlationTracker.update(candle);
 
+        // Update statistical retracement system components
+        adaptiveStop.update(candle);
+        impulseAnalyzer.update(candle);
+        volatilityRegime.update(candle);
+        // statisticalRetracement is updated via SwingPointListener callbacks from structureDetector
+
         // Update multi-timeframe analysis
         // Process candle through bar aggregation to get completed higher-TF candles
         Map<Timeframe, Candle> completedCandles = barManager.processCandle(candle);
@@ -769,6 +806,16 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         if (!atrCalculator.isTradeable()) {
             volatilityBlocked++;
             return false;
+        }
+
+        // 2.5. Check volatility regime for statistical model reliability
+        if (volatilityRegime.isModelUnreliable()) {
+            if (shouldLog) {
+                System.out.println("[" + primarySymbol + "] REGIME WARNING: Volatility transitioning — " +
+                        "statistical zones may be unreliable (ratio=" +
+                        String.format("%.2f", volatilityRegime.getRegimeRatio()) + ")");
+            }
+            // Don't block trades, but force conservative sizing downstream
         }
 
         // 3. Check 1-minute structure bias (quick filter)
@@ -1651,10 +1698,31 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         // Entry: Based on entry zone type
         double entry = calculateEntry(candle.getClose(), swingLow, range, true);
 
-        // Stop: Below entry zone with ATR adjustment
-        double stopMultiplier = atrCalculator.getStopMultiplier();
+        // Stop: Adaptive stop based on candle noise σ, with ATR fallback
         double baseStop = getBaseStopLevel(swingLow, true);
-        double stop = baseStop - (5.0 * stopMultiplier);
+        double stop;
+        if (adaptiveStop.isInitialized()) {
+            stop = adaptiveStop.calculateStop(baseStop, true);
+
+            // Validate the stop isn't too tight or too wide
+            AdaptiveStopCalculator.StopValidation validation =
+                    adaptiveStop.validateStop(Math.abs(entry - stop));
+            if (!validation.isValid()) {
+                System.out.println("[" + primarySymbol + "] STOP ADJUSTED: " + validation.getReason());
+                stop = entry - validation.getSuggestedDistance();
+            }
+        } else {
+            // Fallback to existing ATR-based stop
+            double stopMultiplier = atrCalculator.getStopMultiplier();
+            stop = baseStop - (5.0 * stopMultiplier);
+        }
+
+        // Reduce position size on LOW confidence retracement
+        StatisticalRetracementEngine.EntryConfidence confidence = statisticalRetracement.getConfidence();
+        if (confidence == StatisticalRetracementEngine.EntryConfidence.LOW) {
+            recommendedQuantity = Math.max(1, recommendedQuantity - 1);
+            System.out.println("[" + primarySymbol + "] STAT: LOW confidence retracement — reducing size");
+        }
 
         // FIX 4: Use BidirectionalLiquidityModel for structural R:R targets
         double riskDistance = entry - stop;
@@ -1704,10 +1772,31 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         // Entry: Based on entry zone type
         double entry = calculateEntry(candle.getClose(), swingHigh, range, false);
 
-        // Stop: Above entry zone with ATR adjustment
-        double stopMultiplier = atrCalculator.getStopMultiplier();
+        // Stop: Adaptive stop based on candle noise σ, with ATR fallback
         double baseStop = getBaseStopLevel(swingHigh, false);
-        double stop = baseStop + (5.0 * stopMultiplier);
+        double stop;
+        if (adaptiveStop.isInitialized()) {
+            stop = adaptiveStop.calculateStop(baseStop, false);
+
+            // Validate the stop isn't too tight or too wide
+            AdaptiveStopCalculator.StopValidation validation =
+                    adaptiveStop.validateStop(Math.abs(stop - entry));
+            if (!validation.isValid()) {
+                System.out.println("[" + primarySymbol + "] STOP ADJUSTED: " + validation.getReason());
+                stop = entry + validation.getSuggestedDistance();
+            }
+        } else {
+            // Fallback to existing ATR-based stop
+            double stopMultiplier = atrCalculator.getStopMultiplier();
+            stop = baseStop + (5.0 * stopMultiplier);
+        }
+
+        // Reduce position size on LOW confidence retracement
+        StatisticalRetracementEngine.EntryConfidence confidence = statisticalRetracement.getConfidence();
+        if (confidence == StatisticalRetracementEngine.EntryConfidence.LOW) {
+            recommendedQuantity = Math.max(1, recommendedQuantity - 1);
+            System.out.println("[" + primarySymbol + "] STAT: LOW confidence retracement — reducing size");
+        }
 
         // FIX 4: Use BidirectionalLiquidityModel for structural R:R targets
         double riskDistance = stop - entry;
@@ -1793,16 +1882,23 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
                           : currentFvg.getBottom() + (currentFvg.getTop() - currentFvg.getBottom()) * 0.25;
         }
 
-        // Default to OTE zone
-        if (bullish) {
-            double entryLow = swingLevel + (range * fibLow);
-            double entryHigh = swingLevel + (range * fibHigh);
-            return (entryLow + entryHigh) / 2.0;
-        } else {
-            double entryHigh = swingLevel - (range * fibLow);
-            double entryLow = swingLevel - (range * fibHigh);
-            return (entryLow + entryHigh) / 2.0;
+        // Default: statistical retracement zone (replaces fixed Fibonacci OTE)
+        double[] zone = statisticalRetracement.getEntryZone(swingLevel, range, bullish);
+        double optimalEntry = zone[1]; // midpoint of statistical zone
+
+        // Log entry zone details
+        System.out.println("[" + primarySymbol + "] STAT ENTRY: zone=[" +
+                String.format("%.2f", zone[0]) + " - " + String.format("%.2f", zone[2]) +
+                "], optimal=" + String.format("%.2f", optimalEntry) +
+                ", confidence=" + statisticalRetracement.getConfidence() +
+                ", regime=" + volatilityRegime.getRegime());
+
+        // Fib confluence bonus: statistical zone aligns with classic OTE
+        if (statisticalRetracement.hasFibConfluence()) {
+            System.out.println("[" + primarySymbol + "] STAT+FIB CONFLUENCE: Statistical zone aligns with OTE");
         }
+
+        return optimalEntry;
     }
 
     /**
@@ -1984,6 +2080,19 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
         System.out.println("  Sweep direction mismatch: " + sweepMismatch + " (" + pct(sweepMismatch) + ")");
         System.out.println("  HTF tier req not met:  " + htfRequirementsNotMet + " (" + pct(htfRequirementsNotMet) + ")");
         System.out.println("  No entry zone found:   " + noEntryZone + " (" + pct(noEntryZone) + ")");
+        System.out.println("\n  --- STATISTICAL MODEL SUMMARY ---");
+        System.out.println("  Retracement: mean=" + String.format("%.3f", statisticalRetracement.getMeanDepth()) +
+                ", σ=" + String.format("%.3f", statisticalRetracement.getStdDevDepth()) +
+                ", samples=" + statisticalRetracement.getSampleCount() +
+                ", fibConfluence=" + statisticalRetracement.hasFibConfluence());
+        System.out.println("  Noise buffer: " + String.format("%.2f", adaptiveStop.getNoiseBuffer()) + " pts" +
+                " (mean range=" + String.format("%.2f", adaptiveStop.getMeanRange()) +
+                ", σ=" + String.format("%.2f", adaptiveStop.getStdDevRange()) + ")");
+        System.out.println("  Impulse: mean=" + String.format("%.2f", impulseAnalyzer.getMeanImpulse()) +
+                " pts, σ=" + String.format("%.2f", impulseAnalyzer.getStdDevImpulse()) +
+                ", samples=" + impulseAnalyzer.getSampleCount());
+        System.out.println("  Regime: " + volatilityRegime.getRegime() +
+                " (ratio=" + String.format("%.2f", volatilityRegime.getRegimeRatio()) + ")");
         System.out.println("=".repeat(60));
     }
 
@@ -2072,4 +2181,10 @@ public class IctHighConfluenceStrategy implements TradingStrategy {
     public boolean isRequireMacroAlignedForLongs() { return requireMacroAlignedForLongs; }
     public boolean isRequireSmtForLongs() { return requireSmtForLongs; }
     public TradeTier getMinimumTierForLongs() { return minimumTierForLongs; }
+
+    // Statistical retracement system getters
+    public StatisticalRetracementEngine getStatisticalRetracement() { return statisticalRetracement; }
+    public AdaptiveStopCalculator getAdaptiveStop() { return adaptiveStop; }
+    public ImpulseExtensionAnalyzer getImpulseAnalyzer() { return impulseAnalyzer; }
+    public VolatilityRegimeDetector getVolatilityRegime() { return volatilityRegime; }
 }
