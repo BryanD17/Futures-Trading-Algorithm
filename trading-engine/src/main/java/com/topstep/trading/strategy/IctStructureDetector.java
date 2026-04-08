@@ -3,6 +3,7 @@ package com.topstep.trading.strategy;
 import com.topstep.trading.domain.Candle;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Detects higher-timeframe market structure using ICT concepts:
@@ -19,6 +20,14 @@ public class IctStructureDetector {
     private Double lastSwingLow;
     private MarketBias currentBias;
 
+    // Swing point listener support for statistical analysis components
+    private final List<SwingPointListener> swingPointListeners = new CopyOnWriteArrayList<>();
+
+    // Track previous swing points for impulse/pullback detection
+    private Double previousSwingHigh;
+    private Double previousSwingLow;
+    private int barsSinceLastSwing;
+
     public IctStructureDetector(int lookbackPeriod) {
         this.lookbackPeriod = lookbackPeriod;
         this.candles = new ArrayList<>();
@@ -26,10 +35,27 @@ public class IctStructureDetector {
     }
 
     /**
+     * Register a listener to receive swing point events.
+     */
+    public void addSwingPointListener(SwingPointListener listener) {
+        if (listener != null) {
+            swingPointListeners.add(listener);
+        }
+    }
+
+    /**
+     * Remove a swing point listener.
+     */
+    public void removeSwingPointListener(SwingPointListener listener) {
+        swingPointListeners.remove(listener);
+    }
+
+    /**
      * Update with a new candle and detect structure changes.
      */
     public void update(Candle candle) {
         candles.add(candle);
+        barsSinceLastSwing++;
 
         // Keep only the lookback period
         if (candles.size() > lookbackPeriod) {
@@ -67,15 +93,98 @@ public class IctStructureDetector {
             // Swing high: current high is higher than both neighbors
             // Store the most recent swing (not requiring it to be higher than previous)
             if (curr.getHigh() > prev.getHigh() && curr.getHigh() > next.getHigh()) {
+                Double oldSwingHigh = lastSwingHigh;
                 lastSwingHigh = curr.getHigh();
+
+                // Notify listeners of swing point changes
+                if (oldSwingHigh != null && !lastSwingHigh.equals(oldSwingHigh)) {
+                    notifySwingHighChange(oldSwingHigh, lastSwingHigh);
+                }
             }
 
             // Swing low: current low is lower than both neighbors
             // Store the most recent swing (not requiring it to be lower than previous)
             if (curr.getLow() < prev.getLow() && curr.getLow() < next.getLow()) {
+                Double oldSwingLow = lastSwingLow;
                 lastSwingLow = curr.getLow();
+
+                // Notify listeners of swing point changes
+                if (oldSwingLow != null && !lastSwingLow.equals(oldSwingLow)) {
+                    notifySwingLowChange(oldSwingLow, lastSwingLow);
+                }
             }
         }
+    }
+
+    /**
+     * Notify listeners when a new swing high is detected.
+     * In a BULLISH trend, a new swing high completes an impulse.
+     * Also checks for completed pullback in BULLISH trend:
+     * previous swing high → pullback down → new swing high above previous.
+     */
+    private void notifySwingHighChange(double oldSwingHigh, double newSwingHigh) {
+        if (swingPointListeners.isEmpty()) return;
+        int duration = barsSinceLastSwing;
+        barsSinceLastSwing = 0;
+
+        if (currentBias == MarketBias.BULLISH && previousSwingLow != null) {
+            // New swing high in uptrend = impulse completed
+            double impulseSize = newSwingHigh - previousSwingLow;
+            if (impulseSize > 0) {
+                for (SwingPointListener listener : swingPointListeners) {
+                    listener.onImpulseCompleted(impulseSize, true);
+                }
+            }
+
+            // Check for completed pullback: old swing high → dip to lastSwingLow → new swing high
+            if (lastSwingLow != null && newSwingHigh > oldSwingHigh && lastSwingLow < oldSwingHigh) {
+                double impulseRange = oldSwingHigh - previousSwingLow;
+                double pullbackRange = oldSwingHigh - lastSwingLow;
+                if (impulseRange > 0 && pullbackRange > 0) {
+                    boolean continued = newSwingHigh > oldSwingHigh;
+                    for (SwingPointListener listener : swingPointListeners) {
+                        listener.onPullbackCompleted(impulseRange, pullbackRange, duration, continued);
+                    }
+                }
+            }
+        }
+
+        previousSwingHigh = oldSwingHigh;
+    }
+
+    /**
+     * Notify listeners when a new swing low is detected.
+     * In a BEARISH trend, a new swing low completes an impulse.
+     * Also checks for completed pullback in BEARISH trend.
+     */
+    private void notifySwingLowChange(double oldSwingLow, double newSwingLow) {
+        if (swingPointListeners.isEmpty()) return;
+        int duration = barsSinceLastSwing;
+        barsSinceLastSwing = 0;
+
+        if (currentBias == MarketBias.BEARISH && previousSwingHigh != null) {
+            // New swing low in downtrend = impulse completed
+            double impulseSize = previousSwingHigh - newSwingLow;
+            if (impulseSize > 0) {
+                for (SwingPointListener listener : swingPointListeners) {
+                    listener.onImpulseCompleted(impulseSize, false);
+                }
+            }
+
+            // Check for completed pullback: old swing low → bounce to lastSwingHigh → new swing low
+            if (lastSwingHigh != null && newSwingLow < oldSwingLow && lastSwingHigh > oldSwingLow) {
+                double impulseRange = previousSwingHigh - oldSwingLow;
+                double pullbackRange = lastSwingHigh - oldSwingLow;
+                if (impulseRange > 0 && pullbackRange > 0) {
+                    boolean continued = newSwingLow < oldSwingLow;
+                    for (SwingPointListener listener : swingPointListeners) {
+                        listener.onPullbackCompleted(impulseRange, pullbackRange, duration, continued);
+                    }
+                }
+            }
+        }
+
+        previousSwingLow = oldSwingLow;
     }
 
     /**
@@ -152,6 +261,9 @@ public class IctStructureDetector {
         candles.clear();
         lastSwingHigh = null;
         lastSwingLow = null;
+        previousSwingHigh = null;
+        previousSwingLow = null;
+        barsSinceLastSwing = 0;
         currentBias = MarketBias.NEUTRAL;
     }
 

@@ -22,12 +22,20 @@ public class BidirectionalLiquidityModel {
     private final LevelEngine levelEngine;
     private final EqualLevelDetector equalLevelDetector;
     private final String symbol;
+    private ImpulseExtensionAnalyzer impulseAnalyzer;  // Optional — set via setter
 
     public BidirectionalLiquidityModel(String symbol, LevelEngine levelEngine,
                                         EqualLevelDetector equalLevelDetector) {
         this.symbol = symbol;
         this.levelEngine = levelEngine;
         this.equalLevelDetector = equalLevelDetector;
+    }
+
+    /**
+     * Set the impulse extension analyzer for target validation.
+     */
+    public void setImpulseAnalyzer(ImpulseExtensionAnalyzer impulseAnalyzer) {
+        this.impulseAnalyzer = impulseAnalyzer;
     }
 
     /**
@@ -96,6 +104,28 @@ public class BidirectionalLiquidityModel {
 
         double structRR = Math.abs(structTarget - entry) / risk;
         double minRR = tier.getRiskRewardRatio() * tier.getTierMultiplier();
+
+        // Validate structural target against impulse statistics (if available)
+        if (impulseAnalyzer != null && impulseAnalyzer.isInitialized()) {
+            double targetDistance = Math.abs(structTarget - entry);
+            ImpulseExtensionAnalyzer.TargetAssessment assessment =
+                    impulseAnalyzer.assessTarget(targetDistance);
+
+            if (structRR >= minRR && assessment.getRealism() != ImpulseExtensionAnalyzer.TargetRealism.UNREALISTIC) {
+                // Structural target is both R:R valid and statistically plausible
+                return structTarget;
+            }
+
+            if (assessment.getRealism() == ImpulseExtensionAnalyzer.TargetRealism.UNREALISTIC) {
+                // Structural target is too far — use σ-based aggressive target instead
+                double sigmaTarget = impulseAnalyzer.getSigmaTarget(entry, bullish, 2.0);
+                System.out.println("[" + symbol + "] TARGET OVERRIDE: Structural " +
+                        String.format("%.2f", structTarget) + " unrealistic (" +
+                        String.format("%.1f", assessment.getEstimatedProbability() * 100) +
+                        "% hit rate), using 2σ target " + String.format("%.2f", sigmaTarget));
+                return sigmaTarget;
+            }
+        }
 
         // Use structural if it gives at least the tier minimum R:R
         if (structRR >= minRR) return structTarget;
