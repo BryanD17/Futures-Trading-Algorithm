@@ -15,9 +15,11 @@ function PassProbabilityGauge() {
     return () => clearInterval(interval)
   }, [])
 
-  const passPct = data ? (data.passProbability * 100) : 0
-  const blowupPct = data ? (data.blowupProbability * 100) : 0
-  const expectedPayout = data ? data.expectedPayout : 0
+  const passPct = (data?.passProbability ?? 0) * 100
+  const blowupPct = (data?.blowupProbability ?? 0) * 100
+  const expectedPayout = data?.expectedPayout ?? 0
+  const targetCompletionPct = (data?.targetCompletionPct ?? 0) * 100
+  const drawdownUsagePct = (data?.drawdownUsagePct ?? 0) * 100
 
   const getColor = (pct: number) => {
     if (pct >= 60) return '#4CAF50'
@@ -53,10 +55,10 @@ function PassProbabilityGauge() {
           <DetailItem label="Expected Payout" value={`$${expectedPayout.toFixed(0)}`}
             color={expectedPayout > 0 ? '#4CAF50' : '#F44336'} />
           <DetailItem label="Target Progress"
-            value={data ? `${(data.targetCompletionPct * 100).toFixed(1)}%` : '0%'}
+            value={`${targetCompletionPct.toFixed(1)}%`}
             color="#2196F3" />
           <DetailItem label="Drawdown Used"
-            value={data ? `${(data.drawdownUsagePct * 100).toFixed(1)}%` : '0%'}
+            value={`${drawdownUsagePct.toFixed(1)}%`}
             color="#FF9800" />
         </div>
       </div>
