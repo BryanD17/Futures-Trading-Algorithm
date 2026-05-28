@@ -293,4 +293,34 @@ public class MandatoryConfluenceValidator {
     public boolean hasConfirmedDisplacement(boolean isBullish) {
         return displacementDetector.hasRecentDisplacement(5, isBullish);
     }
+
+    // ════════════════════════════════════════════════════════════════════
+    // STDV+OTE refactor — sequential mandatory-gate validator (M1..M9)
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Validate a STDV+OTE setup against the mandatory M1..M9 gates from
+     * {@code STDV_OTE_MODEL.md}. Short-circuits on the first failing gate;
+     * the failing gate's identifier (e.g. {@code "M3"}) is the first entry
+     * in the returned result's failures list.
+     *
+     * <p>Optional confluences (O1..O8) are <strong>not</strong> evaluated
+     * here — they belong to tier/size computation in
+     * {@code StdvOteStrategy.computeTier()}. This validator only answers
+     * "may we emit an order at all?"
+     *
+     * <p>This is a stub in SA1; the body is implemented in <strong>SA4</strong>.
+     * The signature is published now so downstream sub-agents (SA5 risk
+     * integration, SA6 API exposure) can reference it.
+     *
+     * @param ctx the in-flight setup context
+     * @return {@link ValidationResult} with {@code passed = true} when every
+     *         gate is satisfied, otherwise {@code passed = false} with the
+     *         failed gate id and a human-readable reason
+     * @throws UnsupportedOperationException SA1 stub. Implemented in SA4.
+     */
+    public ValidationResult validateStdvOte(com.topstep.trading.strategy.stdvote.SetupContext ctx) {
+        throw new UnsupportedOperationException(
+                "MandatoryConfluenceValidator.validateStdvOte: SA4");
+    }
 }
