@@ -92,6 +92,7 @@ public final class StdvOteStrategy implements TradingStrategy {
         this.setupExpiryBars = Math.max(0L, setupExpiryBars);
         this.setup = new SetupContext();
         this.setup.symbol = symbol;
+        StdvOteRegistry.register(this);
     }
 
     /** Read-only snapshot accessor for the API layer (SA6). */
@@ -141,7 +142,7 @@ public final class StdvOteStrategy implements TradingStrategy {
 
     @Override
     public void shutdown() {
-        // SA5 will release detector resources here.
+        StdvOteRegistry.unregister(symbol);
     }
 
     // ══════════════════════════════════════════════════════════════════════
