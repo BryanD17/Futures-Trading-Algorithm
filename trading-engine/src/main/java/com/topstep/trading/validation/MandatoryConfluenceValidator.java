@@ -301,26 +301,149 @@ public class MandatoryConfluenceValidator {
     /**
      * Validate a STDV+OTE setup against the mandatory M1..M9 gates from
      * {@code STDV_OTE_MODEL.md}. Short-circuits on the first failing gate;
-     * the failing gate's identifier (e.g. {@code "M3"}) is the first entry
-     * in the returned result's failures list.
+     * the failing gate's identifier (e.g. {@code "M3"}) is recorded in the
+     * returned result's failures list AND in its summary.
      *
      * <p>Optional confluences (O1..O8) are <strong>not</strong> evaluated
      * here — they belong to tier/size computation in
      * {@code StdvOteStrategy.computeTier()}. This validator only answers
      * "may we emit an order at all?"
      *
-     * <p>This is a stub in SA1; the body is implemented in <strong>SA4</strong>.
-     * The signature is published now so downstream sub-agents (SA5 risk
-     * integration, SA6 API exposure) can reference it.
+     * <p>Gate sequence (each blocks the next):
+     * <ol>
+     *   <li>M1 — instrument is MNQ/MES/MGC.</li>
+     *   <li>M2 — HTF bias is not NEUTRAL AND trade direction matches.</li>
+     *   <li>M3 — inside a killzone.</li>
+     *   <li>M4 — liquidity sweep present AND raid score >= instrument minimum.</li>
+     *   <li>M5 — displacement candle AND a FairValueGap present.</li>
+     *   <li>M6 — Market Structure Shift / CHoCH confirmed.</li>
+     *   <li>M7 — OTE zone built, PD-array edge inside the band, and
+     *            geometry yields RR &gt;= {@link #MIN_RR_FLOOR_STDV_OTE} at the
+     *            -2.0 target.</li>
+     *   <li>M8 — size request &gt;= instrument minimum (5 micros).</li>
+     *   <li>M9 — caller has set {@code ctx.lastGateFailed == null} after the
+     *            risk engine review (the validator does not call the risk
+     *            engine directly; it trusts the strategy's pre-flight).</li>
+     * </ol>
      *
      * @param ctx the in-flight setup context
      * @return {@link ValidationResult} with {@code passed = true} when every
      *         gate is satisfied, otherwise {@code passed = false} with the
-     *         failed gate id and a human-readable reason
-     * @throws UnsupportedOperationException SA1 stub. Implemented in SA4.
+     *         failed gate id ({@code "M1".."M9"}) as the summary
      */
     public ValidationResult validateStdvOte(com.topstep.trading.strategy.stdvote.SetupContext ctx) {
-        throw new UnsupportedOperationException(
-                "MandatoryConfluenceValidator.validateStdvOte: SA4");
+        java.util.List<String> confirmations = new java.util.ArrayList<>();
+
+        if (ctx == null) {
+            return ValidationResult.fail(java.util.List.of("M1: null context"), "M1");
+        }
+
+        // M1 — instrument tradeable.
+        java.util.Optional<com.topstep.trading.strategy.stdvote.TradeableInstrument.Symbol> sym =
+                com.topstep.trading.strategy.stdvote.TradeableInstrument.resolve(ctx.symbol);
+        if (sym.isEmpty()) {
+            return ValidationResult.fail(
+                    java.util.List.of("M1: instrument '" + ctx.symbol + "' not in {MNQ,MES,MGC}"),
+                    "M1");
+        }
+        com.topstep.trading.strategy.stdvote.TradeableInstrument.Spec spec =
+                com.topstep.trading.strategy.stdvote.TradeableInstrument.of(sym.get());
+        confirmations.add("M1: instrument=" + ctx.symbol);
+
+        // M2 — bias non-neutral AND direction matches.
+        if (ctx.htfBias == null
+                || ctx.htfBias == com.topstep.trading.strategy.MarketBias.NEUTRAL) {
+            return ValidationResult.fail(
+                    java.util.List.of("M2: HTF bias is NEUTRAL"), "M2");
+        }
+        boolean biasBullish = (ctx.htfBias == com.topstep.trading.strategy.MarketBias.BULLISH);
+        if (ctx.ote != null && ctx.ote.bullish() != biasBullish) {
+            return ValidationResult.fail(
+                    java.util.List.of("M2: trade direction mismatches HTF bias"), "M2");
+        }
+        confirmations.add("M2: bias=" + ctx.htfBias);
+
+        // M3 — killzone open.
+        if (!ctx.killzoneOpen) {
+            return ValidationResult.fail(
+                    java.util.List.of("M3: outside killzone"), "M3");
+        }
+        confirmations.add("M3: killzone open");
+
+        // M4 — sweep + raid score.
+        if (ctx.sweep == null) {
+            return ValidationResult.fail(
+                    java.util.List.of("M4: no liquidity sweep"), "M4");
+        }
+        if (ctx.raidScore < spec.raidMinQuality()) {
+            return ValidationResult.fail(
+                    java.util.List.of("M4: raid score " + ctx.raidScore
+                            + " < instrument minimum " + spec.raidMinQuality()), "M4");
+        }
+        confirmations.add("M4: raid score " + ctx.raidScore);
+
+        // M5 — displacement + FVG.
+        if (!ctx.displacement || ctx.fvg == null) {
+            return ValidationResult.fail(
+                    java.util.List.of("M5: displacement candle / FVG absent"), "M5");
+        }
+        confirmations.add("M5: displacement + FVG present");
+
+        // M6 — MSS / CHoCH.
+        if (!ctx.mss) {
+            return ValidationResult.fail(
+                    java.util.List.of("M6: MSS / CHoCH not confirmed"), "M6");
+        }
+        confirmations.add("M6: MSS confirmed");
+
+        // M7 — entry geometry.
+        if (ctx.ote == null) {
+            return ValidationResult.fail(
+                    java.util.List.of("M7: OTE zone not built"), "M7");
+        }
+        if (Double.isNaN(ctx.pdArrayInOte)) {
+            return ValidationResult.fail(
+                    java.util.List.of("M7: no PD array inside OTE band"), "M7");
+        }
+        if (!ctx.ote.contains(ctx.entry)) {
+            return ValidationResult.fail(
+                    java.util.List.of("M7: planned entry " + ctx.entry
+                            + " not in OTE band [" + ctx.ote.f79() + "," + ctx.ote.f62() + "]"),
+                    "M7");
+        }
+        if (ctx.rr < MIN_RR_FLOOR_STDV_OTE) {
+            return ValidationResult.fail(
+                    java.util.List.of("M7: RR " + ctx.rr
+                            + " < floor " + MIN_RR_FLOOR_STDV_OTE), "M7");
+        }
+        confirmations.add("M7: in-zone, PD-array, RR=" + ctx.rr);
+
+        // M8 — sized order at floor or above.
+        if (ctx.sizeRequest < spec.minMicros()) {
+            return ValidationResult.fail(
+                    java.util.List.of("M8: size " + ctx.sizeRequest
+                            + " < instrument floor " + spec.minMicros()), "M8");
+        }
+        if (ctx.sizeRequest > spec.maxMicros()) {
+            return ValidationResult.fail(
+                    java.util.List.of("M8: size " + ctx.sizeRequest
+                            + " > instrument ceiling " + spec.maxMicros()), "M8");
+        }
+        confirmations.add("M8: size=" + ctx.sizeRequest);
+
+        // M9 — risk pre-flight (the strategy is the gatekeeper; validator
+        // trusts the pre-check via ctx.lastGateFailed staying null at this
+        // point. Real risk engine integration lands in SA5.)
+        if (ctx.lastGateFailed != null) {
+            return ValidationResult.fail(
+                    java.util.List.of("M9: risk pre-flight failed earlier (" + ctx.lastGateFailed + ")"),
+                    "M9");
+        }
+        confirmations.add("M9: risk pre-flight clear");
+
+        return ValidationResult.pass(confirmations, "STDV+OTE M1..M9 all passed");
     }
+
+    /** Minimum reward-to-risk at the -2.0 STDV target for the M7 geometry gate. */
+    public static final double MIN_RR_FLOOR_STDV_OTE = 2.0;
 }
