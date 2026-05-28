@@ -1,0 +1,320 @@
+/* SetupPanel — STDV+OTE live setup view.
+   Design tokens are local (no global theme dependency). Color choices respect
+   WCAG AA contrast against the existing dark dashboard background. */
+
+.setup-panel {
+  --bg: #1a1d23;
+  --surface: #232831;
+  --surface-2: #2a3140;
+  --border: #353c4a;
+  --text: #e6eaf2;
+  --muted: #8b95a8;
+  --accent: #4dabf7;
+  --ok: #51cf66;
+  --warn: #ffd43b;
+  --bad: #ff6b6b;
+  --bull: #20c997;
+  --bear: #fa5252;
+  --tier-4: #b197fc;
+  --tier-3: #4dabf7;
+  --tier-2: #66d9e8;
+  --tier-1: #adb5bd;
+
+  background: var(--bg);
+  color: var(--text);
+  padding: 16px 20px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-family: inherit;
+}
+
+/* ─── Toolbar (instrument tabs + strategy tag) ───────────────────────────── */
+.setup-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+.setup-toolbar button {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.setup-toolbar button:hover { background: var(--surface-2); }
+.setup-toolbar button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.setup-toolbar button.active {
+  background: var(--accent);
+  color: #0c1116;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.setup-strategy-tag {
+  margin-left: auto;
+  background: var(--surface-2);
+  padding: 4px 10px;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  border-radius: 999px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+/* ─── Error + empty + loading states ─────────────────────────────────────── */
+.setup-error {
+  background: rgba(255, 107, 107, 0.12);
+  border: 1px solid var(--bad);
+  color: var(--bad);
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+.setup-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--surface);
+  border-radius: 4px;
+}
+
+/* ─── State machine stepper ─────────────────────────────────────────────── */
+.setup-stepper {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.setup-stepper .step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  border: 1px solid var(--border);
+}
+.setup-stepper .step .step-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  display: inline-block;
+}
+.setup-stepper .step.reached { color: var(--text); background: var(--surface-2); }
+.setup-stepper .step.reached .step-dot { background: var(--accent); }
+.setup-stepper .step.current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  color: var(--accent);
+}
+.setup-stepper .step.invalidated {
+  background: rgba(255, 107, 107, 0.15);
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.step-detail { font-size: 11px; color: var(--muted); }
+
+/* ─── Pills row ──────────────────────────────────────────────────────────── */
+.setup-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.pill strong { font-weight: 600; }
+.pill.bias.bull { background: rgba(32, 201, 151, 0.15); border-color: var(--bull); color: var(--bull); }
+.pill.bias.bear { background: rgba(250, 82, 82, 0.15); border-color: var(--bear); color: var(--bear); }
+.pill.bias.neutral { color: var(--muted); }
+.pill.killzone.open { background: rgba(77, 171, 247, 0.15); border-color: var(--accent); color: var(--accent); }
+.pill.killzone.closed { color: var(--muted); }
+.pill.smt-confirm { background: rgba(81, 207, 102, 0.15); border-color: var(--ok); color: var(--ok); }
+.pill.smt-divergent { background: rgba(255, 212, 59, 0.15); border-color: var(--warn); color: var(--warn); }
+.pill.tier {
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+.pill.tier.tier_4 { background: rgba(177, 151, 252, 0.18); border-color: var(--tier-4); color: var(--tier-4); }
+.pill.tier.tier_3 { background: rgba(77, 171, 247, 0.18); border-color: var(--tier-3); color: var(--tier-3); }
+.pill.tier.tier_2 { background: rgba(102, 217, 232, 0.18); border-color: var(--tier-2); color: var(--tier-2); }
+.pill.tier.tier_1 { color: var(--tier-1); }
+
+/* ─── Grid of cards ──────────────────────────────────────────────────────── */
+.setup-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+.setup-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+.setup-card h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.setup-card .empty {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+/* ─── Confluence checklist ──────────────────────────────────────────────── */
+.checklist ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.checklist .gate {
+  display: grid;
+  grid-template-columns: 32px 20px 1fr;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+.checklist .gate .gate-id {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  color: var(--muted);
+}
+.checklist .gate.ok .gate-icon { color: var(--ok); }
+.checklist .gate.pending .gate-icon { color: var(--muted); }
+.checklist .gate.failing { background: rgba(255, 107, 107, 0.10); border-radius: 4px; padding: 2px 4px; }
+.checklist .gate.failing .gate-icon { color: var(--bad); }
+.checklist .failed-gate {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--bad);
+}
+
+/* ─── STDV ladder table ─────────────────────────────────────────────────── */
+.ladder table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.ladder th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.ladder td { padding: 4px 6px; }
+.ladder tr.primary {
+  background: rgba(77, 171, 247, 0.08);
+  font-weight: 600;
+}
+.liq-backed {
+  background: rgba(81, 207, 102, 0.18);
+  color: var(--ok);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.liq-raw {
+  color: var(--muted);
+  font-size: 11px;
+}
+.realism {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.realism-realistic { background: rgba(81, 207, 102, 0.15); color: var(--ok); }
+.realism-aggressive { background: rgba(255, 212, 59, 0.18); color: var(--warn); }
+.realism-unrealistic { background: rgba(255, 107, 107, 0.18); color: var(--bad); }
+.realism-uninitialized { color: var(--muted); }
+
+/* ─── OTE block ─────────────────────────────────────────────────────────── */
+.ote-levels {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  margin: 0;
+}
+.ote-levels > div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  font-size: 13px;
+  padding: 2px 0;
+}
+.ote-levels > div.primary {
+  background: rgba(77, 171, 247, 0.08);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-weight: 600;
+}
+.ote-levels dt { color: var(--muted); }
+.ote-levels dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.pd-array {
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--accent);
+}
+
+/* ─── Plan block ────────────────────────────────────────────────────────── */
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+.plan-grid > div {
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+}
+.plan-grid .k {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.plan-grid .v {
+  font-size: 16px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-weight: 600;
+}
+.factors {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.factors li { padding: 1px 0; }

@@ -11,6 +11,7 @@ import PassProbabilityGauge from './components/PassProbabilityGauge'
 import EquityFanChart from './components/EquityFanChart'
 import SimulatorView from './components/SimulatorView'
 import ChallengeEconomicsPanel from './components/ChallengeEconomicsPanel'
+import SetupPanel from './components/SetupPanel'
 import { StatusService } from './services/api'
 
 function App() {
@@ -51,6 +52,12 @@ function App() {
           onClick={() => setActiveTab('overview')}
         >
           Overview
+        </button>
+        <button
+          className={activeTab === 'setup' ? 'active' : ''}
+          onClick={() => setActiveTab('setup')}
+        >
+          Setup
         </button>
         <button
           className={activeTab === 'positions' ? 'active' : ''}
@@ -100,6 +107,7 @@ function App() {
             <Overview />
           </>
         )}
+        {activeTab === 'setup' && <SetupPanel />}
         {activeTab === 'positions' && <Positions />}
         {activeTab === 'trades' && <Trades />}
         {activeTab === 'risk' && <Risk />}
