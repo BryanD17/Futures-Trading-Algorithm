@@ -1,248 +1,158 @@
-# Quick Start Guide
+# Quick Start — Topstep Futures Trading Algorithm
 
-This guide will help you get the Topstep Futures Trading Algorithm up and running quickly.
+This guide assumes you have cloned the repo and want to build, run, and
+work with the new STDV+OTE refactor (v2.0).
 
 ## Prerequisites
 
-Before you begin, ensure you have the following installed:
+- JDK 21 (Temurin verified)
+- Node 18+
+- Git
 
-- **Java 21**: [Download OpenJDK 21](https://adoptium.net/)
-- **Node.js 18+**: [Download Node.js](https://nodejs.org/)
-- **Git**: [Download Git](https://git-scm.com/)
+## Build
 
-Verify installations:
-```bash
-java -version    # Should show Java 21
-node -version    # Should show v18 or higher
-npm -version     # Should show npm 9 or higher
-git --version    # Should show git 2.x
-```
-
-## Installation Steps
-
-### 1. Clone the Repository
+From the repo root:
 
 ```bash
-git clone <your-repo-url>
-cd Futures-Trading-Algorithm
-```
+# Backend (trading-engine + api-backend)
+./gradlew clean build --no-daemon
 
-### 2. Build Trading Engine
-
-```bash
-cd trading-engine
-./gradlew build
-cd ..
-```
-
-On Windows:
-```bash
-cd trading-engine
-gradlew.bat build
-cd ..
-```
-
-### 3. Build API Backend
-
-```bash
-cd api-backend
-./gradlew build
-cd ..
-```
-
-### 4. Install Dashboard Dependencies
-
-```bash
+# Frontend
 cd dashboard-frontend
 npm install
-cd ..
+npm run build
 ```
 
-## Running the System
+The backend has 6 known pre-existing test failures in the news subsystem
+(documented in `docs/REFRACTOR_BASELINE.md`); these are NOT caused by the
+refactor and were already present at the baseline commit.
 
-You'll need **3 terminal windows** to run all components:
+## Run
 
-### Terminal 1: Trading Engine
+### BACKTEST mode (default)
 
 ```bash
-cd trading-engine
-./gradlew run
+./gradlew :trading-engine:run --args="BACKTEST"
 ```
 
-Expected output:
-```
-INFO  EventBus started
-INFO  MockConnector connected
-INFO  Trading engine initialized
-```
+This runs `BacktestExample`, which currently uses the **legacy**
+`IctHighConfluenceStrategy`. The new `StdvOteStrategy` is not yet wired
+as the default — see `docs/BACKTEST_COMPARISON.md` §2.3 for the work
+that has to land first.
 
-### Terminal 2: API Backend
+### SIM mode (MockConnector)
 
 ```bash
-cd api-backend
-./gradlew bootRun
+./gradlew :trading-engine:run --args="SIM"
 ```
 
-Expected output:
-```
-Started ApiBackendApplication in X.XXX seconds
-Tomcat started on port(s): 8080
+Boots `SimEngineRunner` with the MockConnector — safe for testing.
+
+### LIVE mode
+
+```bash
+./gradlew :trading-engine:run --args="LIVE"
 ```
 
-### Terminal 3: Dashboard Frontend
+Requires the following environment variables to be set (the runner
+will refuse to start without them):
+
+- `TOPSTEP_API_URL`
+- `TOPSTEP_USERNAME`
+- `TOPSTEP_API_KEY`
+- `TOPSTEP_ACCOUNT_ID`
+
+**This connects to real markets and risks real money. Do not enable
+LIVE until you have run a SIM session and watched the new Setup panel
+render a complete state-machine lifecycle.**
+
+## Dashboard
 
 ```bash
 cd dashboard-frontend
 npm run dev
 ```
 
-Expected output:
-```
-  VITE v5.x.x  ready in XXX ms
+Open the printed URL (Vite chooses one, typically `http://localhost:5173`).
+The API backend must be running for the dashboard to populate:
 
-  ➜  Local:   http://localhost:3000/
-  ➜  Network: use --host to expose
-```
-
-## Access the Dashboard
-
-Open your browser and navigate to:
-```
-http://localhost:3000
+```bash
+./gradlew :api-backend:bootRun
 ```
 
-You should see the trading dashboard with:
-- **Overview**: Account metrics and P&L
-- **Positions**: Open positions (empty initially)
-- **Trades**: Recent trade history (empty initially)
-- **Risk**: Risk limits and usage
+## The new Setup tab
 
-## Verify Everything Works
+The dashboard now has a **Setup** tab between Overview and Positions.
+It visualises the STDV+OTE setup state per instrument (MNQ / MES / MGC):
 
-1. **Check API Health**:
-   ```bash
-   curl http://localhost:8080/api/status/health
-   ```
-   Should return: `{"status":"UP"}`
+- **State machine stepper** — current position in the IDLE → IN_TRADE
+  sequence; INVALIDATED renders with the last failed gate id.
+- **Bias / killzone / SMT / tier pills.**
+- **Mandatory gates M1..M9** — the failing gate is highlighted.
+- **STDV ladder** — the 5-level exit ladder (-0.27 / -1 / -2 / -2.5 / -4)
+  with liquidity-backed badges and a realism tag on -2.0.
+- **OTE zone** — all five canonical levels (0.5 / 0.62 / 0.705 / 0.79 / 1.0)
+  and the PD-array-in-zone edge.
+- **Plan block** — entry / stop / RR / size / tier (appears on IN_TRADE).
 
-2. **Check Status**:
-   ```bash
-   curl http://localhost:8080/api/status
-   ```
-   Should return JSON with status information
+The panel polls `/api/setup/{symbol}` at 1Hz; WebSocket push is a
+follow-up.
 
-3. **Check Dashboard**:
-   - Dashboard should show "SIMULATION" mode in the header
-   - All tabs should be accessible
-   - No errors in browser console
+## Configuration knobs you will actually touch
 
-## Next Steps
+In `application.yml` (or as Spring properties), under the `stdvOte.*`
+root. Defaults match `docs/architecture/STDV_OTE_MODEL.md`:
 
-### Configure Risk Limits
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `stdvOte.enabled` | `false` | Switch the default strategy to STDV_OTE. Leave `false` until the SIM smoke test passes. |
+| `stdvOte.size.riskFraction` | `0.12` | Fraction of available MLL room risked per trade. |
+| `stdvOte.size.safetyCushion` | `300` | Dollars kept off the MLL floor. |
+| `stdvOte.rr.floor` | `2.0` | Minimum reward-to-risk at the -2.0 STDV target. M7 rejects setups below this. |
+| `stdvOte.killzone.nyAmStartEt` | `09:45` | NY AM killzone open (ET). |
+| `stdvOte.killzone.nyAmEndEt` | `11:00` | NY AM killzone close (ET). |
+| `stdvOte.killzone.silverBulletStartEt` | `10:00` | Silver Bullet open (ET). |
+| `stdvOte.killzone.silverBulletEndEt` | `11:00` | Silver Bullet close (ET). |
+| `stdvOte.raid.minQuality.MNQ` | `5` | Minimum raid quality for MNQ. |
+| `stdvOte.raid.minQuality.MES` | `5` | Minimum raid quality for MES. |
+| `stdvOte.raid.minQuality.MGC` | `6` | Stricter floor for MGC. |
+| `stdvOte.risk.mllTrail` | `INTRADAY` | INTRADAY (conservative) or EOD. **You must set this to match your actual Topstep account/platform.** |
+| `stdvOte.risk.flattenByEt` | `15:10` | Topstep cutoff (CT). Verify against current Topstep rules. |
 
-Edit the risk configuration in your trading engine:
-```java
-RiskLimits limits = RiskLimits.topstep50k(); // For 50K account
-// or
-RiskLimits limits = RiskLimits.topstep100k(); // For 100K account
-```
+## Before going LIVE — checklist
 
-### Paper Trading
+The refactor leaves LIVE manual on purpose. Before you flip
+`stdvOte.enabled = true` AND switch the runner default, verify:
 
-The system starts in simulation mode with the MockConnector:
-- Generates simulated market data
-- Simulates order fills
-- Safe for testing strategies
-
-### Topstep Integration
-
-⚠️ **NOT YET IMPLEMENTED**
-
-To connect to real Topstep:
-1. Obtain Topstep API credentials
-2. Implement TopstepConnector (currently a placeholder)
-3. Update configuration to use TopstepConnector
-4. Test thoroughly in paper mode first
+1. **MLL trail model** — INTRADAY vs EOD for your specific Combine /
+   Express / Funded account on your specific platform (TopstepX,
+   NinjaTrader, Tradovate, Quantower, TradingView). Sources disagree.
+2. **DLL status** — TopstepX removed the platform DLL in Aug 2024; the
+   other platforms still enforce it. The sizer codes defensively
+   regardless; confirm which model applies to you.
+3. **Contract specs** for MNQ / MES / MGC — the registry hardcodes
+   tick size, tick value, and point value. Verify against the broker
+   spec sheet before risking live money.
+4. **Session flatten cutoff** — historically ~15:10 CT. Confirm
+   current Topstep rules.
+5. **The SIM smoke test** — boot SIM, watch the Setup panel render a
+   full state-machine lifecycle for at least one instrument, confirm
+   flatten-by-time fires, confirm `stdvOte.size.max = 20` is respected.
 
 ## Troubleshooting
 
-### Port Already in Use
+| Symptom | Likely cause |
+|---------|--------------|
+| Frontend builds but Setup panel shows "Backend disconnected" | api-backend bootRun is not running, or proxy is not pointing to `localhost:8080` |
+| `npm run build` fails with TS errors | A new dependency was added without `npm install` running; rerun install |
+| `./gradlew clean build` test failures in the news subsystem | These 6 failures are pre-existing; see `REFRACTOR_BASELINE.md` |
+| Setup panel says state is IDLE forever | Expected until the detector poll inside `StdvOteStrategy.onCandle` is wired (see `BACKTEST_COMPARISON.md` §2.3) |
 
-If port 8080 or 3000 is already in use:
+## Where the code lives
 
-**API Backend**: Edit `api-backend/src/main/resources/application.yml`
-```yaml
-server:
-  port: 8081  # Change to different port
-```
-
-**Frontend**: Edit `dashboard-frontend/vite.config.ts`
-```typescript
-server: {
-  port: 3001  # Change to different port
-}
-```
-
-### Gradle Build Fails
-
-Clear Gradle cache:
-```bash
-./gradlew clean build --refresh-dependencies
-```
-
-### npm Install Fails
-
-Clear npm cache:
-```bash
-cd dashboard-frontend
-rm -rf node_modules package-lock.json
-npm install
-```
-
-### Database Errors
-
-The SQLite database is created automatically. If you encounter issues:
-```bash
-rm ~/topstep-trading/data.db  # Remove database and restart
-```
-
-## Stopping the System
-
-Press `Ctrl+C` in each terminal window to stop:
-1. Dashboard frontend
-2. API backend
-3. Trading engine
-
-## Development Mode
-
-For active development:
-
-- **Auto-reload Backend**: Spring Boot DevTools (add to dependencies)
-- **Auto-reload Frontend**: Already enabled with Vite HMR
-- **Watch Tests**: `./gradlew test --continuous`
-
-## Configuration
-
-Key configuration files:
-- `api-backend/src/main/resources/application.yml`: API settings
-- `dashboard-frontend/vite.config.ts`: Frontend build settings
-- `trading-engine/src/main/resources/logback.xml`: Logging (TODO)
-
-## Getting Help
-
-- Check the main [README.md](../README.md) for architecture details
-- Review code comments and JavaDoc
-- Open an issue on GitHub
-
-## Safety Reminders
-
-⚠️ **IMPORTANT**:
-- This system is in development (Week 1 complete)
-- Strategy logic not yet implemented
-- Risk engine not yet connected
-- DO NOT connect to real Topstep accounts yet
-- Always test in simulation first
-
----
-
-**Next**: Continue with [Week 2 Development](../README.md#week-2---strategy--backtesting)
+- New strategy code: `trading-engine/src/main/java/com/topstep/trading/strategy/stdvote/`
+- New API controller: `api-backend/src/main/java/com/topstep/api/controller/SetupController.java`
+- New frontend: `dashboard-frontend/src/components/SetupPanel.tsx` + `.css`,
+  `dashboard-frontend/src/types/setup.ts`,
+  `dashboard-frontend/src/services/setupApi.ts`
+- Design / architecture: `docs/architecture/STDV_OTE_MODEL.md`

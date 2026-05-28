@@ -35,7 +35,15 @@ import java.util.List;
  * - Tier 3: SB + OB/Breaker + (Displacement OR SMT)
  * - Tier 2: SB + MSS + FVG + Clear liquidity target
  * - Tier 1: SB Lite with tighter risk constraints
+ *
+ * @deprecated as of the STDV+OTE refactor. The Silver Bullet entry mechanics
+ *     are absorbed by {@code StdvOteStrategy} (sequential sweep → displacement
+ *     → MSS → OTE) with the killzone gate driving M3. This class has zero
+ *     production references; it is retained only to preserve the historical
+ *     reference implementation until SA8's post-SIM cleanup, at which point
+ *     it can be deleted. Do not wire this class to any new runner.
  */
+@Deprecated(forRemoval = true, since = "v2.0-stdv-ote")
 public class SilverBulletStrategy implements TradingStrategy {
 
     private final String symbol;
