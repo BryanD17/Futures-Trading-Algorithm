@@ -21,7 +21,16 @@ import java.util.List;
  * - Fibonacci confluence is tracked as a bonus signal (other traders watch Fib levels)
  *
  * Fed by {@link SwingPointListener} callbacks from {@link IctStructureDetector}.
+ *
+ * @deprecated as the entry source as of the STDV+OTE refactor. Canonical OTE
+ *     (0.62 / 0.705 / 0.79) is restored as the sole entry zone — see
+ *     {@code com.topstep.trading.strategy.stdvote.OteEntryCalculator}. This
+ *     class is retained as an OPTIONAL O-tier confluence signal only (its
+ *     empirical pullback band may overlap the canonical OTE band, which
+ *     is a useful bonus but never an entry source). Do not use this class
+ *     to drive entry selection in any new code.
  */
+@Deprecated(since = "v2.0-stdv-ote")
 public class StatisticalRetracementEngine implements SwingPointListener {
 
     private final String symbol;
