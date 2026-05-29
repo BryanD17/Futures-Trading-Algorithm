@@ -17,6 +17,7 @@ import com.topstep.trading.strategy.DefaultStrategyContext;
 import com.topstep.trading.strategy.IctHighConfluenceStrategy;
 import com.topstep.trading.strategy.TradingStrategy;
 import com.topstep.trading.strategy.stdvote.StdvOteFactory;
+import com.topstep.trading.strategy.stdvote.StdvOteMultiInstrumentEngine;
 
 import java.util.Arrays;
 import java.util.List;
@@ -44,12 +45,25 @@ public class SimEngineRunner {
     private static final String DEFAULT_SYMBOL =
             System.getProperty("stdvote.symbol", "MNQ");
 
+    /**
+     * When true (the default under stdvOte mode), the runner uses
+     * {@link StdvOteMultiInstrumentEngine} to drive MNQ + MGC concurrently
+     * with MES as an SMT feed. Override with
+     * {@code -Dstdvote.multiInstrument=false} to fall back to single-symbol
+     * mode driven by {@code DEFAULT_SYMBOL}.
+     */
+    private static final boolean MULTI_INSTRUMENT_ENABLED =
+            StdvOteFactory.isEnabled()
+                    && !"false".equalsIgnoreCase(
+                        System.getProperty("stdvote.multiInstrument", "true"));
+
     private final TradingConnector connector;
     private final AccountState accountState;
     private final RiskLimits riskLimits;
     private final PropFirmRiskEngine riskEngine;
     private final ExecutionEngine executionEngine;
     private final TradingStrategy strategy;
+    private final StdvOteMultiInstrumentEngine multiEngine;
     private final EventBus eventBus;
     private final DefaultStrategyContext strategyContext;
 
@@ -79,8 +93,22 @@ public class SimEngineRunner {
         this.executionEngine = new ExecutionEngine(accountState);
         this.riskEngine = new PropFirmRiskEngine();
         this.eventBus = new EventBus();
-        this.strategy = StdvOteFactory.build(DEFAULT_SYMBOL, "NQ", eventBus);
         this.strategyContext = new DefaultStrategyContext(accountState);
+
+        if (MULTI_INSTRUMENT_ENABLED) {
+            // Multi-instrument STDV+OTE: MNQ + MGC active, MES as SMT for MNQ.
+            // The engine owns one StdvOteRunnerStrategy per active symbol;
+            // we keep a reference to the primary for EngineFacade compat.
+            this.multiEngine = new StdvOteMultiInstrumentEngine(
+                    connector, eventBus, strategyContext);
+            this.strategy = multiEngine.getPrimaryStrategy();
+            System.out.println("  Multi-instrument active="
+                    + multiEngine.getActiveSymbols()
+                    + " smtOnly=" + multiEngine.getSmtOnlySymbols());
+        } else {
+            this.multiEngine = null;
+            this.strategy = StdvOteFactory.build(DEFAULT_SYMBOL, "MES", eventBus);
+        }
 
         // Subscribe to strategy signals
         eventBus.subscribe(StrategySignalEvent.class, this::handleStrategySignal);
@@ -128,13 +156,22 @@ public class SimEngineRunner {
             );
             EngineFacade.getInstance().setSimRunner(this);
 
-            // Subscribe to market data
-            connector.subscribeMarketData(DEFAULT_SYMBOL, this::onMarketData);
+            // Subscribe to market data. Multi-instrument mode owns its own
+            // subscriptions for all active + SMT-only symbols; single-symbol
+            // mode subscribes the legacy way.
+            String subscribedSymbols;
+            if (multiEngine != null) {
+                multiEngine.start();
+                subscribedSymbols = String.join(",", multiEngine.symbolsForSubscription());
+            } else {
+                connector.subscribeMarketData(DEFAULT_SYMBOL, this::onMarketData);
+                subscribedSymbols = DEFAULT_SYMBOL;
+            }
 
             running.set(true);
 
             System.out.println("\n✓ SIM engine started successfully");
-            System.out.println("  Trading symbol: " + DEFAULT_SYMBOL);
+            System.out.println("  Trading symbols: " + subscribedSymbols);
             System.out.println("  Connector: " + connector.getName());
             System.out.println("\nWaiting for market data...\n");
 
@@ -197,8 +234,12 @@ public class SimEngineRunner {
         running.set(false);
 
         // Finalize any in-progress HTF candles before shutdown
-        strategy.onSessionEnd();
-        strategy.shutdown();
+        if (multiEngine != null) {
+            multiEngine.stop();
+        } else {
+            strategy.onSessionEnd();
+            strategy.shutdown();
+        }
 
         // CRITICAL: Stop EventBus to prevent thread leaks
         eventBus.stop();
