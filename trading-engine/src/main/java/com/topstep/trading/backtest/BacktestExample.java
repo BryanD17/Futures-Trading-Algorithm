@@ -116,9 +116,14 @@ public class BacktestExample {
             esCandles = dataProvider.generateSyntheticData("ES", 5000);
         }
 
-        // Step 3: Create strategy with shared EventBus
+        // Step 3: Create strategy with shared EventBus.
+        // The factory returns the new StdvOteRunnerStrategy by default; it
+        // falls back to IctHighConfluenceStrategy for non-MNQ/MES/MGC
+        // symbols (this backtest uses full-size NQ for synthetic-data demo
+        // purposes — switch to MNQ to exercise the new path).
         EventBus eventBus = new EventBus();
-        IctHighConfluenceStrategy strategy = new IctHighConfluenceStrategy("NQ", "ES", eventBus);
+        com.topstep.trading.strategy.TradingStrategy strategy =
+                com.topstep.trading.strategy.stdvote.StdvOteFactory.build("NQ", "ES", eventBus);
 
         System.out.println("\nStrategy: " + strategy.getName());
         System.out.println("Primary Instrument: NQ (Nasdaq 100 E-mini)");
