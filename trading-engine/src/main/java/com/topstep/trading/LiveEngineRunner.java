@@ -64,8 +64,14 @@ import java.util.stream.Collectors;
  */
 public class LiveEngineRunner {
 
-    private static final String DEFAULT_SYMBOL = "NQ";
-    private static final String SMT_SYMBOL = "ES";
+    // STDV+OTE refactor: defaults to MNQ + MES (the registry-allowed micros).
+    // Override via -Dstdvote.symbol=<MNQ|MES|MGC> and -Dstdvote.smt=<...>.
+    // Setting an off-registry symbol routes the factory to the legacy
+    // strategy as a fallback — see StdvOteFactory.
+    private static final String DEFAULT_SYMBOL =
+            System.getProperty("stdvote.symbol", "MNQ");
+    private static final String SMT_SYMBOL =
+            System.getProperty("stdvote.smt", "MES");
 
     // Multi-instrument mode flag
     private static final boolean MULTI_INSTRUMENT_MODE = true;
@@ -273,8 +279,11 @@ public class LiveEngineRunner {
             }
         });
 
-        // Initialize single-instrument fallback strategy
-        this.strategy = new IctHighConfluenceStrategy(DEFAULT_SYMBOL, SMT_SYMBOL, eventBus);
+        // Initialize single-instrument fallback strategy via the STDV+OTE factory.
+        // Default selection is the new StdvOteRunnerStrategy; set
+        // -DstdvOte.enabled=false to roll back to IctHighConfluenceStrategy.
+        this.strategy = com.topstep.trading.strategy.stdvote.StdvOteFactory.build(
+                DEFAULT_SYMBOL, SMT_SYMBOL, eventBus);
 
         // Initialize multi-instrument engine for auto-switching
         if (MULTI_INSTRUMENT_MODE) {

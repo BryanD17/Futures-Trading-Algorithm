@@ -16,6 +16,7 @@ import com.topstep.trading.risk.RiskDecision;
 import com.topstep.trading.strategy.DefaultStrategyContext;
 import com.topstep.trading.strategy.IctHighConfluenceStrategy;
 import com.topstep.trading.strategy.TradingStrategy;
+import com.topstep.trading.strategy.stdvote.StdvOteFactory;
 
 import java.util.Arrays;
 import java.util.List;
@@ -37,7 +38,11 @@ import java.util.stream.Collectors;
  */
 public class SimEngineRunner {
 
-    private static final String DEFAULT_SYMBOL = "ES";
+    // STDV+OTE refactor: default to MNQ (the registry-allowed micro symbol).
+    // Override via -Dstdvote.symbol=<MNQ|MES|MGC> if desired. Setting any
+    // other symbol routes the factory to the legacy strategy as a fallback.
+    private static final String DEFAULT_SYMBOL =
+            System.getProperty("stdvote.symbol", "MNQ");
 
     private final TradingConnector connector;
     private final AccountState accountState;
@@ -74,7 +79,7 @@ public class SimEngineRunner {
         this.executionEngine = new ExecutionEngine(accountState);
         this.riskEngine = new PropFirmRiskEngine();
         this.eventBus = new EventBus();
-        this.strategy = new IctHighConfluenceStrategy(DEFAULT_SYMBOL, "NQ", eventBus);
+        this.strategy = StdvOteFactory.build(DEFAULT_SYMBOL, "NQ", eventBus);
         this.strategyContext = new DefaultStrategyContext(accountState);
 
         // Subscribe to strategy signals
