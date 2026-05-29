@@ -73,8 +73,21 @@ public class LiveEngineRunner {
     private static final String SMT_SYMBOL =
             System.getProperty("stdvote.smt", "MES");
 
-    // Multi-instrument mode flag
+    // Multi-instrument mode flag (legacy MultiInstrumentEngine path).
     private static final boolean MULTI_INSTRUMENT_MODE = true;
+
+    /**
+     * When true (the default under stdvOte mode), use
+     * {@link com.topstep.trading.strategy.stdvote.StdvOteMultiInstrumentEngine}
+     * to drive MNQ + MGC concurrently with MES as SMT-only feed. When this is
+     * on, the legacy {@code MultiInstrumentEngine} path above is disabled
+     * (multiEngine == null), and {@link #onMarketData} routes candles to the
+     * new engine instead. Override with {@code -Dstdvote.multiInstrument=false}.
+     */
+    private static final boolean STDV_OTE_MULTI_INSTRUMENT =
+            com.topstep.trading.strategy.stdvote.StdvOteFactory.isEnabled()
+                    && !"false".equalsIgnoreCase(
+                        System.getProperty("stdvote.multiInstrument", "true"));
 
     // Timezone for Topstep (Chicago - Central Time)
     // Note: Topstep requires being flat by 3:10 PM CT
@@ -95,7 +108,8 @@ public class LiveEngineRunner {
     private final ExecutionEngine executionEngine;
     private final BracketOrderManager bracketManager;  // OCO bracket order management
     private final TradingStrategy strategy;           // Fallback single-instrument strategy
-    private final MultiInstrumentEngine multiEngine;  // Multi-instrument auto-switching engine
+    private final MultiInstrumentEngine multiEngine;  // Multi-instrument auto-switching engine (legacy)
+    private final com.topstep.trading.strategy.stdvote.StdvOteMultiInstrumentEngine stdvOteMultiEngine; // STDV+OTE multi-instrument engine
     private final EventBus eventBus;
     private final DefaultStrategyContext strategyContext;
     private final ScheduledExecutorService scheduler;
@@ -279,29 +293,44 @@ public class LiveEngineRunner {
             }
         });
 
-        // Initialize single-instrument fallback strategy via the STDV+OTE factory.
-        // Default selection is the new StdvOteRunnerStrategy; set
-        // -DstdvOte.enabled=false to roll back to IctHighConfluenceStrategy.
-        this.strategy = com.topstep.trading.strategy.stdvote.StdvOteFactory.build(
-                DEFAULT_SYMBOL, SMT_SYMBOL, eventBus);
-
-        // Initialize multi-instrument engine for auto-switching
-        if (MULTI_INSTRUMENT_MODE) {
-            this.multiEngine = new MultiInstrumentEngine(connector, eventBus, strategyContext);
-            // Set up subscription callback to manage connector subscriptions
-            this.multiEngine.setSubscriptionCallback(new MultiInstrumentEngine.SubscriptionCallback() {
-                @Override
-                public boolean onSubscribe(String symbol) {
-                    return subscribeToMarketData(symbol);
-                }
-
-                @Override
-                public void onUnsubscribe(String symbol) {
-                    unsubscribeFromMarketData(symbol);
-                }
-            });
-        } else {
+        // STDV+OTE multi-instrument path takes precedence when enabled. The
+        // legacy MultiInstrumentEngine is disabled in that case to avoid
+        // double signal generation.
+        if (STDV_OTE_MULTI_INSTRUMENT) {
+            this.stdvOteMultiEngine =
+                    new com.topstep.trading.strategy.stdvote.StdvOteMultiInstrumentEngine(
+                            connector, eventBus, strategyContext);
+            this.strategy = stdvOteMultiEngine.getPrimaryStrategy();
             this.multiEngine = null;
+            System.out.println("[LIVE] STDV+OTE multi-instrument enabled: active="
+                    + stdvOteMultiEngine.getActiveSymbols()
+                    + " smtOnly=" + stdvOteMultiEngine.getSmtOnlySymbols());
+        } else {
+            this.stdvOteMultiEngine = null;
+            // Initialize single-instrument fallback strategy via the STDV+OTE factory.
+            // Default selection is the new StdvOteRunnerStrategy; set
+            // -DstdvOte.enabled=false to roll back to IctHighConfluenceStrategy.
+            this.strategy = com.topstep.trading.strategy.stdvote.StdvOteFactory.build(
+                    DEFAULT_SYMBOL, SMT_SYMBOL, eventBus);
+
+            // Initialize legacy multi-instrument engine for auto-switching
+            if (MULTI_INSTRUMENT_MODE) {
+                this.multiEngine = new MultiInstrumentEngine(connector, eventBus, strategyContext);
+                // Set up subscription callback to manage connector subscriptions
+                this.multiEngine.setSubscriptionCallback(new MultiInstrumentEngine.SubscriptionCallback() {
+                    @Override
+                    public boolean onSubscribe(String symbol) {
+                        return subscribeToMarketData(symbol);
+                    }
+
+                    @Override
+                    public void onUnsubscribe(String symbol) {
+                        unsubscribeFromMarketData(symbol);
+                    }
+                });
+            } else {
+                this.multiEngine = null;
+            }
         }
 
         // === Convex Payoff Optimization: Initialize lifecycle-aware risk components ===
@@ -459,8 +488,18 @@ public class LiveEngineRunner {
             );
             EngineFacade.getInstance().setLiveRunner(this);
 
-            // Start the appropriate engine mode
-            if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
+            // Start the appropriate engine mode. STDV+OTE multi-instrument
+            // wins if enabled; otherwise legacy multi-instrument; otherwise
+            // single-symbol fallback.
+            if (stdvOteMultiEngine != null) {
+                System.out.println("\n[STDV+OTE MULTI-INSTRUMENT] Starting engine...");
+                stdvOteMultiEngine.start();
+                for (String s : stdvOteMultiEngine.symbolsForSubscription()) {
+                    subscribedSymbols.add(s);
+                }
+                System.out.println("✓ Active: " + stdvOteMultiEngine.getActiveSymbols());
+                System.out.println("✓ SMT feeds: " + stdvOteMultiEngine.getSmtOnlySymbols());
+            } else if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
                 // Multi-instrument mode: start the auto-switching engine
                 System.out.println("\n[MULTI-INSTRUMENT] Starting auto-switching engine...");
                 multiEngine.start();
@@ -571,8 +610,11 @@ public class LiveEngineRunner {
 
             // Feed to appropriate engine (only if not paused and not flattening)
             if (!paused.get() && !flatteningPositions.get()) {
-                if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
-                    // Multi-instrument mode: route to auto-switching engine
+                if (stdvOteMultiEngine != null) {
+                    // STDV+OTE multi-instrument mode: route via the new engine.
+                    stdvOteMultiEngine.dispatchCandle(candle);
+                } else if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
+                    // Legacy multi-instrument mode
                     multiEngine.onMarketData(candle);
                 } else {
                     // Single-instrument mode: use fallback strategy
@@ -1458,7 +1500,9 @@ public class LiveEngineRunner {
         eventBus.stop();
 
         // Finalize any in-progress HTF candles before shutdown
-        if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
+        if (stdvOteMultiEngine != null) {
+            stdvOteMultiEngine.stop();
+        } else if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
             multiEngine.onSessionEnd();
             multiEngine.stop();
         } else {
