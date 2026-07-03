@@ -49,7 +49,9 @@ public class EventProximityChecker {
         Duration maxPostBuffer = maxDuration(config.getHighImpactPostBuffer(), config.getMediumImpactPostBuffer());
 
         Instant lookBack = now.minus(maxPostBuffer);
-        Instant lookAhead = now.plus(maxPreBuffer.multipliedBy(2));
+        // Query window must cover the widest gate: the HIGH-impact reduce-size
+        // zone extends to preBuffer * 3 (see evaluateHighImpactEvent)
+        Instant lookAhead = now.plus(maxPreBuffer.multipliedBy(3));
 
         List<EconomicEvent> events = calendarProvider.getUpcomingEvents(lookBack, lookAhead);
 

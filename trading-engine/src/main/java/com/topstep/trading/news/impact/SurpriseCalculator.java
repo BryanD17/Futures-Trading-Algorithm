@@ -36,6 +36,16 @@ public class SurpriseCalculator {
         "initial claims"
     };
 
+    // Per-indicator stdev overrides where the category default is the wrong
+    // scale: EMPLOYMENT's 50.0 is calibrated for NFP in thousands, but the
+    // unemployment rate moves in fractions of a percent and jobless claims
+    // vary by ~25K
+    private static final Map<String, Double> NAME_STDEV_OVERRIDES = Map.of(
+        "unemployment", 0.2,
+        "jobless", 25.0,
+        "initial claims", 25.0
+    );
+
     private final MacroNewsConfig config;
 
     public SurpriseCalculator() {
@@ -72,7 +82,7 @@ public class SurpriseCalculator {
         release.setSurprise(surprise);
 
         // Calculate z-score
-        double stdev = CATEGORY_STDEV.getOrDefault(event.getCategory(), 1.0);
+        double stdev = resolveStdev(event);
         double zScore = surprise / stdev;
         release.setSurpriseZScore(zScore);
 
@@ -104,8 +114,21 @@ public class SurpriseCalculator {
         }
 
         double surprise = actual - forecast;
-        double stdev = CATEGORY_STDEV.getOrDefault(event.getCategory(), 1.0);
-        return surprise / stdev;
+        return surprise / resolveStdev(event);
+    }
+
+    /**
+     * Resolve the stdev for an event: name-specific override first,
+     * then the category default.
+     */
+    private double resolveStdev(EconomicEvent event) {
+        String name = event.getName().toLowerCase();
+        for (Map.Entry<String, Double> override : NAME_STDEV_OVERRIDES.entrySet()) {
+            if (name.contains(override.getKey())) {
+                return override.getValue();
+            }
+        }
+        return CATEGORY_STDEV.getOrDefault(event.getCategory(), 1.0);
     }
 
     /**

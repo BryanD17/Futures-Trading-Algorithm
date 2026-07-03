@@ -48,7 +48,7 @@ class SurpriseCalculatorTest {
 
             calculator.calculateSurprise(release);
 
-            assertThat(release.getSurprise()).isEqualTo(-0.2);
+            assertThat(release.getSurprise()).isCloseTo(-0.2, within(1e-9));
             assertThat(release.getSurpriseZScore()).isCloseTo(-1.0, within(0.01));
         }
 

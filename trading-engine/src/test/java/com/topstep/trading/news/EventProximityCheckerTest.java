@@ -243,8 +243,10 @@ class EventProximityCheckerTest {
 
             List<EconomicEvent> esEvents = checker.getUpcomingEventsForInstrument(InstrumentNewsMapper.ES, 24);
 
-            // ES should see FOMC and ECB (high impact foreign events have some relevance)
-            assertThat(esEvents).hasSize(2);
+            // Foreign HIGH-impact events carry 0.2 relevance for ES, below the
+            // 0.3 display threshold — only the USD event (FOMC) is shown
+            assertThat(esEvents).hasSize(1);
+            assertThat(esEvents.get(0).getName()).isEqualTo("FOMC");
         }
 
         @Test
