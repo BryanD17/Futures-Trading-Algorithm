@@ -57,6 +57,21 @@ public class MandatoryConfluenceValidator {
     private final ChartStateQueryAPI chartState;
     private final HtfTrendAnalyzer htfTrendAnalyzer;  // Layer 1 cascade gate
 
+    /**
+     * Active RiskLimits whose signal band ({@code getSignalMinRr()} /
+     * {@code getSignalMaxRr()}) drives the M7 RR check in
+     * {@link #validateStdvOte}. Null → the historical hardcoded band
+     * [{@link #MIN_RR_FLOOR_STDV_OTE}, +infinity) applies, which is also
+     * exactly the band the legacy profiles carry — legacy emission is
+     * identical whether or not topstep50k() is injected.
+     */
+    private volatile com.topstep.trading.domain.RiskLimits activeRiskLimits;
+
+    /** Inject the active RiskLimits so M7 reads its signal RR band. */
+    public void setActiveRiskLimits(com.topstep.trading.domain.RiskLimits limits) {
+        this.activeRiskLimits = limits;
+    }
+
     public MandatoryConfluenceValidator(MultiTimeframeAnalyzer mtfAnalyzer,
                                         DisplacementDetector displacementDetector,
                                         ChartStateQueryAPI chartState) {
@@ -411,10 +426,27 @@ public class MandatoryConfluenceValidator {
                             + " not in OTE band [" + ctx.ote.f79() + "," + ctx.ote.f62() + "]"),
                     "M7");
         }
-        if (ctx.rr < MIN_RR_FLOOR_STDV_OTE) {
+        // RR band from the ACTIVE RiskLimits' signal band when injected.
+        // Legacy safety: with no RiskLimits injected the historical constants
+        // apply — floor 2.0, no ceiling. RiskLimits' builder defaults carry
+        // the very same [2.0, +infinity) band, so wiring topstep50k() through
+        // here is behaviour-identical to the old hardcoded floor. Only the
+        // scalp profile carries a different band ([0.8, 1.5]). The validator
+        // deliberately does NOT read minRiskRewardRatio (3.0 on topstep50k),
+        // which would have tightened legacy emission from 2.0 → 3.0.
+        double rrFloor = (activeRiskLimits != null)
+                ? activeRiskLimits.getSignalMinRr() : MIN_RR_FLOOR_STDV_OTE;
+        double rrCeiling = (activeRiskLimits != null)
+                ? activeRiskLimits.getSignalMaxRr() : Double.POSITIVE_INFINITY;
+        if (ctx.rr < rrFloor) {
             return ValidationResult.fail(
                     java.util.List.of("M7: RR " + ctx.rr
-                            + " < floor " + MIN_RR_FLOOR_STDV_OTE), "M7");
+                            + " < floor " + rrFloor), "M7");
+        }
+        if (ctx.rr > rrCeiling) {
+            return ValidationResult.fail(
+                    java.util.List.of("M7: RR " + ctx.rr
+                            + " > ceiling " + rrCeiling), "M7");
         }
         confirmations.add("M7: in-zone, PD-array, RR=" + ctx.rr);
 

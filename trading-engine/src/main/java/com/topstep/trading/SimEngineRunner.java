@@ -75,9 +75,11 @@ public class SimEngineRunner {
 
     /**
      * Create a new SIM engine with default Topstep 50K configuration.
+     * The RiskLimits profile is selected by ScalpConfig: legacy topstep50k()
+     * unless -DscalpMode.enabled=true (then topstep50kScalp()).
      */
     public SimEngineRunner() {
-        this(50_000.0, RiskLimits.topstep50k());
+        this(50_000.0, com.topstep.trading.strategy.stdvote.ScalpConfig.activeRiskLimits());
     }
 
     /**

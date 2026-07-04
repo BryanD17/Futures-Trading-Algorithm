@@ -526,6 +526,9 @@ public class ExecutionEngine {
 
         // Update account with realized PnL
         accountState.recordRealizedPnL(realizedPnl);
+        // Count the completed trade for the trade-frequency gates
+        // (maxTradesPerDay / maxConsecutiveLosses in PropFirmRiskEngine).
+        accountState.recordTradeCompleted(realizedPnl);
 
         // Close position
         int closeQuantity = position.isLong() ? -quantity : quantity;

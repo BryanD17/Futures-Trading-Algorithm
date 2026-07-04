@@ -142,9 +142,11 @@ public class LiveEngineRunner {
 
     /**
      * Create a new LIVE engine with Topstep 50K configuration.
+     * The RiskLimits profile is selected by ScalpConfig: legacy topstep50k()
+     * unless -DscalpMode.enabled=true (then topstep50kScalp()).
      */
     public LiveEngineRunner() {
-        this(50_000.0, RiskLimits.topstep50k());
+        this(50_000.0, com.topstep.trading.strategy.stdvote.ScalpConfig.activeRiskLimits());
     }
 
     /**
@@ -192,6 +194,9 @@ public class LiveEngineRunner {
                     notifyPositionClosed(bracket.symbol, pnl);
                     // Clear position from account state
                     accountState.closePosition(bracket.symbol);
+                    // Count the completed trade for the frequency gates
+                    // (live closes bypass ExecutionEngine.closePosition).
+                    accountState.recordTradeCompleted(pnl);
                 }
 
                 @Override
@@ -203,6 +208,8 @@ public class LiveEngineRunner {
                     notifyPositionClosed(bracket.symbol, pnl);
                     // Clear position from account state
                     accountState.closePosition(bracket.symbol);
+                    // Count the completed trade for the frequency gates.
+                    accountState.recordTradeCompleted(pnl);
                 }
 
                 @Override
@@ -273,6 +280,14 @@ public class LiveEngineRunner {
                                 stop,
                                 target
                             );
+                            // SCALP mode: fallback brackets get the same
+                            // +0.5R breakeven trigger as the primary path.
+                            if (com.topstep.trading.strategy.stdvote.ScalpConfig.isEnabled()) {
+                                double fbTickSize = InstrumentCharacteristics
+                                        .getProfile(symbol).getTickSize();
+                                armScalpBreakevenIfConfigured(symbol, entryPrice,
+                                        stop, isLong, fbTickSize);
+                            }
                         } else {
                             System.err.println("  ❌ Skipping fallback bracket for " + symbol +
                                 " due to invalid prices (stop=" + stop + ", target=" + target +
@@ -930,6 +945,26 @@ public class LiveEngineRunner {
         // Otherwise use legacy single-level bracket
         TradeTier tier = signal.getTier();
 
+        // SCALP MODE (SA3): exactly ONE take-profit at the signal target —
+        // never the tier TP ladder (its 2R/3R/5R levels would rest beyond a
+        // 1R-capped scalp target). Single OCO bracket via the legacy
+        // createBracket path, plus an optional breakeven trigger at +0.5R.
+        if (com.topstep.trading.strategy.stdvote.ScalpConfig.isEnabled()) {
+            System.out.println("  Using SCALP bracket: single TP @ " + targetPrice
+                + " (" + quantity + " contracts)");
+            bracketManager.createBracket(
+                symbol,
+                entryOrderId,
+                fillPrice,
+                quantity,
+                signal.getSide(),
+                stopPrice,
+                targetPrice
+            );
+            armScalpBreakevenIfConfigured(symbol, fillPrice, stopPrice, isLong, tickSize);
+            return;
+        }
+
         if (quantity > 1 && tier != null) {
             // ENHANCED: Multi-level take profits with breakeven after first partial
             System.out.println("  Using TIERED bracket: " + tier + " with " + quantity + " contracts");
@@ -956,6 +991,23 @@ public class LiveEngineRunner {
                 targetPrice
             );
         }
+    }
+
+    /**
+     * SCALP mode breakeven: when {@code scalp.breakevenAtHalfR} is true
+     * (the default), arm the existing BracketOrderManager price trigger so
+     * the stop moves to entry once price reaches +0.5R in the trade's favor.
+     */
+    private void armScalpBreakevenIfConfigured(String symbol, double entryPrice,
+                                               double stopPrice, boolean isLong,
+                                               double tickSize) {
+        if (bracketManager == null) return;
+        if (!com.topstep.trading.strategy.stdvote.ScalpConfig.breakevenAtHalfR()) return;
+        double risk = Math.abs(entryPrice - stopPrice);
+        if (risk <= 0) return;
+        double halfR = risk * com.topstep.trading.strategy.stdvote.ScalpConfig.BREAKEVEN_TRIGGER_R;
+        double trigger = isLong ? (entryPrice + halfR) : (entryPrice - halfR);
+        bracketManager.armPriceBreakevenTrigger(symbol, roundToTick(trigger, tickSize));
     }
 
     /**

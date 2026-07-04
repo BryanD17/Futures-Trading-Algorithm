@@ -39,7 +39,9 @@ public class BacktestExample {
         // (The "Express" $0 start only applies to combine evaluation phase)
         double startingBalance = 50_000.0;  // Topstep 50K funded account
         AccountState accountState = new AccountState(startingBalance);
-        RiskLimits riskLimits = RiskLimits.topstep50k();
+        // Profile selection via ScalpConfig: legacy topstep50k() unless
+        // -DscalpMode.enabled=true (then topstep50kScalp()).
+        RiskLimits riskLimits = com.topstep.trading.strategy.stdvote.ScalpConfig.activeRiskLimits();
 
         System.out.println("\nAccount Configuration:");
         System.out.println("  Starting Balance: $" + startingBalance);

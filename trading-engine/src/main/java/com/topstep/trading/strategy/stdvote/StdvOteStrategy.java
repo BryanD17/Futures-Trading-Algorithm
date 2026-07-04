@@ -84,6 +84,23 @@ public final class StdvOteStrategy implements TradingStrategy {
      */
     private boolean gateDiagnosticSelfWritten;
 
+    /**
+     * Scalp target calculator (SA3). Null = legacy mode: {@link #tryEmit}
+     * targets the −2σ STDV projection exactly as before. Non-null = scalp
+     * mode: the target comes from {@link ScalpTargetCalculator} (nearest
+     * opposing liquidity vs FVG origin, hard-capped at 1R). The runner
+     * injects this at construction when {@code scalpMode.enabled} is true —
+     * the core itself stays pure and reads no system properties.
+     */
+    private ScalpTargetCalculator scalpTargetCalculator;
+
+    /**
+     * Nearest opposing liquidity price for the scalp target (Candidate A),
+     * pre-computed by the runner each candle from LiquidityTargetIdentifier /
+     * LevelEngine. Null when unknown. Unused in legacy mode.
+     */
+    private Double nearestOpposingLiquidity;
+
     public StdvOteStrategy(String symbol,
                            StdvProjectionEngine projectionEngine,
                            OteEntryCalculator oteCalculator,
@@ -113,6 +130,29 @@ public final class StdvOteStrategy implements TradingStrategy {
     /** Last emitted signal (or null). Used by tests + by the API for last-trade view. */
     public StrategySignalEvent getLastEmittedSignal() {
         return lastEmittedSignal;
+    }
+
+    /**
+     * Switch this core into scalp mode (SA3). Package-private: called once
+     * at construction by the runner when {@code scalpMode.enabled} is true.
+     * Passing null keeps/returns legacy mode.
+     */
+    void enableScalpMode(ScalpTargetCalculator calculator) {
+        this.scalpTargetCalculator = calculator;
+    }
+
+    /** True when this core targets via the scalp model. */
+    boolean isScalpMode() {
+        return scalpTargetCalculator != null;
+    }
+
+    /**
+     * Supply the nearest-opposing-liquidity price for the scalp target
+     * (Candidate A). The runner calls this every candle; null = unknown.
+     * No-op relevance in legacy mode.
+     */
+    void setNearestOpposingLiquidity(Double price) {
+        this.nearestOpposingLiquidity = price;
     }
 
     @Override
@@ -298,10 +338,34 @@ public final class StdvOteStrategy implements TradingStrategy {
         double entry = oteCalculator.chooseEntry(
                 setup.ote, OptionalDouble.of(setup.pdArrayInOte), tickSize);
         double stop = oteCalculator.stopPrice(setup.ote, tickSize, stopBufferTicks);
-        StdvProjection targetMinus2 = findProjection(-2.0);
-        double targetPrice = (targetMinus2 != null)
-                ? targetMinus2.effectivePrice()
-                : entry;
+        double targetPrice;
+        ScalpTargetCalculator.Decision scalpDecision = null;
+        if (scalpTargetCalculator == null) {
+            // LEGACY mode: target the −2σ STDV projection — unchanged.
+            StdvProjection targetMinus2 = findProjection(-2.0);
+            targetPrice = (targetMinus2 != null)
+                    ? targetMinus2.effectivePrice()
+                    : entry;
+        } else {
+            // SCALP mode (SA3): closer of nearest-opposing-liquidity / FVG
+            // origin, hard-capped at 1R; exactly 1R when no candidate is
+            // valid within the window. Rejections are reason-logged and,
+            // like validator failures, are self-written diagnostics (the
+            // retry-clearing at the top of this method applies).
+            boolean scalpBullish = setup.legBullish;
+            Double fvgOrigin = (setup.fvg != null)
+                    ? (scalpBullish ? setup.fvg.getTop() : setup.fvg.getBottom())
+                    : null;
+            scalpDecision = scalpTargetCalculator.computeTarget(
+                    entry, stop, scalpBullish, tickSize,
+                    nearestOpposingLiquidity, fvgOrigin);
+            if (!scalpDecision.accepted()) {
+                setup.lastGateFailed = "SCALP: " + scalpDecision.reason();
+                gateDiagnosticSelfWritten = true;
+                return false;
+            }
+            targetPrice = scalpDecision.targetPrice();
+        }
         double rr = oteCalculator.rewardToRisk(entry, stop, targetPrice);
 
         setup.entry = entry;
@@ -322,11 +386,28 @@ public final class StdvOteStrategy implements TradingStrategy {
         boolean bullish = setup.legBullish;
         OrderSide side = bullish ? OrderSide.BUY : OrderSide.SELL;
         SignalType type = bullish ? SignalType.LONG_ENTRY : SignalType.SHORT_ENTRY;
-        StrategySignalEvent signal = new StrategySignalEvent(
-                type, symbol, side, entry, stop, targetPrice,
-                "STDV_OTE: " + tier + " size=" + sizeRequest
-                        + " RR=" + String.format("%.2f", rr),
-                tier, sizeRequest);
+        StrategySignalEvent signal;
+        if (scalpDecision == null) {
+            // LEGACY signal construction — unchanged (tier-default RR and
+            // tier-default partial ladder, exactly as before).
+            signal = new StrategySignalEvent(
+                    type, symbol, side, entry, stop, targetPrice,
+                    "STDV_OTE: " + tier + " size=" + sizeRequest
+                            + " RR=" + String.format("%.2f", rr),
+                    tier, sizeRequest);
+        } else {
+            // SCALP signal: carry the REAL RR (not the tier's fictional
+            // 2.0–5.0) and a single 100%-at-target take-profit level; the
+            // rMultiple equals rr so any ladder consumer reproduces the
+            // exact single target price.
+            signal = new StrategySignalEvent(
+                    type, symbol, side, entry, stop, targetPrice,
+                    "STDV_OTE_SCALP: " + tier + " size=" + sizeRequest
+                            + " target=" + scalpDecision.source()
+                            + " RR=" + String.format("%.2f", rr),
+                    tier, sizeRequest, rr,
+                    new double[][] {{ rr, 1.0 }}, false);
+        }
         if (eventBus != null) {
             eventBus.publish(signal);
         }

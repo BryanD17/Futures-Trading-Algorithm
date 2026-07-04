@@ -19,9 +19,11 @@ import com.topstep.trading.strategy.HtfTrendAnalyzer;
 import com.topstep.trading.strategy.HtfTrendAnalyzer.HtfTrendState;
 import com.topstep.trading.strategy.IctStructureDetector;
 import com.topstep.trading.strategy.ImpulseExtensionAnalyzer;
+import com.topstep.trading.chartstate.KnownLevel;
 import com.topstep.trading.strategy.KillzoneClock;
 import com.topstep.trading.strategy.LiquidityDetector;
 import com.topstep.trading.strategy.LiquiditySweep;
+import com.topstep.trading.strategy.LiquidityTargetIdentifier;
 import com.topstep.trading.strategy.MarketBias;
 import com.topstep.trading.strategy.MarketStructureShiftDetector;
 import com.topstep.trading.strategy.MarketStructureShiftDetector.MSS;
@@ -153,6 +155,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private final RaidDetector raidDetector;
     private final ChartStateQueryAPI chartState;
 
+    // Scalp mode (SA3): read once at construction, stdvOte.enabled pattern.
+    // When on, the core targets via ScalpTargetCalculator and this runner
+    // feeds it the nearest opposing liquidity level each candle.
+    private final boolean scalpMode;
+    private final LiquidityTargetIdentifier liquidityTargets;
+
     // Tier-driven fixed size table (first-cut sizing; replaced by the full
     // buffer-based formula in StdvOteSizer once the runner exposes equity —
     // SA3 scope, see class javadoc).
@@ -251,8 +259,24 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         OteEntryCalculator oteCalc = new OteEntryCalculator();
         MandatoryConfluenceValidator validator =
                 new MandatoryConfluenceValidator(null, displacementDetector, chartState);
+        // The M7 RR band comes from the ACTIVE RiskLimits' signal band:
+        // legacy → topstep50k() carries [2.0, +inf) (identical to the old
+        // hardcoded floor); scalp → topstep50kScalp() carries [0.8, 1.5].
+        validator.setActiveRiskLimits(ScalpConfig.activeRiskLimits());
         this.core = new StdvOteStrategy(symbol, projectionEngine, oteCalc, validator,
                 eventBus, /* expiryBars */ 40L);
+
+        // Scalp mode (SA3): swap the emission target model only. All other
+        // gates/state machinery run exactly as in legacy mode.
+        this.scalpMode = ScalpConfig.isEnabled();
+        this.liquidityTargets = new LiquidityTargetIdentifier(symbol, levelEngine);
+        if (scalpMode) {
+            core.enableScalpMode(ScalpConfig.targetCalculator());
+            System.out.println("[StdvOteRunnerStrategy] SCALP MODE ACTIVE for " + symbol
+                    + " (1R-capped targets, band ["
+                    + ScalpConfig.activeRiskLimits().getSignalMinRr() + ", "
+                    + ScalpConfig.activeRiskLimits().getSignalMaxRr() + "])");
+        }
     }
 
     /** Read-only access to the underlying setup context (used by the API + tests). */
@@ -417,10 +441,40 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             tryArmOte(candle);
         }
 
-        // 13. From OTE_ARMED, build the order and try to emit.
+        // 13. From OTE_ARMED, build the order and try to emit. In scalp mode
+        // the core's target Candidate A (nearest opposing liquidity in the
+        // trade direction) is pre-computed here each candle so the core
+        // stays detector-free.
         if (ctx.state == SetupState.OTE_ARMED) {
+            if (scalpMode) {
+                core.setNearestOpposingLiquidity(
+                        nearestOpposingLiquidity(candle.getClose()));
+            }
             tryEmitOrder();
         }
+    }
+
+    /**
+     * Candidate A for the scalp target: the nearest opposing liquidity level
+     * in the bias direction (above price for longs, below for shorts).
+     * Primary source: {@link LiquidityTargetIdentifier#findAllTargets}
+     * (unraided, significance-filtered, nearest first). Fallback: the
+     * {@link LevelEngine} nearest-unraided-level query. Null when the level
+     * pipeline has no opposing level yet — the calculator then considers
+     * only the FVG origin / 1R fallback.
+     */
+    private Double nearestOpposingLiquidity(double referencePrice) {
+        if (lastBias == MarketBias.NEUTRAL) return null;
+        boolean bullish = (lastBias == MarketBias.BULLISH);
+        List<LiquidityTargetIdentifier.LiquidityTarget> targets =
+                liquidityTargets.findAllTargets(referencePrice, bullish);
+        if (!targets.isEmpty()) {
+            return targets.get(0).getTargetPrice(); // sorted nearest-first
+        }
+        Optional<KnownLevel> level = bullish
+                ? levelEngine.getNearestUnraidedLevelAbove(referencePrice)
+                : levelEngine.getNearestUnraidedLevelBelow(referencePrice);
+        return level.map(KnownLevel::getPrice).orElse(null);
     }
 
     @Override

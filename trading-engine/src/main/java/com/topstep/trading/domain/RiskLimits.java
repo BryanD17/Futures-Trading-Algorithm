@@ -20,6 +20,21 @@ public final class RiskLimits {
     private final LocalTime flattenByTime;       // Must be flat by this time
     private final boolean allowWeekendTrading;   // Allow trading on weekends
 
+    // ── Signal-validator RR band (STDV+OTE M7 gate) ─────────────────────────
+    // Decoupled from min/maxRiskRewardRatio on purpose: the legacy validator
+    // floor has always been 2.0 while topstep50k().minRiskRewardRatio is 3.0.
+    // Wiring the validator to minRiskRewardRatio would silently tighten legacy
+    // emission from 2.0 → 3.0. The builder defaults [2.0, +infinity) reproduce
+    // today's effective legacy behaviour byte-for-byte; only the scalp profile
+    // overrides them.
+    private final double signalMinRr;            // Validator M7 RR floor
+    private final double signalMaxRr;            // Validator M7 RR ceiling
+
+    // ── Trade-frequency gates (scalp discipline; ported semantics from the
+    //    Monte Carlo RiskProfile). 0 = gate disabled (legacy profiles). ─────
+    private final int maxTradesPerDay;           // Block trade N+1 of the day (0 = off)
+    private final int maxConsecutiveLosses;      // Block after N straight losses (0 = off)
+
     private RiskLimits(Builder builder) {
         this.maxDailyLoss = builder.maxDailyLoss;
         this.maxLossLimit = builder.maxLossLimit;
@@ -32,6 +47,10 @@ public final class RiskLimits {
         this.maxRiskRewardRatio = builder.maxRiskRewardRatio;
         this.flattenByTime = builder.flattenByTime;
         this.allowWeekendTrading = builder.allowWeekendTrading;
+        this.signalMinRr = builder.signalMinRr;
+        this.signalMaxRr = builder.signalMaxRr;
+        this.maxTradesPerDay = builder.maxTradesPerDay;
+        this.maxConsecutiveLosses = builder.maxConsecutiveLosses;
     }
 
     // Getters
@@ -52,6 +71,14 @@ public final class RiskLimits {
     public double getMaxRiskRewardRatio() { return maxRiskRewardRatio; }
     public LocalTime getFlattenByTime() { return flattenByTime; }
     public boolean isAllowWeekendTrading() { return allowWeekendTrading; }
+    /** Validator (M7) RR floor for signal emission; independent of the risk-engine band. */
+    public double getSignalMinRr() { return signalMinRr; }
+    /** Validator (M7) RR ceiling for signal emission; {@code Double.POSITIVE_INFINITY} = no ceiling. */
+    public double getSignalMaxRr() { return signalMaxRr; }
+    /** Max trades allowed per trading day; {@code 0} disables the gate (legacy profiles). */
+    public int getMaxTradesPerDay() { return maxTradesPerDay; }
+    /** Max consecutive losses before trading is blocked; {@code 0} disables the gate. */
+    public int getMaxConsecutiveLosses() { return maxConsecutiveLosses; }
 
     /**
      * Create default Topstep 50K evaluation account limits (Express Funded Account).
@@ -125,6 +152,46 @@ public final class RiskLimits {
                 .build();
     }
 
+    /**
+     * Topstep 50K limits for SCALP mode (1R-capped targets, multiple trades/day).
+     *
+     * <p>Same Topstep account rails as {@link #topstep50k()} (DLL $1,000,
+     * MLL $2,000, 15:10 CT flatten) — those are NEVER weakened. What changes:
+     *
+     * <ul>
+     *   <li>RR band [0.8, 1.5] — both the risk-engine band and the validator
+     *       signal band, matching the 1R-capped scalp target model.</li>
+     *   <li>{@code riskPerTrade} $150 — deliberately NOT the legacy $250:
+     *       with a $1,000 DLL and multiple trades per day, $250+ per trade
+     *       makes a DLL breach a near-certainty on a normal losing streak
+     *       (4 losses). $150 x 6 trades caps the worst day at $900 &lt; DLL.
+     *       SA5 Monte-Carlos this choice.</li>
+     *   <li>{@code maxContracts} 20 micros — the instrument band is [5, 20]
+     *       micros; the $150 risk cap dominates actual sizing.</li>
+     *   <li>{@code maxTradesPerDay} 6 and {@code maxConsecutiveLosses} 3 —
+     *       blocking gates enforced by {@code PropFirmRiskEngine}.</li>
+     * </ul>
+     */
+    public static RiskLimits topstep50kScalp() {
+        return builder()
+                .maxDailyLoss(1000.0)          // DLL: $1,000 (unchanged Topstep rail)
+                .maxLossLimit(2000.0)          // MLL: $2,000 (unchanged Topstep rail)
+                .profitTarget(3000.0)          // Profit target: $3,000
+                .trailingDrawdown(2000.0)      // Same as MLL
+                .maxContracts(20)              // Instrument micro band ceiling [5, 20]
+                .maxTotalContracts(20)         // One position at a time at full size
+                .riskPerTrade(150.0)           // See javadoc: DLL survival at 6 trades/day
+                .minRiskRewardRatio(0.8)       // Scalp band floor
+                .maxRiskRewardRatio(1.5)       // Scalp band ceiling (1R-capped targets)
+                .signalMinRr(0.8)              // Validator M7 band = same scalp band
+                .signalMaxRr(1.5)
+                .maxTradesPerDay(6)            // Trade #7 of the day is rejected
+                .maxConsecutiveLosses(3)       // 4th trade after 3 straight losses rejected
+                .flattenByTime(LocalTime.of(15, 10)) // 3:10 PM CT (Topstep rule, unchanged)
+                .allowWeekendTrading(false)
+                .build();
+    }
+
     @Override
     public String toString() {
         return String.format("RiskLimits{maxDailyLoss=%.2f, trailingDrawdown=%.2f, maxContracts=%d, riskPerTrade=%.2f}",
@@ -147,6 +214,15 @@ public final class RiskLimits {
         private double maxRiskRewardRatio = 5.0;
         private LocalTime flattenByTime = LocalTime.of(15, 10);
         private boolean allowWeekendTrading = false;
+        // Validator band defaults reproduce the legacy effective behaviour
+        // exactly: floor 2.0 (the historical MIN_RR_FLOOR_STDV_OTE), no
+        // ceiling. Legacy factory methods inherit these without any change
+        // to their source.
+        private double signalMinRr = 2.0;
+        private double signalMaxRr = Double.POSITIVE_INFINITY;
+        // Frequency gates default OFF (0) so legacy profiles enforce neither.
+        private int maxTradesPerDay = 0;
+        private int maxConsecutiveLosses = 0;
 
         public Builder maxDailyLoss(double maxDailyLoss) {
             this.maxDailyLoss = maxDailyLoss;
@@ -200,6 +276,26 @@ public final class RiskLimits {
 
         public Builder allowWeekendTrading(boolean allowWeekendTrading) {
             this.allowWeekendTrading = allowWeekendTrading;
+            return this;
+        }
+
+        public Builder signalMinRr(double signalMinRr) {
+            this.signalMinRr = signalMinRr;
+            return this;
+        }
+
+        public Builder signalMaxRr(double signalMaxRr) {
+            this.signalMaxRr = signalMaxRr;
+            return this;
+        }
+
+        public Builder maxTradesPerDay(int maxTradesPerDay) {
+            this.maxTradesPerDay = maxTradesPerDay;
+            return this;
+        }
+
+        public Builder maxConsecutiveLosses(int maxConsecutiveLosses) {
+            this.maxConsecutiveLosses = maxConsecutiveLosses;
             return this;
         }
 
