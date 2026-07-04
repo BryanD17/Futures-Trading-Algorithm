@@ -7,8 +7,11 @@ import com.topstep.trading.chartstate.LevelEngine;
 import com.topstep.trading.chartstate.LiquidityRaid;
 import com.topstep.trading.chartstate.RaidDetector;
 import com.topstep.trading.chartstate.RaidDirection;
+import com.topstep.trading.domain.AccountState;
 import com.topstep.trading.domain.Candle;
+import com.topstep.trading.domain.RiskLimits;
 import com.topstep.trading.event.EventBus;
+import com.topstep.trading.event.PositionClosedEvent;
 import com.topstep.trading.strategy.BarAggregationManager;
 import com.topstep.trading.strategy.BarAggregationManager.Timeframe;
 import com.topstep.trading.strategy.CorrelationTracker;
@@ -34,10 +37,14 @@ import com.topstep.trading.strategy.TradingStrategy;
 import com.topstep.trading.validation.MandatoryConfluenceValidator;
 
 import java.time.Instant;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalDouble;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * The runtime-ready STDV+OTE strategy that runners actually instantiate.
@@ -161,6 +168,35 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private final boolean scalpMode;
     private final LiquidityTargetIdentifier liquidityTargets;
 
+    // ── Scalp frequency / gate state (SA4) ────────────────────────────────
+    /** Active risk limits (scalp or legacy profile — single selection point). */
+    private final RiskLimits activeRiskLimits;
+    /** Re-arm cooldown length in feed bars ({@code scalp.rearmCooldownBars}). */
+    private final int rearmCooldownBars;
+    /** London prime window (ET) gating MGC scalp entries. */
+    private final LocalTime londonPrimeStartEt;
+    private final LocalTime londonPrimeEndEt;
+    /** Buffer-based sizer, wired in scalp mode when account state is available. */
+    private final StdvOteSizer sizer = new StdvOteSizer();
+    private final double sizerSafetyCushion;
+    /** OTE entry math (same instance the core uses; pure). */
+    private final OteEntryCalculator oteCalculator;
+
+    private static final ZoneId ET_ZONE = ZoneId.of("America/New_York");
+
+    /**
+     * Set asynchronously by the PositionClosedEvent handler (EventBus worker
+     * threads); consumed on the candle thread — the SetupContext is
+     * thread-confined, so all state mutation happens flag-and-apply style.
+     */
+    private final AtomicBoolean pendingPositionClosed = new AtomicBoolean(false);
+    /** True from signal emission until a PositionClosedEvent for this symbol. */
+    private volatile boolean positionOpen = false;
+    /** Bars left before a re-arm may fire; -1 = no re-arm pending. */
+    private int rearmCooldownRemaining = -1;
+    /** Previous candle's state, to detect INVALIDATED transitions. */
+    private SetupState lastSeenState = SetupState.IDLE;
+
     // Tier-driven fixed size table (first-cut sizing; replaced by the full
     // buffer-based formula in StdvOteSizer once the runner exposes equity —
     // SA3 scope, see class javadoc).
@@ -256,26 +292,43 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
 
         // Core state machine + validator + projection / OTE engines.
         StdvProjectionEngine projectionEngine = new StdvProjectionEngine(chartState, impulseAnalyzer);
-        OteEntryCalculator oteCalc = new OteEntryCalculator();
+        this.oteCalculator = new OteEntryCalculator();
         MandatoryConfluenceValidator validator =
                 new MandatoryConfluenceValidator(null, displacementDetector, chartState);
         // The M7 RR band comes from the ACTIVE RiskLimits' signal band:
         // legacy → topstep50k() carries [2.0, +inf) (identical to the old
         // hardcoded floor); scalp → topstep50kScalp() carries [0.8, 1.5].
-        validator.setActiveRiskLimits(ScalpConfig.activeRiskLimits());
-        this.core = new StdvOteStrategy(symbol, projectionEngine, oteCalc, validator,
+        this.activeRiskLimits = ScalpConfig.activeRiskLimits();
+        validator.setActiveRiskLimits(activeRiskLimits);
+        this.core = new StdvOteStrategy(symbol, projectionEngine, oteCalculator, validator,
                 eventBus, /* expiryBars */ 40L);
 
-        // Scalp mode (SA3): swap the emission target model only. All other
-        // gates/state machinery run exactly as in legacy mode.
+        // Scalp mode (SA3 target model + SA4 frequency/gates). All the
+        // sequential mandatory gates run exactly as in legacy mode.
         this.scalpMode = ScalpConfig.isEnabled();
         this.liquidityTargets = new LiquidityTargetIdentifier(symbol, levelEngine);
+        this.rearmCooldownBars = ScalpConfig.rearmCooldownBars();
+        this.londonPrimeStartEt = ScalpConfig.londonPrimeStartEt();
+        this.londonPrimeEndEt = ScalpConfig.londonPrimeEndEt();
+        this.sizerSafetyCushion = ScalpConfig.sizerSafetyCushion();
         if (scalpMode) {
-            core.enableScalpMode(ScalpConfig.targetCalculator());
+            core.enableScalpMode(ScalpConfig.targetCalculator(), ScalpConfig.minRaidScore());
+            // Re-arm trigger (SA4): observe the position-close funnels via
+            // the bus. The handler only flips a flag — all state mutation
+            // happens on the candle thread (SetupContext is thread-confined).
+            if (eventBus != null) {
+                eventBus.subscribe(PositionClosedEvent.class, evt -> {
+                    if (this.symbol.equals(evt.getSymbol())) {
+                        pendingPositionClosed.set(true);
+                    }
+                });
+            }
             System.out.println("[StdvOteRunnerStrategy] SCALP MODE ACTIVE for " + symbol
                     + " (1R-capped targets, band ["
-                    + ScalpConfig.activeRiskLimits().getSignalMinRr() + ", "
-                    + ScalpConfig.activeRiskLimits().getSignalMaxRr() + "])");
+                    + activeRiskLimits.getSignalMinRr() + ", "
+                    + activeRiskLimits.getSignalMaxRr() + "], minRaidScore="
+                    + ScalpConfig.minRaidScore() + ", rearmCooldownBars="
+                    + rearmCooldownBars + ")");
         }
     }
 
@@ -393,6 +446,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         SetupContext ctx = core.getSetupContext();
         ctx.killzoneOpen = inKillzone;
 
+        // 5b. SCALP re-arm engine (SA4). Legacy mode: none of this runs —
+        // IN_TRADE / INVALIDATED stay terminal (one-move discipline).
+        if (scalpMode) {
+            processScalpRearm(ctx, context, inKillzone);
+        }
+
         // 6. HTF bias hook — completed HTF bar close ONLY, and only on change.
         if (htfBarClosed) {
             MarketBias bias = mapTrendToBias(htfTrend.getTrendState());
@@ -450,8 +509,122 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 core.setNearestOpposingLiquidity(
                         nearestOpposingLiquidity(candle.getClose()));
             }
-            tryEmitOrder();
+            tryEmitOrder(context);
         }
+
+        // Remember the state for INVALIDATED-transition detection (SA4).
+        lastSeenState = ctx.state;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Scalp re-arm engine (SA4) — multiple setups per killzone
+    // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * Applies pending position-close notifications, runs the re-arm cooldown
+     * and, when every gate passes, resets the core for the next setup in the
+     * same killzone. Called once per primary candle, on the candle thread,
+     * in scalp mode only.
+     *
+     * <p>Re-arm requires ALL of:
+     * <ol>
+     *   <li>the setup is terminal: {@code INVALIDATED}, or {@code IN_TRADE}
+     *       with the position confirmed closed (PositionClosedEvent);</li>
+     *   <li>{@code scalp.rearmCooldownBars} feed bars have elapsed since the
+     *       close/invalidation was observed;</li>
+     *   <li>a killzone is open for this instrument right now;</li>
+     *   <li>NO-OVERLAP: no open position on this symbol (event-tracked flag
+     *       AND the account's live position map when available);</li>
+     *   <li>the PropFirmRiskEngine frequency gates would pass — same fields
+     *       the engine blocks on ({@code maxTradesPerDay},
+     *       {@code maxConsecutiveLosses} vs the account counters).</li>
+     * </ol>
+     */
+    private void processScalpRearm(SetupContext ctx, StrategyContext context,
+                                   boolean inKillzone) {
+        // Apply the async close notification on the candle thread. The
+        // cooldown starts on the detection candle and counts FULL bars —
+        // the decrement below is skipped on the detection candle itself.
+        boolean detectedThisBar = false;
+        if (pendingPositionClosed.compareAndSet(true, false)) {
+            positionOpen = false;
+            if (ctx.state == SetupState.IN_TRADE && rearmCooldownRemaining < 0) {
+                rearmCooldownRemaining = rearmCooldownBars;
+                detectedThisBar = true;
+                System.out.println("[" + symbol + "] SCALP: position closed — re-arm in "
+                        + rearmCooldownBars + " bars");
+            }
+        }
+        // Detect an INVALIDATED transition (session end, bias flip, OTE
+        // expiry, counter-bias MSS, ...) and start the same cooldown.
+        if (ctx.state == SetupState.INVALIDATED
+                && lastSeenState != SetupState.INVALIDATED
+                && rearmCooldownRemaining < 0) {
+            rearmCooldownRemaining = rearmCooldownBars;
+            detectedThisBar = true;
+            System.out.println("[" + symbol + "] SCALP: setup invalidated ("
+                    + ctx.lastGateFailed + ") — re-arm in " + rearmCooldownBars + " bars");
+        }
+        if (detectedThisBar) {
+            return;
+        }
+
+        if (rearmCooldownRemaining > 0) {
+            rearmCooldownRemaining--;
+        } else if (rearmCooldownRemaining == 0 && canRearm(ctx, context, inKillzone)) {
+            rearmCooldownRemaining = -1;
+            rearm(ctx);
+        }
+    }
+
+    /** All re-arm gates outside the cooldown itself. */
+    private boolean canRearm(SetupContext ctx, StrategyContext context, boolean inKillzone) {
+        boolean terminal = ctx.state == SetupState.INVALIDATED
+                || (ctx.state == SetupState.IN_TRADE && !positionOpen);
+        if (!terminal) return false;
+        if (!inKillzone) return false;
+        // NO-OVERLAP: never arm a new setup while a position is open on this
+        // symbol — the event-tracked flag plus the live account map.
+        if (positionOpen) return false;
+        if (context != null && context.hasPosition(symbol)) return false;
+        // Mirror the PropFirmRiskEngine frequency gates (3b in evaluate()):
+        // arming a setup the engine would block is pointless and would burn
+        // the killzone window.
+        AccountState account = (context != null) ? context.getAccountState() : null;
+        if (account != null) {
+            if (activeRiskLimits.getMaxTradesPerDay() > 0
+                    && account.getTradesToday() >= activeRiskLimits.getMaxTradesPerDay()) {
+                return false;
+            }
+            if (activeRiskLimits.getMaxConsecutiveLosses() > 0
+                    && account.getConsecutiveLosses() >= activeRiskLimits.getMaxConsecutiveLosses()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Reset the core + per-setup runner state for the next setup in the same
+     * killzone. The sweep/displacement consumption markers are deliberately
+     * KEPT so the new setup can never re-consume the previous setup's
+     * events; the killzone candle buffer is KEPT (same killzone anchor).
+     */
+    private void rearm(SetupContext ctx) {
+        core.resetForNextWindow();
+        lastObservedMss = null;
+        barsSinceMss = Integer.MAX_VALUE;
+        barsInOte = 0;
+        lowSinceSweep = Double.NaN;
+        highSinceSweep = Double.NaN;
+        impulseTracker.reset();
+        // Re-seed the HTF bias (resetForNextWindow clears it to NEUTRAL and
+        // the bias hook only fires on CHANGE at HTF closes).
+        if (lastBias != MarketBias.NEUTRAL) {
+            core.recordHtfBias(lastBias);
+        }
+        System.out.println("[" + symbol + "] SCALP: re-armed for next setup"
+                + " (state=" + ctx.state + ", bias=" + lastBias + ")");
     }
 
     /**
@@ -496,6 +669,11 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         lastPrimaryTimestamp = null;
         lastSmtTimestamp = null;
         lastBias = MarketBias.NEUTRAL;
+        // Scalp re-arm state (SA4) starts clean.
+        pendingPositionClosed.set(false);
+        positionOpen = false;
+        rearmCooldownRemaining = -1;
+        lastSeenState = SetupState.IDLE;
         core.resetForNextWindow();
     }
 
@@ -549,12 +727,49 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     }
 
     private boolean isInstrumentKillzone(Instant now) {
-        // MGC trades the London window in addition to NY; MNQ/MES use NY only.
+        if (scalpMode) {
+            return isScalpWindow(now);
+        }
+        // LEGACY (unchanged): NY killzones ∪ Silver Bullet windows; MGC also
+        // trades the full London session 3:00–12:00 ET.
         boolean ny = killzoneClock.isInKillzone(now) || silverBulletClock.isInSilverBulletWindow(now);
         if ("MGC".equals(symbol) && killzoneClock.isInLondonSession(now)) {
             return true;
         }
         return ny;
+    }
+
+    /**
+     * SCALP time windows (SA4). Full KillzoneClock killzones replace the
+     * Silver-Bullet union:
+     * <ul>
+     *   <li>NY AM 9:45–12:30 ET and NY PM 13:45–16:00 ET for every
+     *       instrument. The NY PM close (16:00 ET = 15:00 CT) precedes the
+     *       Topstep flatten time (15:10 CT = 16:10 ET), so no scalp entry
+     *       can slip between the killzone close and the flatten.</li>
+     *   <li>MGC only: the London session restricted to its PRIME window
+     *       ({@code scalp.londonPrimeStartEt}–{@code scalp.londonPrimeEndEt},
+     *       default 3:00–5:00 ET). KillzoneClock's phase API covers NY AM/PM
+     *       only (London returns OUTSIDE), so the prime restriction is
+     *       config-driven per the SA4 fallback clause. This NARROWS the
+     *       legacy 3:00–12:00 ET London window.</li>
+     * </ul>
+     * SilverBulletClock is no longer a hard gate in scalp mode — the 3:00–4:00
+     * ET SB window alone no longer opens trading for MNQ/MES — but it REMAINS
+     * a scoring input: RaidDetector.processCandle stamps the SB window on the
+     * scoring context and RaidQualityScorer awards +1 inside it.
+     */
+    private boolean isScalpWindow(Instant now) {
+        LocalTime et = now.atZone(ET_ZONE).toLocalTime();
+        boolean nyKillzone = killzoneClock.isInNyAmKillzone(et)
+                || killzoneClock.isInNyPmKillzone(et);
+        if ("MGC".equals(symbol)) {
+            boolean londonPrime = killzoneClock.isInLondonSession(now)
+                    && !et.isBefore(londonPrimeStartEt)
+                    && et.isBefore(londonPrimeEndEt);
+            return nyKillzone || londonPrime;
+        }
+        return nyKillzone;
     }
 
     /**
@@ -597,8 +812,23 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         boolean wantBullishSweep = (lastBias == MarketBias.BULLISH);
         if (sweep.isBullish() != wantBullishSweep) return;
 
+        // Score provenance matters for the SA4 binary gate: a DIFFERENTIATED
+        // pipeline score (one that says more than the instrument base) is
+        // subject to scalp.minRaidScore. Two cases keep SA2's base-score
+        // semantics and bypass the floor instead:
+        //  - starved pipeline (no tracked raid) → fallback score == base;
+        //  - a tracked raid scoring EXACTLY the instrument base — carrying
+        //    zero differentiating information vs the fallback path (raids
+        //    are scored once at creation; base-level context yields base).
+        // A tracked raid scoring BELOW base is differentiated (negative
+        // signal) and is gated — it would fail M4 later anyway; rejecting at
+        // sweep time keeps the window alive for a better sweep.
+        RaidDirection want = sweep.isBullish() ? RaidDirection.LOW_SWEEP : RaidDirection.HIGH_SWEEP;
+        Optional<LiquidityRaid> activeRaid = raidDetector.getActiveRaidByDirection(want);
+        boolean scoreDifferentiated = activeRaid.isPresent()
+                && activeRaid.get().getQualityScore() != spec.raidMinQuality();
         int score = currentRaidScore(sweep);
-        core.recordSweep(sweep, score);
+        core.recordSweep(sweep, score, scoreDifferentiated);
         if (core.getSetupContext().state == SetupState.SWEEP_DONE) {
             lastConsumedSweepTs = sweep.getTimestamp();
             // Begin tracking the reversal-leg origin from the swept extreme.
@@ -707,19 +937,93 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 spec.tickSize(), reactionConfirmed);
     }
 
-    private void tryEmitOrder() {
+    private void tryEmitOrder(StrategyContext context) {
         SetupContext ctx = core.getSetupContext();
         TradeTier tier = computeTier(ctx);
         if (tier == null) {
-            core.invalidate("no qualifying tier");
+            if (scalpMode) {
+                // SA4: the tier ladder must NOT block emission in scalp mode
+                // — the binary quality gate is the raid-score floor (already
+                // enforced at sweep time). Tier only informs sizing.
+                tier = TradeTier.TIER_1;
+            } else {
+                core.invalidate("no qualifying tier");
+                return;
+            }
+        }
+        // NO-OVERLAP (scalp): never emit while a position is open on this
+        // symbol. Legacy is single-shot by construction (IN_TRADE terminal).
+        if (scalpMode && (positionOpen
+                || (context != null && context.hasPosition(symbol)))) {
             return;
         }
-        int size = sizeForTier(tier);
+        int size = scalpMode ? scalpSize(ctx, tier, context) : sizeForTier(tier);
+        if (size <= 0) {
+            // Sizer stand-down (never 1–4 micros): skip this bar; the OTE
+            // window keeps counting and the setup expires/invalidates
+            // normally if conditions do not improve.
+            return;
+        }
         // tryEmit runs the validator; if it passes, a signal is published.
         // On failure the OTE window simply keeps counting in onCandle — the
         // previous extra barsInOte++ here double-counted and halved the
         // window (SA1 audit finding).
-        core.tryEmit(spec.tickSize(), stopBufferTicks, tier, size);
+        boolean emitted = core.tryEmit(spec.tickSize(), stopBufferTicks, tier, size);
+        if (emitted && scalpMode) {
+            // Track the open position for the no-overlap rule; cleared only
+            // by this symbol's PositionClosedEvent.
+            positionOpen = true;
+        }
+    }
+
+    /**
+     * Scalp-mode size selection (SA4): route through {@link StdvOteSizer}
+     * when account/equity state is available from the {@link StrategyContext}.
+     *
+     * <p>Mapping onto the sizer's buffer-based formula:
+     * <ul>
+     *   <li>{@code equity} — live account equity;</li>
+     *   <li>{@code mllFloor} — highest EOD balance − MLL (the Topstep bust
+     *       line from the active {@link RiskLimits});</li>
+     *   <li>{@code riskFraction} — capped so the risk budget never exceeds
+     *       the profile's {@code riskPerTrade} ($150 on topstep50kScalp) NOR
+     *       the sizer's canonical 12% of available room;</li>
+     *   <li>{@code topstepMicroMax} — the risk engine's
+     *       {@code maxContracts}, so runner sizing can never exceed it.</li>
+     * </ul>
+     * The sizer itself clamps to the instrument band [5, 20] and returns 0
+     * (stand down) rather than 1–4 micros. Without account state (no
+     * context), sizing falls back to the bounded tier table — flagged in
+     * SA4_frequency_gates.md.
+     */
+    private int scalpSize(SetupContext ctx, TradeTier tier, StrategyContext context) {
+        AccountState account = (context != null) ? context.getAccountState() : null;
+        if (account == null || ctx.ote == null || Double.isNaN(ctx.pdArrayInOte)) {
+            return sizeForTier(tier); // bounded fallback ([5, 20] clamp)
+        }
+        double entry = oteCalculator.chooseEntry(
+                ctx.ote, OptionalDouble.of(ctx.pdArrayInOte), spec.tickSize());
+        double stop = oteCalculator.stopPrice(ctx.ote, spec.tickSize(), stopBufferTicks);
+        double equity = account.getEquity();
+        double mllFloor = account.getHighestEndOfDayBalance()
+                - activeRiskLimits.getMaxLossLimit();
+        double availableRoom = equity - mllFloor - sizerSafetyCushion;
+        double riskFraction = StdvOteSizer.DEFAULT_RISK_FRACTION;
+        if (availableRoom > 0) {
+            riskFraction = Math.min(riskFraction,
+                    activeRiskLimits.getRiskPerTrade() / availableRoom);
+        }
+        StdvOteSizer.SizingDecision decision = sizer.decide(
+                new StdvOteSizer.SizeRequest(entry, stop, spec, tier),
+                new StdvOteSizer.SizeContext(equity, mllFloor, sizerSafetyCushion,
+                        riskFraction, /* newsMultiplier */ 1.0,
+                        activeRiskLimits.getMaxContracts()));
+        if (!decision.shouldTrade()) {
+            System.out.println("[" + symbol + "] SCALP sizer stand-down: "
+                    + decision.reason() + " (" + decision.detail() + ")");
+            return 0;
+        }
+        return decision.contracts();
     }
 
     private TradeTier computeTier(SetupContext ctx) {

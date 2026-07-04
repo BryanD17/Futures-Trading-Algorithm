@@ -61,6 +61,10 @@ public class BacktestRunner implements ExecutionEngine.ExecutionListener {
         // This ensures TradingRiskManager is notified ONLY when orders actually fill
         executionEngine.setExecutionListener(this);
 
+        // Publish PositionClosedEvent from the backtest close funnel (scalp
+        // re-arm subscribes; no-op for legacy consumers).
+        executionEngine.setEventBus(eventBus);
+
         // Subscribe to strategy signals on the SAME EventBus the strategy uses
         eventBus.subscribe(StrategySignalEvent.class, this::handleStrategySignal);
     }

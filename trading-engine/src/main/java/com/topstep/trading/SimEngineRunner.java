@@ -95,6 +95,9 @@ public class SimEngineRunner {
         this.executionEngine = new ExecutionEngine(accountState);
         this.riskEngine = new PropFirmRiskEngine();
         this.eventBus = new EventBus();
+        // Publish PositionClosedEvent from the sim close funnel (scalp-mode
+        // re-arm subscribes to it; no-op for legacy consumers).
+        this.executionEngine.setEventBus(eventBus);
         this.strategyContext = new DefaultStrategyContext(accountState);
 
         if (MULTI_INSTRUMENT_ENABLED) {

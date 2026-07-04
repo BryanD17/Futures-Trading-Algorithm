@@ -179,6 +179,10 @@ public class LiveEngineRunner {
         this.executionEngine.setSimulationEnabled(false); // live mode relies on broker fills only
         this.riskEngine = new PropFirmRiskEngine();
         this.eventBus = new EventBus();
+        // Publish PositionClosedEvent from any ExecutionEngine close (live
+        // closes normally flow through the bracket handlers below, which
+        // publish it themselves).
+        this.executionEngine.setEventBus(eventBus);
 
         // Initialize bracket order manager for OCO SL/TP management
         if (this.connector instanceof TopstepConnector) {
@@ -197,6 +201,9 @@ public class LiveEngineRunner {
                     // Count the completed trade for the frequency gates
                     // (live closes bypass ExecutionEngine.closePosition).
                     accountState.recordTradeCompleted(pnl);
+                    // Same funnel: notify subscribers (scalp re-arm) of the close.
+                    eventBus.publish(new com.topstep.trading.event.PositionClosedEvent(
+                            bracket.symbol, pnl, pnl > 0, java.time.Instant.now()));
                 }
 
                 @Override
@@ -210,6 +217,9 @@ public class LiveEngineRunner {
                     accountState.closePosition(bracket.symbol);
                     // Count the completed trade for the frequency gates.
                     accountState.recordTradeCompleted(pnl);
+                    // Same funnel: notify subscribers (scalp re-arm) of the close.
+                    eventBus.publish(new com.topstep.trading.event.PositionClosedEvent(
+                            bracket.symbol, pnl, pnl > 0, java.time.Instant.now()));
                 }
 
                 @Override

@@ -2,6 +2,9 @@ package com.topstep.trading.strategy.stdvote;
 
 import com.topstep.trading.domain.RiskLimits;
 
+import java.time.LocalTime;
+import java.time.format.DateTimeParseException;
+
 /**
  * Scalp-mode configuration — the single selection point for the 1R-capped
  * scalp target / risk model (SA3).
@@ -27,6 +30,20 @@ import com.topstep.trading.domain.RiskLimits;
  *   <li>{@code scalp.candidateWindowR} — candidates farther than this many R
  *       from entry are not "valid"; with none valid the target falls back to
  *       exactly 1R (default {@code 1.5}).</li>
+ *   <li>{@code scalp.minRaidScore} — binary quality gate (SA4): a sweep whose
+ *       REAL raid-pipeline score is below this floor never arms a scalp setup
+ *       (default {@code 6}). The tier ladder no longer blocks emission in
+ *       scalp mode; tier only informs sizing.</li>
+ *   <li>{@code scalp.rearmCooldownBars} — bars (feed timeframe, 1m in the
+ *       runners) that must elapse after a position close / setup invalidation
+ *       before a new setup may arm in the same killzone (default {@code 5}).</li>
+ *   <li>{@code scalp.londonPrimeStartEt} / {@code scalp.londonPrimeEndEt} —
+ *       the London prime window (ET, HH:mm) that gates MGC scalp entries
+ *       (defaults {@code 03:00} / {@code 05:00}). KillzoneClock has no phase
+ *       API for the London session (its phases cover NY AM/PM only), so the
+ *       prime restriction is config-driven per the SA4 fallback clause.</li>
+ *   <li>{@code scalp.sizerSafetyCushion} — dollars held back from available
+ *       room in the {@code StdvOteSizer} wiring (default {@code 200}).</li>
  * </ul>
  *
  * <p>The 1R target cap itself is NOT configurable — it is the definition of
@@ -52,6 +69,26 @@ public final class ScalpConfig {
 
     /** R-multiple at which the scalp breakeven trigger arms (+0.5R). */
     public static final double BREAKEVEN_TRIGGER_R = 0.5;
+
+    /** System property: binary raid-score floor for scalp setups. Default 6. */
+    public static final String MIN_RAID_SCORE_PROPERTY = "scalp.minRaidScore";
+    public static final int DEFAULT_MIN_RAID_SCORE = 6;
+
+    /** System property: re-arm cooldown in feed bars. Default 5. */
+    public static final String REARM_COOLDOWN_BARS_PROPERTY = "scalp.rearmCooldownBars";
+    public static final int DEFAULT_REARM_COOLDOWN_BARS = 5;
+
+    /** System property: London prime window start (ET, HH:mm). Default 03:00. */
+    public static final String LONDON_PRIME_START_ET_PROPERTY = "scalp.londonPrimeStartEt";
+    public static final LocalTime DEFAULT_LONDON_PRIME_START_ET = LocalTime.of(3, 0);
+
+    /** System property: London prime window end (ET, HH:mm). Default 05:00. */
+    public static final String LONDON_PRIME_END_ET_PROPERTY = "scalp.londonPrimeEndEt";
+    public static final LocalTime DEFAULT_LONDON_PRIME_END_ET = LocalTime.of(5, 0);
+
+    /** System property: sizer safety cushion in dollars. Default 200. */
+    public static final String SIZER_SAFETY_CUSHION_PROPERTY = "scalp.sizerSafetyCushion";
+    public static final double DEFAULT_SIZER_SAFETY_CUSHION = 200.0;
 
     private ScalpConfig() {}
 
@@ -94,12 +131,50 @@ public final class ScalpConfig {
         return new ScalpTargetCalculator(minTargetClearanceTicks(), candidateWindowR());
     }
 
+    /** Binary raid-score floor for scalp setups (SA4 quality gate). */
+    public static int minRaidScore() {
+        return intProperty(MIN_RAID_SCORE_PROPERTY, DEFAULT_MIN_RAID_SCORE);
+    }
+
+    /** Re-arm cooldown in feed bars after a close/invalidation (SA4). */
+    public static int rearmCooldownBars() {
+        return Math.max(0, intProperty(REARM_COOLDOWN_BARS_PROPERTY,
+                DEFAULT_REARM_COOLDOWN_BARS));
+    }
+
+    /** London prime window start (ET) for MGC scalp entries. */
+    public static LocalTime londonPrimeStartEt() {
+        return timeProperty(LONDON_PRIME_START_ET_PROPERTY, DEFAULT_LONDON_PRIME_START_ET);
+    }
+
+    /** London prime window end (ET) for MGC scalp entries. */
+    public static LocalTime londonPrimeEndEt() {
+        return timeProperty(LONDON_PRIME_END_ET_PROPERTY, DEFAULT_LONDON_PRIME_END_ET);
+    }
+
+    /** Safety cushion (dollars) held back in the sizer wiring. */
+    public static double sizerSafetyCushion() {
+        return doubleProperty(SIZER_SAFETY_CUSHION_PROPERTY, DEFAULT_SIZER_SAFETY_CUSHION);
+    }
+
     private static int intProperty(String name, int defaultValue) {
         String raw = System.getProperty(name);
         if (raw == null) return defaultValue;
         try {
             return Integer.parseInt(raw.trim());
         } catch (NumberFormatException e) {
+            System.out.println("[ScalpConfig] WARN: invalid " + name + "='" + raw
+                    + "', using default " + defaultValue);
+            return defaultValue;
+        }
+    }
+
+    private static LocalTime timeProperty(String name, LocalTime defaultValue) {
+        String raw = System.getProperty(name);
+        if (raw == null) return defaultValue;
+        try {
+            return LocalTime.parse(raw.trim());
+        } catch (DateTimeParseException e) {
             System.out.println("[ScalpConfig] WARN: invalid " + name + "='" + raw
                     + "', using default " + defaultValue);
             return defaultValue;
