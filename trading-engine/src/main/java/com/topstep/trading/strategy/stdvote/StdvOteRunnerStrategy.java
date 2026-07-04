@@ -6,13 +6,17 @@ import com.topstep.trading.chartstate.EqualLevelDetector;
 import com.topstep.trading.chartstate.LevelEngine;
 import com.topstep.trading.chartstate.LiquidityRaid;
 import com.topstep.trading.chartstate.RaidDetector;
-import com.topstep.trading.chartstate.RaidQualityScorer;
+import com.topstep.trading.chartstate.RaidDirection;
 import com.topstep.trading.domain.Candle;
 import com.topstep.trading.event.EventBus;
+import com.topstep.trading.strategy.BarAggregationManager;
+import com.topstep.trading.strategy.BarAggregationManager.Timeframe;
 import com.topstep.trading.strategy.CorrelationTracker;
 import com.topstep.trading.strategy.DisplacementDetector;
 import com.topstep.trading.strategy.FairValueGap;
 import com.topstep.trading.strategy.FvgDetector;
+import com.topstep.trading.strategy.HtfTrendAnalyzer;
+import com.topstep.trading.strategy.HtfTrendAnalyzer.HtfTrendState;
 import com.topstep.trading.strategy.IctStructureDetector;
 import com.topstep.trading.strategy.ImpulseExtensionAnalyzer;
 import com.topstep.trading.strategy.KillzoneClock;
@@ -28,7 +32,9 @@ import com.topstep.trading.strategy.TradingStrategy;
 import com.topstep.trading.validation.MandatoryConfluenceValidator;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -44,42 +50,55 @@ import java.util.Optional;
  * <h2>Detector poll order (per onCandle)</h2>
  *
  * <ol>
- *   <li>Update every detector with the new candle.</li>
+ *   <li>Timestamp monotonicity guard — duplicate / out-of-order candles are
+ *       dropped before they can touch any detector.</li>
+ *   <li>Update every LTF detector with the new candle, and feed the raid
+ *       pipeline ({@code RaidDetector.processCandle}) so raid quality scores
+ *       are real 1–10 values, not the instrument base.</li>
+ *   <li>{@link BarAggregationManager} aggregates the 1m feed;
+ *       {@link HtfTrendAnalyzer} re-evaluates ONLY on completed 15m/30m bars
+ *       and its state maps to the {@code recordHtfBias} hook (1m noise never
+ *       thrashes the bias).</li>
  *   <li>{@link KillzoneClock} + {@link SilverBulletClock} →
- *       {@code ctx.killzoneOpen}.</li>
- *   <li>{@link IctStructureDetector#getBias()} → call
- *       {@code recordHtfBias} when the bias changes (a simplified HTF read;
- *       the 3-of-4 vote becomes a follow-up).</li>
- *   <li>When bias is set and we have two swing extremes, treat the most
- *       recent swing range as the manipulation leg →
- *       {@code recordManipulationLeg}.</li>
- *   <li>{@link LiquidityDetector#getLastSweep()} + raid quality →
- *       {@code recordSweep}.</li>
- *   <li>{@link DisplacementDetector#hasRecentDisplacement} +
- *       {@link FvgDetector#getUnfilledFvgs} → {@code recordDisplacement}.</li>
+ *       {@code ctx.killzoneOpen}; killzone-open candles are buffered for the
+ *       {@link ManipulationLegDetector} (Judas swing).</li>
+ *   <li>{@code recordManipulationLeg} ← Judas leg while a killzone is open;
+ *       most-recent swing pair only as an out-of-killzone fallback.</li>
+ *   <li>{@link LiquidityDetector#getLastSweep()} + the raid pipeline's
+ *       direction-matched quality score → {@code recordSweep} (same sweep is
+ *       never consumed twice — timestamp identity is tracked).</li>
+ *   <li>{@link DisplacementDetector#getDisplacementFvgZone()} — the FVG the
+ *       displacement itself created — → {@code recordDisplacement}; the
+ *       newest same-direction unfilled FVG is only a fallback.</li>
  *   <li>{@link MarketStructureShiftDetector#update} returns an MSS →
- *       {@code recordMss}.</li>
- *   <li>Use the latest swing high/low as the impulse leg →
+ *       {@code recordMss}; the MSS arms the {@link ImpulseLegTracker}.</li>
+ *   <li>{@link ImpulseLegTracker} supplies the post-MSS impulse extremes and
+ *       the observable rejection-reaction boolean →
  *       {@code recordOteImpulse}.</li>
  *   <li>When state reaches {@code OTE_ARMED}: compute the tier from
- *       confluence factors, call the sizer (deferred — first cut uses a
- *       fixed-floor size), and call {@code tryEmit}.</li>
+ *       confluence factors and call {@code tryEmit} with the configured
+ *       stop buffer.</li>
  * </ol>
  *
- * <h2>What is intentionally minimal in this first cut</h2>
+ * <h2>Configuration (system properties, {@code stdvOte.*} pattern)</h2>
  *
  * <ul>
- *   <li>HTF bias is read directly from the LTF structure detector. The 3-of-4
- *       rule (HTF trend / AMD / premium-discount / draw-on-liquidity) lands
- *       in a follow-up.</li>
- *   <li>Manipulation-leg detection picks the most recent bearish swing (for
- *       a bullish bias) or bullish swing (for a bearish bias) — good enough
- *       to drive the projection engine but coarser than the full ICT rule.</li>
+ *   <li>{@code stdvOte.stopBufferTicks} — stop buffer beyond the OTE 1.0, in
+ *       ticks. Default {@code 4} (legacy behaviour preserved exactly; scalp
+ *       mode chooses its own value in SA3).</li>
+ *   <li>{@code stdvOte.reactionWickTicks} — minimum rejection-wick length at
+ *       the OTE zone, in ticks, for {@code reactionConfirmed}. Default
+ *       {@code 2}.</li>
+ * </ul>
+ *
+ * <h2>What is intentionally deferred</h2>
+ *
+ * <ul>
  *   <li>Sizing uses a tier-driven fixed size in the {@code [5, 20]} band
- *       rather than the full buffer-based MLL calculation, because the
- *       runner-side risk engine wiring is a separate piece of work. The
- *       sizer code is in {@link StdvOteSizer}; this strategy will call it
- *       once the runner exposes equity + MLL floor cleanly.</li>
+ *       rather than the full buffer-based MLL calculation. {@link StdvOteSizer}
+ *       stays unwired until SA3's risk-profile work exposes equity + MLL floor
+ *       — wiring it here would change live sizing.</li>
+ *   <li>Scalp mode, re-arm logic, and killzone-window changes (SA3/SA4).</li>
  *   <li>SMT cross-feed: the strategy accepts an SMT candle via
  *       {@link #onSmtCandle(Candle)}; downstream runner code routes the
  *       correlate symbol there.</li>
@@ -95,6 +114,15 @@ import java.util.Optional;
  * M8 gate. No order is emitted while {@code ctx.lastGateFailed} is set.
  */
 public final class StdvOteRunnerStrategy implements TradingStrategy {
+
+    /** System property: stop buffer beyond the OTE 1.0, in ticks (default 4). */
+    public static final String STOP_BUFFER_TICKS_PROPERTY = "stdvOte.stopBufferTicks";
+    /** Legacy stop buffer — preserved as the default. */
+    public static final int DEFAULT_STOP_BUFFER_TICKS = 4;
+
+    /** System property: minimum OTE rejection-wick length, in ticks (default 2). */
+    public static final String REACTION_WICK_TICKS_PROPERTY = "stdvOte.reactionWickTicks";
+    public static final int DEFAULT_REACTION_WICK_TICKS = 2;
 
     private final String symbol;
     private final String smtSymbol;
@@ -114,16 +142,20 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private final ImpulseExtensionAnalyzer impulseAnalyzer;
     private final CorrelationTracker correlationTracker;
 
+    // HTF aggregation + trend (the real recordHtfBias source).
+    private final BarAggregationManager barManager;
+    private HtfTrendAnalyzer htfTrend;
+
     // Raid scoring (uses CandleSeries + LevelEngine + EqualLevelDetector).
     private final CandleSeries candleSeries;
     private final LevelEngine levelEngine;
     private final EqualLevelDetector equalLevelDetector;
     private final RaidDetector raidDetector;
-    private final RaidQualityScorer raidQualityScorer;
     private final ChartStateQueryAPI chartState;
 
     // Tier-driven fixed size table (first-cut sizing; replaced by the full
-    // buffer-based formula in StdvOteSizer once the runner exposes equity).
+    // buffer-based formula in StdvOteSizer once the runner exposes equity —
+    // SA3 scope, see class javadoc).
     private static final int SIZE_TIER_4 = 18;
     private static final int SIZE_TIER_3 = 14;
     private static final int SIZE_TIER_2 = 10;
@@ -135,11 +167,38 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** Maximum bars allowed in OTE_ARMED before the setup invalidates. */
     private static final int MAX_BARS_IN_OTE = 8;
 
+    /** Manipulation-leg snap tolerance in ticks (projection-level snapping). */
+    private static final int MANIP_SNAP_TOL_TICKS = 3;
+
+    /** Cap on the killzone candle buffer (longest window: London 9h = 540m). */
+    private static final int KILLZONE_BUFFER_MAX = 600;
+
+    // Config (read once at construction; stdvOte.* system properties).
+    private final int stopBufferTicks;
+    private final int reactionWickTicks;
+
     // Per-bar state — recomputed each onCandle.
     private MarketBias lastBias = MarketBias.NEUTRAL;
     private MSS lastObservedMss;
     private int barsSinceMss = Integer.MAX_VALUE;
     private int barsInOte = 0;
+
+    // Idempotency guards.
+    private Instant lastPrimaryTimestamp;
+    private Instant lastSmtTimestamp;
+    private Instant lastConsumedSweepTs;
+    private Instant lastConsumedDisplacementTs;
+
+    // Post-sweep extremes (impulse-leg origin candidates).
+    private double lowSinceSweep = Double.NaN;
+    private double highSinceSweep = Double.NaN;
+
+    // Post-MSS impulse leg (OTE input).
+    private final ImpulseLegTracker impulseTracker = new ImpulseLegTracker();
+
+    // Killzone-open anchoring for the manipulation-leg detector.
+    private final List<Candle> killzoneCandles = new ArrayList<>();
+    private boolean killzoneActive = false;
 
     /**
      * Construct a runner-ready STDV+OTE strategy for the given symbol.
@@ -162,6 +221,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.spec = TradeableInstrument.of(resolved.get());
         this.eventBus = eventBus;
 
+        this.stopBufferTicks = intProperty(STOP_BUFFER_TICKS_PROPERTY, DEFAULT_STOP_BUFFER_TICKS);
+        this.reactionWickTicks = intProperty(REACTION_WICK_TICKS_PROPERTY, DEFAULT_REACTION_WICK_TICKS);
+
         // Detectors with sensible defaults from the legacy strategy.
         this.structureDetector = new IctStructureDetector(50);
         this.liquidityDetector = new LiquidityDetector(30);
@@ -173,12 +235,15 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.impulseAnalyzer = new ImpulseExtensionAnalyzer(symbol, 30);
         this.correlationTracker = new CorrelationTracker(50);
 
+        // True HTF bias source: 1m → 15m/30m aggregation → trend analyzer.
+        this.barManager = new BarAggregationManager(symbol, 500);
+        this.htfTrend = new HtfTrendAnalyzer(symbol, barManager);
+
         // Chart-state pipeline for raid quality scoring.
         this.candleSeries = new CandleSeries(symbol, 5000);
         this.levelEngine = new LevelEngine(symbol, candleSeries);
         this.equalLevelDetector = new EqualLevelDetector(symbol, candleSeries);
         this.raidDetector = new RaidDetector(symbol, levelEngine, equalLevelDetector, candleSeries);
-        this.raidQualityScorer = new RaidQualityScorer();
         this.chartState = buildChartStateAdapter();
 
         // Core state machine + validator + projection / OTE engines.
@@ -198,6 +263,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** Receive a candle from the SMT correlate (e.g. MES when the primary is MNQ). */
     public void onSmtCandle(Candle candle) {
         if (candle == null) return;
+        Instant ts = candle.getTimestamp();
+        if (ts != null) {
+            // Same monotonicity guard as the primary feed: drop stale/dupe.
+            if (lastSmtTimestamp != null && !ts.isAfter(lastSmtTimestamp)) return;
+            lastSmtTimestamp = ts;
+        }
         liquidityDetector.updateSmt(candle);
         correlationTracker.update(candle);
     }
@@ -221,7 +292,16 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             return;
         }
 
-        // 1. Update every detector.
+        // Idempotency: drop duplicate and out-of-order candles before any
+        // detector sees them (timestamps must be strictly increasing).
+        Instant now = candle.getTimestamp();
+        if (now == null) return;
+        if (lastPrimaryTimestamp != null && !now.isAfter(lastPrimaryTimestamp)) {
+            return;
+        }
+        lastPrimaryTimestamp = now;
+
+        // 1. Update every LTF detector.
         structureDetector.update(candle);
         liquidityDetector.updatePrimary(candle);
         fvgDetector.update(candle);
@@ -239,30 +319,67 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         impulseAnalyzer.update(candle);
         correlationTracker.update(candle);
 
+        // 2. HTF aggregation. The trend analyzer re-evaluates ONLY when a
+        // 15m/30m bar completes — the recordHtfBias hook must never be fed
+        // from 1m noise (it invalidates on bias flips).
+        Map<Timeframe, Candle> completedHtf = barManager.processCandle(candle);
+        boolean htfBarClosed = completedHtf.containsKey(Timeframe.M15)
+                || completedHtf.containsKey(Timeframe.M30);
+        if (htfBarClosed) {
+            htfTrend.update(completedHtf);
+        }
+
+        // 3. Feed the raid pipeline so active raids exist and carry real
+        // 1-10 quality scores (previously never called — scores were stuck
+        // at the instrument base).
+        boolean hasSmt = smtSymbol != null
+                && correlationTracker.hasSMTDivergence(symbol, smtSymbol, 20);
+        Boolean htfBullish = (lastBias == MarketBias.BULLISH) ? Boolean.TRUE
+                : (lastBias == MarketBias.BEARISH) ? Boolean.FALSE : null;
+        boolean displacementEntry = lastBias != MarketBias.NEUTRAL
+                && displacementDetector.hasLayer3EntryTrigger(5, lastBias == MarketBias.BULLISH);
+        raidDetector.processCandle(candle, RaidDetector.RaidDetectionContext.fullWithCascade(
+                hasSmt, htfBullish, htfTrend.getTrendState().isStrong(),
+                /* zoneConfluenceScore */ 0, displacementEntry, /* targetAlignmentBonus */ 0));
+
+        // 4. Post-sweep extremes + post-MSS impulse tracking.
+        if (!Double.isNaN(lowSinceSweep)) {
+            lowSinceSweep = Math.min(lowSinceSweep, candle.getLow());
+            highSinceSweep = Math.max(highSinceSweep, candle.getHigh());
+        }
+        impulseTracker.onCandle(candle.getHigh(), candle.getLow());
+
+        // 5. Killzone bookkeeping: buffer candles from the killzone open so
+        // the manipulation-leg detector can anchor the Judas swing there.
+        boolean inKillzone = isInstrumentKillzone(now);
+        if (inKillzone && !killzoneActive) {
+            killzoneCandles.clear();
+        }
+        killzoneActive = inKillzone;
+        if (inKillzone) {
+            killzoneCandles.add(candle);
+            if (killzoneCandles.size() > KILLZONE_BUFFER_MAX) {
+                killzoneCandles.remove(0);
+            }
+        }
+
         // Let the core do its own bar-counting + expiry.
         core.onCandle(candle, context);
 
         SetupContext ctx = core.getSetupContext();
-
-        // 2. Killzone (M3 input).
-        Instant now = candle.getTimestamp();
-        boolean inKillzone = isInstrumentKillzone(now);
         ctx.killzoneOpen = inKillzone;
 
-        // 3. HTF bias from structure detector (simplified for first cut).
-        MarketBias bias = structureDetector.getBias();
-        if (bias != lastBias) {
-            core.recordHtfBias(bias);
-            lastBias = bias;
+        // 6. HTF bias hook — completed HTF bar close ONLY, and only on change.
+        if (htfBarClosed) {
+            MarketBias bias = mapTrendToBias(htfTrend.getTrendState());
+            if (bias != lastBias) {
+                core.recordHtfBias(bias);
+                lastBias = bias;
+            }
         }
 
-        // 4. SMT state for the context (informational, doesn't gate).
-        if (smtSymbol != null
-                && correlationTracker.hasSMTDivergence(symbol, smtSymbol, 20)) {
-            ctx.smtState = "DIVERGENT";
-        } else {
-            ctx.smtState = "NEUTRAL";
-        }
+        // 7. SMT state for the context (informational, doesn't gate).
+        ctx.smtState = hasSmt ? "DIVERGENT" : "NEUTRAL";
 
         // Track time in OTE.
         if (ctx.state == SetupState.OTE_ARMED) {
@@ -275,32 +392,32 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             barsInOte = 0;
         }
 
-        // 5. From BIAS_SET, look for a manipulation leg.
+        // 8. From BIAS_SET, look for a manipulation leg.
         if (ctx.state == SetupState.BIAS_SET) {
-            tryRecordManipulationLeg();
+            tryRecordManipulationLeg(ctx);
         }
 
-        // 6. From MANIP_DONE, look for the sweep.
+        // 9. From MANIP_DONE, look for the sweep.
         if (ctx.state == SetupState.MANIP_DONE) {
-            tryRecordSweep();
+            tryRecordSweep(candle);
         }
 
-        // 7. From SWEEP_DONE, look for displacement + FVG in bias direction.
+        // 10. From SWEEP_DONE, look for displacement + FVG in bias direction.
         if (ctx.state == SetupState.SWEEP_DONE) {
             tryRecordDisplacement();
         }
 
-        // 8. From DISPLACED, look for an MSS in the bias direction.
+        // 11. From DISPLACED, look for an MSS in the bias direction.
         if (ctx.state == SetupState.DISPLACED) {
-            tryRecordMss();
+            tryRecordMss(candle);
         }
 
-        // 9. From MSS_CONFIRMED, build the OTE zone from the post-MSS impulse.
+        // 12. From MSS_CONFIRMED, build the OTE zone from the post-MSS impulse.
         if (ctx.state == SetupState.MSS_CONFIRMED) {
             tryArmOte(candle);
         }
 
-        // 10. From OTE_ARMED, build the order and try to emit.
+        // 13. From OTE_ARMED, build the order and try to emit.
         if (ctx.state == SetupState.OTE_ARMED) {
             tryEmitOrder();
         }
@@ -308,15 +425,34 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
 
     @Override
     public void initialize() {
-        // No-op for now; detectors initialise themselves.
+        // Reset every stateful collaborator that supports it, rebuild the
+        // ones that do not, and return the core to IDLE. Idempotent; safe to
+        // call before the first candle or between backtest runs.
+        structureDetector.reset();
+        liquidityDetector.reset();
+        fvgDetector.reset();
+        displacementDetector.reset();
+        mssDetector.reset();
+        raidDetector.reset();
+        candleSeries.clear();
+        correlationTracker.resetAll();
+        barManager.reset();
+        htfTrend = new HtfTrendAnalyzer(symbol, barManager);
+        resetTransientState();
+        lastPrimaryTimestamp = null;
+        lastSmtTimestamp = null;
+        lastBias = MarketBias.NEUTRAL;
+        core.resetForNextWindow();
     }
 
     @Override
     public void onSessionEnd() {
+        // Core-level invalidation of an in-flight setup must still fire.
         core.onSessionEnd();
-        lastObservedMss = null;
-        barsSinceMss = Integer.MAX_VALUE;
-        barsInOte = 0;
+        // Session-scoped wiring state must not leak into the next session.
+        // The HTF aggregation and level engine intentionally survive: HTF
+        // structure and prior-day levels are cross-session context.
+        resetTransientState();
     }
 
     @Override
@@ -324,9 +460,39 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         core.shutdown();
     }
 
+    /** Clear per-setup / per-session wiring state (not the HTF context). */
+    private void resetTransientState() {
+        lastObservedMss = null;
+        barsSinceMss = Integer.MAX_VALUE;
+        barsInOte = 0;
+        lowSinceSweep = Double.NaN;
+        highSinceSweep = Double.NaN;
+        lastConsumedSweepTs = null;
+        lastConsumedDisplacementTs = null;
+        impulseTracker.reset();
+        killzoneCandles.clear();
+        killzoneActive = false;
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // State-machine input helpers
     // ──────────────────────────────────────────────────────────────────────
+
+    /** Map the 5-state HTF trend to the 3-state bias the core consumes. */
+    private static MarketBias mapTrendToBias(HtfTrendState state) {
+        if (state == null) return MarketBias.NEUTRAL;
+        switch (state) {
+            case STRONG_BULLISH:
+            case WEAK_BULLISH:
+                return MarketBias.BULLISH;
+            case STRONG_BEARISH:
+            case WEAK_BEARISH:
+                return MarketBias.BEARISH;
+            case RANGING:
+            default:
+                return MarketBias.NEUTRAL;
+        }
+    }
 
     private boolean isInstrumentKillzone(Instant now) {
         // MGC trades the London window in addition to NY; MNQ/MES use NY only.
@@ -337,51 +503,99 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         return ny;
     }
 
-    private void tryRecordManipulationLeg() {
+    /**
+     * Manipulation-leg precedence: while a killzone is open, the
+     * {@link ManipulationLegDetector} (Judas swing anchored at the killzone
+     * open) is authoritative — we wait for a real leg rather than falling
+     * back. Outside any killzone the detector can never have an anchor, so
+     * the legacy most-recent-swing-pair input applies (documented fallback).
+     */
+    private void tryRecordManipulationLeg(SetupContext ctx) {
+        boolean biasBullish = (ctx.htfBias == MarketBias.BULLISH);
+        if (killzoneActive && !killzoneCandles.isEmpty()) {
+            Optional<ManipulationLegDetector.Leg> leg = ManipulationLegDetector.detect(
+                    killzoneCandles, biasBullish, spec.tickSize(),
+                    StdvProjectionEngine.DEFAULT_MIN_LEG_TICKS);
+            leg.ifPresent(l -> core.recordManipulationLeg(
+                    l.legLow(), l.legHigh(), spec.tickSize(), MANIP_SNAP_TOL_TICKS));
+            return;
+        }
+        // Fallback (no killzone anchor available): most recent swing pair.
         Double swingHigh = structureDetector.getLastSwingHigh();
         Double swingLow = structureDetector.getLastSwingLow();
         if (swingHigh == null || swingLow == null) return;
         if (!(swingHigh > swingLow)) return;
-        // Snap tolerance = 3 ticks (configurable later).
-        core.recordManipulationLeg(swingLow, swingHigh, spec.tickSize(), /* snapTolTicks */ 3);
+        core.recordManipulationLeg(swingLow, swingHigh, spec.tickSize(), MANIP_SNAP_TOL_TICKS);
     }
 
-    private void tryRecordSweep() {
+    private void tryRecordSweep(Candle candle) {
         if (!liquidityDetector.hasRecentSweep(3)) return;
         LiquiditySweep sweep = liquidityDetector.getLastSweep();
         if (sweep == null) return;
+
+        // Idempotency: never consume the same sweep event twice.
+        if (sweep.getTimestamp() != null && sweep.getTimestamp().equals(lastConsumedSweepTs)) {
+            return;
+        }
 
         // Bias-direction match: bullish setup wants a sellside (low) sweep,
         // which LiquiditySweep encodes with isBullish() == true.
         boolean wantBullishSweep = (lastBias == MarketBias.BULLISH);
         if (sweep.isBullish() != wantBullishSweep) return;
 
-        // First-cut raid score: if there's at least one tracked raid from
-        // the LevelEngine pipeline (which scores PDH/PDL/EQH/EQL sweeps
-        // higher), credit the bonus; otherwise floor at the instrument's
-        // minimum. The full RaidQualityScorer.calculateScore path needs a
-        // RaidScoringContext (multi-detector input) and is a follow-up.
-        int score = currentRaidScoreFallback();
+        int score = currentRaidScore(sweep);
         core.recordSweep(sweep, score);
+        if (core.getSetupContext().state == SetupState.SWEEP_DONE) {
+            lastConsumedSweepTs = sweep.getTimestamp();
+            // Begin tracking the reversal-leg origin from the swept extreme.
+            lowSinceSweep = Math.min(sweep.getSweptLevel(), candle.getLow());
+            highSinceSweep = Math.max(sweep.getSweptLevel(), candle.getHigh());
+        }
     }
 
-    private int currentRaidScoreFallback() {
-        List<LiquidityRaid> active = raidDetector.getActiveRaids();
-        int base = spec.raidMinQuality();
-        if (active == null || active.isEmpty()) return base;
-        // Credit +2 when there is a tracked raid (its level was a known
-        // pool, not an internal swing), capped at 10.
-        return Math.min(10, base + 2);
+    /**
+     * Raid quality for the M4 gate: the real 1–10 score of the
+     * direction-matched active raid when the raid pipeline has one;
+     * otherwise the instrument base (keeps M4 satisfiable exactly at the
+     * floor when the pipeline is starved of known levels, matching the
+     * pre-wiring fallback behaviour).
+     */
+    private int currentRaidScore(LiquiditySweep sweep) {
+        RaidDirection want = sweep.isBullish() ? RaidDirection.LOW_SWEEP : RaidDirection.HIGH_SWEEP;
+        Optional<LiquidityRaid> raid = raidDetector.getActiveRaidByDirection(want);
+        return raid.map(LiquidityRaid::getQualityScore).orElse(spec.raidMinQuality());
     }
 
     private void tryRecordDisplacement() {
         boolean bullish = (lastBias == MarketBias.BULLISH);
         if (!displacementDetector.hasRecentDisplacement(5, bullish)) return;
-        FairValueGap fvg = pickFvgFor(bullish);
+        DisplacementDetector.Displacement d = displacementDetector.getLastDisplacement();
+        if (d == null) return;
+
+        // Idempotency: never consume the same displacement event twice.
+        if (d.getTimestamp() != null && d.getTimestamp().equals(lastConsumedDisplacementTs)) {
+            return;
+        }
+
+        // Displacement→FVG linkage: prefer the FVG the displacement itself
+        // created (exact 3-candle window recorded by the detector) over the
+        // newest same-direction FVG from FvgDetector, which may be unrelated.
+        FairValueGap fvg = null;
+        double[] zone = displacementDetector.getDisplacementFvgZone();
+        if (d.createdFvg() && zone != null && zone[1] > zone[0]) {
+            fvg = new FairValueGap(bullish, /* top */ zone[1], /* bottom */ zone[0],
+                    d.getTimestamp());
+        } else {
+            fvg = pickFvgFor(bullish);
+        }
         if (fvg == null) return;
         core.recordDisplacement(fvg);
+        if (core.getSetupContext().state == SetupState.DISPLACED) {
+            lastConsumedDisplacementTs = d.getTimestamp();
+        }
     }
 
+    /** Fallback FVG pick: newest same-direction unfilled FVG. */
     private FairValueGap pickFvgFor(boolean bullish) {
         List<FairValueGap> fvgs = fvgDetector.getUnfilledFvgs();
         if (fvgs == null || fvgs.isEmpty()) return null;
@@ -393,7 +607,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         return null;
     }
 
-    private void tryRecordMss() {
+    private void tryRecordMss(Candle candle) {
         if (lastObservedMss == null || barsSinceMss > MSS_FRESH_BARS) return;
         boolean biasBullish = (lastBias == MarketBias.BULLISH);
         if (lastObservedMss.isBullish != biasBullish) {
@@ -402,27 +616,41 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             return;
         }
         core.recordMss();
+        if (core.getSetupContext().state == SetupState.MSS_CONFIRMED) {
+            // Arm the impulse tracker on the true post-MSS leg: origin at the
+            // post-sweep extreme, terminus at the MSS candle extreme (extends
+            // bar by bar from here).
+            double origin;
+            double terminus;
+            if (biasBullish) {
+                origin = !Double.isNaN(lowSinceSweep)
+                        ? lowSinceSweep : lastObservedMss.displacementLow;
+                terminus = Math.max(lastObservedMss.displacementHigh, candle.getHigh());
+            } else {
+                origin = !Double.isNaN(highSinceSweep)
+                        ? highSinceSweep : lastObservedMss.displacementHigh;
+                terminus = Math.min(lastObservedMss.displacementLow, candle.getLow());
+            }
+            impulseTracker.arm(biasBullish, origin, terminus);
+        }
     }
 
     private void tryArmOte(Candle candle) {
-        // Use the structure detector's current swings as the impulse leg.
-        Double swingHigh = structureDetector.getLastSwingHigh();
-        Double swingLow = structureDetector.getLastSwingLow();
-        if (swingHigh == null || swingLow == null) return;
-        if (!(swingHigh > swingLow)) return;
+        if (!impulseTracker.isArmed()) return;
+        if (impulseTracker.isViolated()) {
+            // Price took out the impulse origin (the OTE 1.0 invalidation)
+            // before any entry — the leg is dead.
+            core.invalidate("impulse origin violated before OTE entry");
+            return;
+        }
+        if (!impulseTracker.hasValidLeg()) return;
 
-        SetupContext ctx = core.getSetupContext();
-
-        // Require current price to be in the band before arming, plus a
-        // basic rejection signal (close back inside the candle's body in
-        // the bias direction).
-        boolean bullish = (lastBias == MarketBias.BULLISH);
-        boolean reactionConfirmed = bullish
-                ? candle.getClose() > candle.getOpen()
-                : candle.getClose() < candle.getOpen();
-        if (!reactionConfirmed) return;
-
-        core.recordOteImpulse(swingLow, swingHigh, spec.tickSize(), true);
+        // Reaction is derived from observable price action — a rejection
+        // wick at the OTE zone — never a hardcoded literal.
+        boolean reactionConfirmed = impulseTracker.isRejectionReaction(
+                candle, spec.tickSize(), reactionWickTicks);
+        core.recordOteImpulse(impulseTracker.impulseLow(), impulseTracker.impulseHigh(),
+                spec.tickSize(), reactionConfirmed);
     }
 
     private void tryEmitOrder() {
@@ -434,13 +662,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         }
         int size = sizeForTier(tier);
         // tryEmit runs the validator; if it passes, a signal is published.
-        boolean emitted = core.tryEmit(spec.tickSize(), /* stopBufferTicks */ 4, tier, size);
-        if (!emitted) {
-            // Reset so the next bar can re-try at a higher tier / different
-            // PD edge if anything changes. The lastGateFailed field on ctx
-            // already records which gate stopped us, for the API.
-            barsInOte++;
-        }
+        // On failure the OTE window simply keeps counting in onCandle — the
+        // previous extra barsInOte++ here double-counted and halved the
+        // window (SA1 audit finding).
+        core.tryEmit(spec.tickSize(), stopBufferTicks, tier, size);
     }
 
     private TradeTier computeTier(SetupContext ctx) {
@@ -477,6 +702,19 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         if (s < spec.minMicros()) s = spec.minMicros();
         if (s > spec.maxMicros()) s = spec.maxMicros();
         return s;
+    }
+
+    /** Read an int system property with a safe fallback (stdvOte.* pattern). */
+    private static int intProperty(String name, int defaultValue) {
+        String raw = System.getProperty(name);
+        if (raw == null) return defaultValue;
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            System.out.println("[StdvOteRunnerStrategy] WARN: invalid " + name
+                    + "='" + raw + "', using default " + defaultValue);
+            return defaultValue;
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────

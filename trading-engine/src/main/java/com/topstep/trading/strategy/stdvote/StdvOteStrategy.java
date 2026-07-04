@@ -30,17 +30,18 @@ import java.util.OptionalDouble;
  * M1..M9 are blocking and sequential; optional confluences only drive tier
  * and size within the hard {@code [5, 20]} micro band.
  *
- * <h2>How orchestration works in SA4</h2>
+ * <h2>How orchestration works</h2>
  *
- * The state machine itself is fully implemented and unit-tested. The
- * incoming feed of detector outputs (which {@code RaidDetector} fired, which
- * {@code FvgDetector} produced an FVG, etc.) is fed in via the
- * package-private {@code record*} hooks invoked from {@link #onCandle}. SA5
- * connects those hooks to the actual detectors registered on the
- * {@link EventBus}; until then, {@code onCandle} only drives time-based
- * housekeeping (setup expiry). Production runners must therefore
- * <em>not</em> use this strategy as the default until SA5 has wired the
- * detectors — see the {@code stdvOte.enabled} configuration flag (SA5).
+ * The state machine itself is fully implemented and unit-tested via the
+ * package-private {@code record*} hooks. In production the hooks are driven
+ * by {@link StdvOteRunnerStrategy}, which owns every detector (HTF bias via
+ * {@code BarAggregationManager}+{@code HtfTrendAnalyzer}, the raid pipeline,
+ * displacement→FVG linkage, {@code ImpulseLegTracker},
+ * {@code ManipulationLegDetector}) and calls the hooks per candle — this
+ * class stays detector-free and pure. {@code onCandle} here only drives
+ * time-based housekeeping (setup expiry). Strategy selection is controlled
+ * by the {@code stdvOte.enabled} configuration flag (see
+ * {@code StdvOteFactory}).
  *
  * <p>The legacy {@code IctHighConfluenceStrategy} remains compilable and
  * runnable behind a configuration flag for A/B backtest comparison only.
@@ -73,6 +74,15 @@ public final class StdvOteStrategy implements TradingStrategy {
 
     /** Monotonic LTF bar counter (incremented on every onCandle call). */
     private long barIndex;
+
+    /**
+     * True when {@code setup.lastGateFailed} was last written by this class
+     * (validator rejection summary or the recordOteImpulse M7 hint) rather
+     * than by an external risk pre-flight. Self-written diagnostics are
+     * cleared at the top of {@link #tryEmit} so a failed attempt cannot
+     * poison the M9 gate on retry.
+     */
+    private boolean gateDiagnosticSelfWritten;
 
     public StdvOteStrategy(String symbol,
                            StdvProjectionEngine projectionEngine,
@@ -249,6 +259,7 @@ public final class StdvOteStrategy implements TradingStrategy {
             // Allow PD array to be an OB or IFVG via direct injection elsewhere.
             // For SA4 we require the FVG to overlap.
             setup.lastGateFailed = "M7: no PD array in OTE band";
+            gateDiagnosticSelfWritten = true;
             return;
         }
         setup.pdArrayInOte = edge.getAsDouble();
@@ -273,6 +284,17 @@ public final class StdvOteStrategy implements TradingStrategy {
                     TradeTier tier, int sizeRequest) {
         if (setup.state != SetupState.OTE_ARMED) return false;
 
+        // SA5 fix: clear stale SELF-written gate diagnostics before running the
+        // gates. Without this, the first failed attempt (or an earlier
+        // "M7: no PD array" hint from recordOteImpulse) leaves lastGateFailed
+        // set, and every retry then fails M9 forever — a poisoned-retry loop.
+        // A diagnostic written externally (a real risk pre-flight, SA3+) is
+        // preserved so the M9 contract still holds.
+        if (gateDiagnosticSelfWritten) {
+            setup.lastGateFailed = null;
+            gateDiagnosticSelfWritten = false;
+        }
+
         double entry = oteCalculator.chooseEntry(
                 setup.ote, OptionalDouble.of(setup.pdArrayInOte), tickSize);
         double stop = oteCalculator.stopPrice(setup.ote, tickSize, stopBufferTicks);
@@ -291,9 +313,11 @@ public final class StdvOteStrategy implements TradingStrategy {
         ValidationResult result = validator.validateStdvOte(setup);
         if (!result.passed()) {
             setup.lastGateFailed = result.getSummary();
+            gateDiagnosticSelfWritten = true;
             return false;
         }
         setup.lastGateFailed = null;
+        gateDiagnosticSelfWritten = false;
 
         boolean bullish = setup.legBullish;
         OrderSide side = bullish ? OrderSide.BUY : OrderSide.SELL;
