@@ -158,6 +158,7 @@ public class MonteCarloSimulator {
         double maxDrawdown = 0;
         int totalTrades = 0;
         int consecutiveLosses = 0;
+        int dllBreachDays = 0; // SA5: days on which the FULL DLL was breached
 
         List<Double> equityCurve = new ArrayList<>();
         equityCurve.add(equity);
@@ -241,11 +242,13 @@ public class MonteCarloSimulator {
                     equityCurve.add(equity);
                     return new PathResult(PathResult.Outcome.BLOWN, equityCurve, equity,
                         maxDrawdown, currentDrawdown, totalTrades, day + 1,
-                        highWaterMark);
+                        highWaterMark).withDllBreachDays(
+                            dllBreachDays + (dailyPnl <= -dailyLossLimit ? 1 : 0));
                 }
 
                 // Check DLL breach
                 if (dailyPnl <= -dailyLossLimit) {
+                    dllBreachDays++; // SA5: count the full-DLL day
                     break; // Day is over but account survives
                 }
 
@@ -255,7 +258,7 @@ public class MonteCarloSimulator {
                     equityCurve.add(equity);
                     return new PathResult(PathResult.Outcome.PASSED, equityCurve, equity,
                         maxDrawdown, currentDrawdown, totalTrades, day + 1,
-                        highWaterMark);
+                        highWaterMark).withDllBreachDays(dllBreachDays);
                 }
             }
 
@@ -277,7 +280,7 @@ public class MonteCarloSimulator {
         // Timeout: didn't pass or blow within max days
         return new PathResult(PathResult.Outcome.TIMEOUT, equityCurve, equity,
             maxDrawdown, highWaterMark - equity, totalTrades, MAX_TRADING_DAYS,
-            highWaterMark);
+            highWaterMark).withDllBreachDays(dllBreachDays);
     }
 
     // ==================== Funded Phase Sub-Simulation ====================

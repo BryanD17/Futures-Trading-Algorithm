@@ -360,8 +360,9 @@ public class EngineFacade {
      */
     public RiskLimits getRiskLimits() {
         if (riskLimits == null) {
-            // Return default Topstep 50K limits if not initialized
-            return RiskLimits.topstep50k();
+            // Return default Topstep 50K limits if not initialized.
+            // ScalpConfig selects scalp vs legacy profile.
+            return com.topstep.trading.strategy.stdvote.ScalpConfig.activeRiskLimits();
         }
         return riskLimits;
     }

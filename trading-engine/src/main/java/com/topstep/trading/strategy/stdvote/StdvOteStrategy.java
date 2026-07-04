@@ -30,17 +30,18 @@ import java.util.OptionalDouble;
  * M1..M9 are blocking and sequential; optional confluences only drive tier
  * and size within the hard {@code [5, 20]} micro band.
  *
- * <h2>How orchestration works in SA4</h2>
+ * <h2>How orchestration works</h2>
  *
- * The state machine itself is fully implemented and unit-tested. The
- * incoming feed of detector outputs (which {@code RaidDetector} fired, which
- * {@code FvgDetector} produced an FVG, etc.) is fed in via the
- * package-private {@code record*} hooks invoked from {@link #onCandle}. SA5
- * connects those hooks to the actual detectors registered on the
- * {@link EventBus}; until then, {@code onCandle} only drives time-based
- * housekeeping (setup expiry). Production runners must therefore
- * <em>not</em> use this strategy as the default until SA5 has wired the
- * detectors — see the {@code stdvOte.enabled} configuration flag (SA5).
+ * The state machine itself is fully implemented and unit-tested via the
+ * package-private {@code record*} hooks. In production the hooks are driven
+ * by {@link StdvOteRunnerStrategy}, which owns every detector (HTF bias via
+ * {@code BarAggregationManager}+{@code HtfTrendAnalyzer}, the raid pipeline,
+ * displacement→FVG linkage, {@code ImpulseLegTracker},
+ * {@code ManipulationLegDetector}) and calls the hooks per candle — this
+ * class stays detector-free and pure. {@code onCandle} here only drives
+ * time-based housekeeping (setup expiry). Strategy selection is controlled
+ * by the {@code stdvOte.enabled} configuration flag (see
+ * {@code StdvOteFactory}).
  *
  * <p>The legacy {@code IctHighConfluenceStrategy} remains compilable and
  * runnable behind a configuration flag for A/B backtest comparison only.
@@ -74,6 +75,42 @@ public final class StdvOteStrategy implements TradingStrategy {
     /** Monotonic LTF bar counter (incremented on every onCandle call). */
     private long barIndex;
 
+    /**
+     * True when {@code setup.lastGateFailed} was last written by this class
+     * (validator rejection summary or the recordOteImpulse M7 hint) rather
+     * than by an external risk pre-flight. Self-written diagnostics are
+     * cleared at the top of {@link #tryEmit} so a failed attempt cannot
+     * poison the M9 gate on retry.
+     */
+    private boolean gateDiagnosticSelfWritten;
+
+    /**
+     * Scalp target calculator (SA3). Null = legacy mode: {@link #tryEmit}
+     * targets the −2σ STDV projection exactly as before. Non-null = scalp
+     * mode: the target comes from {@link ScalpTargetCalculator} (nearest
+     * opposing liquidity vs FVG origin, hard-capped at 1R). The runner
+     * injects this at construction when {@code scalpMode.enabled} is true —
+     * the core itself stays pure and reads no system properties.
+     */
+    private ScalpTargetCalculator scalpTargetCalculator;
+
+    /**
+     * Binary raid-quality floor (SA4/SA5, scalp mode only): a sweep whose
+     * score is below this floor never advances the machine to
+     * {@code SWEEP_DONE}. STRICT (SA5): the floor applies to every score,
+     * including the starved-pipeline instrument-base fallback — a score
+     * that cannot be shown &ge; the floor does not trade in scalp mode.
+     * Ignored in legacy mode.
+     */
+    private int scalpMinRaidScore = 0;
+
+    /**
+     * Nearest opposing liquidity price for the scalp target (Candidate A),
+     * pre-computed by the runner each candle from LiquidityTargetIdentifier /
+     * LevelEngine. Null when unknown. Unused in legacy mode.
+     */
+    private Double nearestOpposingLiquidity;
+
     public StdvOteStrategy(String symbol,
                            StdvProjectionEngine projectionEngine,
                            OteEntryCalculator oteCalculator,
@@ -103,6 +140,38 @@ public final class StdvOteStrategy implements TradingStrategy {
     /** Last emitted signal (or null). Used by tests + by the API for last-trade view. */
     public StrategySignalEvent getLastEmittedSignal() {
         return lastEmittedSignal;
+    }
+
+    /**
+     * Switch this core into scalp mode (SA3). Package-private: called once
+     * at construction by the runner when {@code scalpMode.enabled} is true.
+     * Passing null keeps/returns legacy mode.
+     */
+    void enableScalpMode(ScalpTargetCalculator calculator) {
+        enableScalpMode(calculator, 0);
+    }
+
+    /**
+     * Scalp mode with the SA4 binary raid-score floor. {@code minRaidScore}
+     * &le; 0 disables the floor (SA3 behaviour).
+     */
+    void enableScalpMode(ScalpTargetCalculator calculator, int minRaidScore) {
+        this.scalpTargetCalculator = calculator;
+        this.scalpMinRaidScore = Math.max(0, minRaidScore);
+    }
+
+    /** True when this core targets via the scalp model. */
+    boolean isScalpMode() {
+        return scalpTargetCalculator != null;
+    }
+
+    /**
+     * Supply the nearest-opposing-liquidity price for the scalp target
+     * (Candidate A). The runner calls this every candle; null = unknown.
+     * No-op relevance in legacy mode.
+     */
+    void setNearestOpposingLiquidity(Double price) {
+        this.nearestOpposingLiquidity = price;
     }
 
     @Override
@@ -196,6 +265,15 @@ public final class StdvOteStrategy implements TradingStrategy {
      * Record a liquidity sweep + its raid quality score. Only valid from
      * {@code MANIP_DONE}. Direction must match HTF bias (a SSL sweep for
      * a bullish setup, BSL for bearish); mismatches are ignored.
+     *
+     * <p>SA4/SA5 binary quality gate (scalp mode only, STRICT): a sweep
+     * whose score is below the configured {@code scalp.minRaidScore} floor
+     * is REJECTED — the machine stays in {@code MANIP_DONE} so a later,
+     * higher-quality sweep can still arm the setup within the window. The
+     * floor applies to EVERY score — pipeline-differentiated, base-fallback
+     * (starved raid pipeline) and exact-base alike. Conservative rule: a
+     * score that cannot be shown &ge; the floor does not trade in scalp
+     * mode. Legacy mode (no scalp calculator) never applies the floor.
      */
     void recordSweep(LiquiditySweep sweep, int raidScore) {
         if (setup.state != SetupState.MANIP_DONE) return;
@@ -205,6 +283,12 @@ public final class StdvOteStrategy implements TradingStrategy {
         // sets up the long. LiquiditySweep.isBullish() == true means sweep
         // of lows (per the existing class semantics).
         if (sweep.isBullish() != biasBullish) return;
+        if (isScalpMode() && scalpMinRaidScore > 0
+                && raidScore < scalpMinRaidScore) {
+            System.out.println("[" + symbol + "] SCALP raid-score gate: sweep rejected"
+                    + " (score " + raidScore + " < floor " + scalpMinRaidScore + ")");
+            return;
+        }
         setup.sweep = sweep;
         setup.raidScore = raidScore;
         setup.state = SetupState.SWEEP_DONE;
@@ -249,6 +333,7 @@ public final class StdvOteStrategy implements TradingStrategy {
             // Allow PD array to be an OB or IFVG via direct injection elsewhere.
             // For SA4 we require the FVG to overlap.
             setup.lastGateFailed = "M7: no PD array in OTE band";
+            gateDiagnosticSelfWritten = true;
             return;
         }
         setup.pdArrayInOte = edge.getAsDouble();
@@ -273,13 +358,48 @@ public final class StdvOteStrategy implements TradingStrategy {
                     TradeTier tier, int sizeRequest) {
         if (setup.state != SetupState.OTE_ARMED) return false;
 
+        // SA5 fix: clear stale SELF-written gate diagnostics before running the
+        // gates. Without this, the first failed attempt (or an earlier
+        // "M7: no PD array" hint from recordOteImpulse) leaves lastGateFailed
+        // set, and every retry then fails M9 forever — a poisoned-retry loop.
+        // A diagnostic written externally (a real risk pre-flight, SA3+) is
+        // preserved so the M9 contract still holds.
+        if (gateDiagnosticSelfWritten) {
+            setup.lastGateFailed = null;
+            gateDiagnosticSelfWritten = false;
+        }
+
         double entry = oteCalculator.chooseEntry(
                 setup.ote, OptionalDouble.of(setup.pdArrayInOte), tickSize);
         double stop = oteCalculator.stopPrice(setup.ote, tickSize, stopBufferTicks);
-        StdvProjection targetMinus2 = findProjection(-2.0);
-        double targetPrice = (targetMinus2 != null)
-                ? targetMinus2.effectivePrice()
-                : entry;
+        double targetPrice;
+        ScalpTargetCalculator.Decision scalpDecision = null;
+        if (scalpTargetCalculator == null) {
+            // LEGACY mode: target the −2σ STDV projection — unchanged.
+            StdvProjection targetMinus2 = findProjection(-2.0);
+            targetPrice = (targetMinus2 != null)
+                    ? targetMinus2.effectivePrice()
+                    : entry;
+        } else {
+            // SCALP mode (SA3): closer of nearest-opposing-liquidity / FVG
+            // origin, hard-capped at 1R; exactly 1R when no candidate is
+            // valid within the window. Rejections are reason-logged and,
+            // like validator failures, are self-written diagnostics (the
+            // retry-clearing at the top of this method applies).
+            boolean scalpBullish = setup.legBullish;
+            Double fvgOrigin = (setup.fvg != null)
+                    ? (scalpBullish ? setup.fvg.getTop() : setup.fvg.getBottom())
+                    : null;
+            scalpDecision = scalpTargetCalculator.computeTarget(
+                    entry, stop, scalpBullish, tickSize,
+                    nearestOpposingLiquidity, fvgOrigin);
+            if (!scalpDecision.accepted()) {
+                setup.lastGateFailed = "SCALP: " + scalpDecision.reason();
+                gateDiagnosticSelfWritten = true;
+                return false;
+            }
+            targetPrice = scalpDecision.targetPrice();
+        }
         double rr = oteCalculator.rewardToRisk(entry, stop, targetPrice);
 
         setup.entry = entry;
@@ -291,18 +411,37 @@ public final class StdvOteStrategy implements TradingStrategy {
         ValidationResult result = validator.validateStdvOte(setup);
         if (!result.passed()) {
             setup.lastGateFailed = result.getSummary();
+            gateDiagnosticSelfWritten = true;
             return false;
         }
         setup.lastGateFailed = null;
+        gateDiagnosticSelfWritten = false;
 
         boolean bullish = setup.legBullish;
         OrderSide side = bullish ? OrderSide.BUY : OrderSide.SELL;
         SignalType type = bullish ? SignalType.LONG_ENTRY : SignalType.SHORT_ENTRY;
-        StrategySignalEvent signal = new StrategySignalEvent(
-                type, symbol, side, entry, stop, targetPrice,
-                "STDV_OTE: " + tier + " size=" + sizeRequest
-                        + " RR=" + String.format("%.2f", rr),
-                tier, sizeRequest);
+        StrategySignalEvent signal;
+        if (scalpDecision == null) {
+            // LEGACY signal construction — unchanged (tier-default RR and
+            // tier-default partial ladder, exactly as before).
+            signal = new StrategySignalEvent(
+                    type, symbol, side, entry, stop, targetPrice,
+                    "STDV_OTE: " + tier + " size=" + sizeRequest
+                            + " RR=" + String.format("%.2f", rr),
+                    tier, sizeRequest);
+        } else {
+            // SCALP signal: carry the REAL RR (not the tier's fictional
+            // 2.0–5.0) and a single 100%-at-target take-profit level; the
+            // rMultiple equals rr so any ladder consumer reproduces the
+            // exact single target price.
+            signal = new StrategySignalEvent(
+                    type, symbol, side, entry, stop, targetPrice,
+                    "STDV_OTE_SCALP: " + tier + " size=" + sizeRequest
+                            + " target=" + scalpDecision.source()
+                            + " RR=" + String.format("%.2f", rr),
+                    tier, sizeRequest, rr,
+                    new double[][] {{ rr, 1.0 }}, false);
+        }
         if (eventBus != null) {
             eventBus.publish(signal);
         }

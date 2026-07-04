@@ -111,16 +111,12 @@ class NewsBiasModifierTest {
 
             impactModel.processRelease(release);
 
-            // Gold should be bullish when inflation is cool (less Fed hawkishness)
-            // Actually, the direction sign for gold vs inflation is complex
-            // Let's test with a simpler case
+            // Cool CPI → WORSE_THAN_EXPECTED for USD; gold's inflation sign is -1,
+            // so the news bias for GC is positive (bullish): dovish Fed = gold bullish.
+            // Bullish technical bias should therefore ALIGN with the news.
+            MacroAlignment alignment = biasModifier.checkAlignment(InstrumentNewsMapper.GC, true);
 
-            // Check alignment for bearish tech bias (negative news = aligned)
-            MacroAlignment alignment = biasModifier.checkAlignment(InstrumentNewsMapper.GC, false);
-
-            // With negative news (hot inflation = bearish gold), bearish tech should align
-            // This tests the general mechanism
-            assertThat(alignment).isIn(MacroAlignment.ALIGNED, MacroAlignment.NEUTRAL);
+            assertThat(alignment).isEqualTo(MacroAlignment.ALIGNED);
         }
 
         @Test

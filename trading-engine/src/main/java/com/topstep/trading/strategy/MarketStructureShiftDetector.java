@@ -123,10 +123,29 @@ public class MarketStructureShiftDetector {
 
     /**
      * Adjust swing indices when candles are removed from front.
+     *
+     * <p>SA5 fix: every stored swing index must SHIFT DOWN by one when the
+     * oldest candle is dropped — the previous implementation kept the stale
+     * indices, so once the buffer saturated ({@code lookbackPeriod} candles)
+     * the pivot index was permanently {@code size - swingLookback - 1} and
+     * the "already exists" check blocked every new swing forever: structure
+     * detection froze on stale prices after ~50 bars (no MSS could fire on
+     * later sessions of a continuous run).
      */
     private void adjustSwingIndices() {
-        swingHighs.removeIf(sp -> sp.index <= 0);
-        swingLows.removeIf(sp -> sp.index <= 0);
+        shiftIndicesDown(swingHighs);
+        shiftIndicesDown(swingLows);
+    }
+
+    private static void shiftIndicesDown(List<SwingPoint> swings) {
+        List<SwingPoint> shifted = new ArrayList<>(swings.size());
+        for (SwingPoint sp : swings) {
+            if (sp.index > 0) {
+                shifted.add(new SwingPoint(sp.isHigh, sp.price, sp.index - 1, sp.timestamp));
+            }
+        }
+        swings.clear();
+        swings.addAll(shifted);
     }
 
     /**

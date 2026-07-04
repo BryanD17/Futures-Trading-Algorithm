@@ -75,9 +75,11 @@ public class SimEngineRunner {
 
     /**
      * Create a new SIM engine with default Topstep 50K configuration.
+     * The RiskLimits profile is selected by ScalpConfig: legacy topstep50k()
+     * unless -DscalpMode.enabled=true (then topstep50kScalp()).
      */
     public SimEngineRunner() {
-        this(50_000.0, RiskLimits.topstep50k());
+        this(50_000.0, com.topstep.trading.strategy.stdvote.ScalpConfig.activeRiskLimits());
     }
 
     /**
@@ -93,6 +95,9 @@ public class SimEngineRunner {
         this.executionEngine = new ExecutionEngine(accountState);
         this.riskEngine = new PropFirmRiskEngine();
         this.eventBus = new EventBus();
+        // Publish PositionClosedEvent from the sim close funnel (scalp-mode
+        // re-arm subscribes to it; no-op for legacy consumers).
+        this.executionEngine.setEventBus(eventBus);
         this.strategyContext = new DefaultStrategyContext(accountState);
 
         if (MULTI_INSTRUMENT_ENABLED) {

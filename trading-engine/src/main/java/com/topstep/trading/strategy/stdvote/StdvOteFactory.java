@@ -49,6 +49,14 @@ public final class StdvOteFactory {
                     + "(set -DstdvOte.enabled=false to silence).");
             return new IctHighConfluenceStrategy(primarySymbol, smtSymbol, eventBus);
         }
+        // Scalp mode (SA3) piggybacks on this selection point: the runner
+        // reads ScalpConfig at construction and swaps ONLY the target/risk
+        // model (1R-capped targets + topstep50kScalp profile). Toggle with
+        // -DscalpMode.enabled=true; default OFF preserves legacy behaviour.
+        if (ScalpConfig.isEnabled()) {
+            System.out.println("[StdvOteFactory] scalpMode.enabled=true — "
+                    + "building " + primarySymbol + " runner in SCALP mode.");
+        }
         return new StdvOteRunnerStrategy(primarySymbol, smtSymbol, eventBus);
     }
 

@@ -23,6 +23,14 @@ public class AccountState {
     private volatile double highestEndOfDayBalance;
     private volatile LocalDate currentTradingDay;
 
+    // Trade-frequency tracking (scalp discipline gates in PropFirmRiskEngine).
+    // tradesToday resets on trading-day rollover; consecutiveLosses resets on
+    // any non-losing completed trade (win or scratch) and intentionally
+    // survives day boundaries (same semantics as AccountLifecycle /
+    // the Monte Carlo RiskProfile's maxConsecutiveLosses).
+    private volatile int tradesToday;
+    private volatile int consecutiveLosses;
+
     private final Map<String, Position> positions;
     private final Map<LocalDate, Double> dailyPnL;
 
@@ -57,6 +65,10 @@ public class AccountState {
     public double getHighestEndOfDayBalance() { return highestEndOfDayBalance; }
     public double getNetDailyPnl() { return realizedPnlToday + unrealizedPnlToday; }
     public LocalDate getCurrentTradingDay() { return currentTradingDay; }
+    /** Completed (fully closed) trades so far this trading day. */
+    public int getTradesToday() { return tradesToday; }
+    /** Consecutive losing completed trades; reset by any non-losing trade. */
+    public int getConsecutiveLosses() { return consecutiveLosses; }
 
     /**
      * Set the current balance (used when syncing with live account).
@@ -179,6 +191,31 @@ public class AccountState {
     }
 
     /**
+     * Record a COMPLETED trade (position fully closed) for the
+     * trade-frequency gates. Distinct from {@link #recordRealizedPnL(double)}
+     * which is also called for partial exits — call this exactly once per
+     * fully closed position.
+     */
+    public void recordTradeCompleted(double pnl) {
+        recordTradeCompleted(pnl, currentTradingDay);
+    }
+
+    /**
+     * Record a COMPLETED trade with an explicit trading day (rolls the daily
+     * counters if the day changed).
+     */
+    public void recordTradeCompleted(double pnl, LocalDate tradingDay) {
+        checkAndResetTradingDay(tradingDay);
+        tradesToday++;
+        if (pnl < 0) {
+            consecutiveLosses++;
+        } else {
+            consecutiveLosses = 0;
+        }
+        this.lastUpdated = Instant.now();
+    }
+
+    /**
      * Update unrealized PnL based on current market prices.
      */
     public void updateUnrealizedPnL(Map<String, Double> currentPrices, Map<String, Double> tickValues) {
@@ -248,6 +285,7 @@ public class AccountState {
             currentTradingDay = tradingDay;
             realizedPnlToday = 0.0;
             unrealizedPnlToday = 0.0;
+            tradesToday = 0;
             dailyPnL.put(tradingDay, 0.0);
             return;
         }
@@ -256,9 +294,11 @@ public class AccountState {
             // New trading day - update highest end of day balance from previous day
             endOfDay();
 
-            // Reset today's counters
+            // Reset today's counters (consecutiveLosses intentionally survives
+            // the day boundary — see field javadoc)
             realizedPnlToday = 0.0;
             unrealizedPnlToday = 0.0;
+            tradesToday = 0;
             currentTradingDay = tradingDay;
             dailyPnL.put(tradingDay, 0.0);
         }
@@ -279,6 +319,7 @@ public class AccountState {
         currentTradingDay = newTradingDay;
         realizedPnlToday = 0.0;
         unrealizedPnlToday = 0.0;
+        tradesToday = 0;
         dailyPnL.put(newTradingDay, 0.0);
     }
 

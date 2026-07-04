@@ -1,6 +1,8 @@
 package com.topstep.trading.execution;
 
 import com.topstep.trading.domain.*;
+import com.topstep.trading.event.EventBus;
+import com.topstep.trading.event.PositionClosedEvent;
 import com.topstep.trading.strategy.TradeTier;
 
 import java.time.Instant;
@@ -57,6 +59,11 @@ public class ExecutionEngine {
     // Execution listener for external notifications
     private ExecutionListener executionListener;
 
+    // Optional event bus: when set, a PositionClosedEvent is published from
+    // closePosition (the same funnel that counts the trade via
+    // AccountState.recordTradeCompleted). Null = no events (legacy behavior).
+    private EventBus eventBus;
+
     // Per-symbol signal context for enriching Trade records with confluence details
     private final Map<String, List<String>> pendingConfluenceFactors = new ConcurrentHashMap<>();
     private final Map<String, TradeTier> pendingTiers = new ConcurrentHashMap<>();
@@ -100,6 +107,14 @@ public class ExecutionEngine {
      */
     public void setExecutionListener(ExecutionListener listener) {
         this.executionListener = listener;
+    }
+
+    /**
+     * Set the event bus used to publish {@link PositionClosedEvent} from the
+     * close funnel. Optional; when unset no events are published.
+     */
+    public void setEventBus(EventBus eventBus) {
+        this.eventBus = eventBus;
     }
 
     /**
@@ -526,6 +541,9 @@ public class ExecutionEngine {
 
         // Update account with realized PnL
         accountState.recordRealizedPnL(realizedPnl);
+        // Count the completed trade for the trade-frequency gates
+        // (maxTradesPerDay / maxConsecutiveLosses in PropFirmRiskEngine).
+        accountState.recordTradeCompleted(realizedPnl);
 
         // Close position
         int closeQuantity = position.isLong() ? -quantity : quantity;
@@ -535,9 +553,15 @@ public class ExecutionEngine {
                           " | PnL: $" + String.format("%.2f", realizedPnl) + " | " + reason);
 
         // CRITICAL: Notify listener that position is closed
+        boolean isWin = realizedPnl > 0;
         if (executionListener != null) {
-            boolean isWin = realizedPnl > 0;
             executionListener.onPositionClosed(symbol, realizedPnl, isWin);
+        }
+        // Publish the position-closed event at the SAME funnel that counted
+        // the trade (recordTradeCompleted above). Consumers: scalp-mode
+        // re-arm in StdvOteRunnerStrategy, dashboards, journaling.
+        if (eventBus != null) {
+            eventBus.publish(new PositionClosedEvent(symbol, realizedPnl, isWin, exitTime));
         }
     }
 

@@ -707,6 +707,31 @@ public class BracketOrderManager {
     }
 
     /**
+     * Arm the price-based breakeven trigger on an existing bracket at an
+     * arbitrary trigger price (SCALP mode: entry +/- 0.5R behind the
+     * {@code scalp.breakevenAtHalfR} flag). Reuses the exact mechanism the
+     * single-contract runner path uses — {@link #checkPriceBreakevenTrigger}
+     * fires {@code moveStopToBreakeven} when price touches the trigger.
+     *
+     * No-op when the symbol has no active bracket or the stop already moved.
+     *
+     * @param symbol       the trading symbol
+     * @param triggerPrice price at which the stop moves to breakeven
+     */
+    public void armPriceBreakevenTrigger(String symbol, double triggerPrice) {
+        BracketOrder bracket = activeBrackets.get(symbol);
+        if (bracket == null || bracket.canceled || bracket.stopFilled || bracket.movedToBreakeven) {
+            return;
+        }
+        // Mark as a price-triggered runner so checkPriceBreakevenTrigger
+        // (already called on every market-data candle) monitors it.
+        bracket.isSingleContractRunner = true;
+        bracket.breakevenTriggerPrice = triggerPrice;
+        System.out.println("[BRACKET] Breakeven trigger armed for " + symbol
+                + " @ " + triggerPrice);
+    }
+
+    /**
      * Check price-based breakeven trigger for single-contract runner positions.
      *
      * For 1-contract positions targeting the full tier R:R (e.g., 3R, 4R, 5R),

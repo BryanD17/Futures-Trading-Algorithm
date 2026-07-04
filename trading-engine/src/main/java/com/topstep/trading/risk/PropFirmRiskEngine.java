@@ -82,6 +82,21 @@ public class PropFirmRiskEngine {
             return RiskDecision.deny("No daily loss room remaining");
         }
 
+        // 3b. Trade-frequency gates (scalp discipline; ported semantics from
+        // the Monte Carlo RiskProfile). A limit of 0 disables the gate, so
+        // legacy profiles (topstep50k/100k/150k) enforce neither. BLOCKING:
+        // these run before sizing so a blocked day never reaches the market.
+        if (limits.getMaxTradesPerDay() > 0
+                && account.getTradesToday() >= limits.getMaxTradesPerDay()) {
+            return RiskDecision.deny("Max trades per day reached: "
+                    + account.getTradesToday() + " >= " + limits.getMaxTradesPerDay());
+        }
+        if (limits.getMaxConsecutiveLosses() > 0
+                && account.getConsecutiveLosses() >= limits.getMaxConsecutiveLosses()) {
+            return RiskDecision.deny("Max consecutive losses reached: "
+                    + account.getConsecutiveLosses() + " >= " + limits.getMaxConsecutiveLosses());
+        }
+
         // 4. Calculate position size based on risk per trade
         double stopDistance = Math.abs(signal.getEntryPrice() - signal.getStopPrice());
         if (stopDistance <= 0) {
