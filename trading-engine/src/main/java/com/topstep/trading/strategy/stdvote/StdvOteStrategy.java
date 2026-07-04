@@ -95,11 +95,12 @@ public final class StdvOteStrategy implements TradingStrategy {
     private ScalpTargetCalculator scalpTargetCalculator;
 
     /**
-     * Binary raid-quality floor (SA4, scalp mode only): a sweep whose REAL
-     * raid-pipeline score is below this floor never advances the machine to
-     * {@code SWEEP_DONE}. Ignored in legacy mode. A fallback score (raid
-     * pipeline starved of levels — no tracked raid) bypasses the floor,
-     * preserving the SA2 pre-wiring fallback semantics exactly.
+     * Binary raid-quality floor (SA4/SA5, scalp mode only): a sweep whose
+     * score is below this floor never advances the machine to
+     * {@code SWEEP_DONE}. STRICT (SA5): the floor applies to every score,
+     * including the starved-pipeline instrument-base fallback — a score
+     * that cannot be shown &ge; the floor does not trade in scalp mode.
+     * Ignored in legacy mode.
      */
     private int scalpMinRaidScore = 0;
 
@@ -265,29 +266,16 @@ public final class StdvOteStrategy implements TradingStrategy {
      * {@code MANIP_DONE}. Direction must match HTF bias (a SSL sweep for
      * a bullish setup, BSL for bearish); mismatches are ignored.
      *
-     * <p>Equivalent to
-     * {@code recordSweep(sweep, raidScore, true)} — a directly supplied
-     * score is treated as a real raid-pipeline score.
+     * <p>SA4/SA5 binary quality gate (scalp mode only, STRICT): a sweep
+     * whose score is below the configured {@code scalp.minRaidScore} floor
+     * is REJECTED — the machine stays in {@code MANIP_DONE} so a later,
+     * higher-quality sweep can still arm the setup within the window. The
+     * floor applies to EVERY score — pipeline-differentiated, base-fallback
+     * (starved raid pipeline) and exact-base alike. Conservative rule: a
+     * score that cannot be shown &ge; the floor does not trade in scalp
+     * mode. Legacy mode (no scalp calculator) never applies the floor.
      */
     void recordSweep(LiquiditySweep sweep, int raidScore) {
-        recordSweep(sweep, raidScore, true);
-    }
-
-    /**
-     * Record a liquidity sweep with provenance of the score.
-     *
-     * <p>SA4 binary quality gate (scalp mode only): when the score comes
-     * from the real raid pipeline ({@code scoreFromRaidPipeline}) and is
-     * below the configured {@code scalp.minRaidScore} floor, the sweep is
-     * REJECTED — the machine stays in {@code MANIP_DONE} so a later,
-     * higher-quality sweep can still arm the setup within the window. A
-     * starved-pipeline fallback score (no tracked raid — the runner passes
-     * {@code scoreFromRaidPipeline == false}) bypasses the floor, keeping
-     * the SA2 fallback semantics ("M4 satisfiable exactly at the instrument
-     * floor when the pipeline has no known levels") unchanged. Legacy mode
-     * (no scalp calculator) never applies the floor.
-     */
-    void recordSweep(LiquiditySweep sweep, int raidScore, boolean scoreFromRaidPipeline) {
         if (setup.state != SetupState.MANIP_DONE) return;
         if (sweep == null) return;
         boolean biasBullish = (setup.htfBias == MarketBias.BULLISH);
@@ -295,7 +283,7 @@ public final class StdvOteStrategy implements TradingStrategy {
         // sets up the long. LiquiditySweep.isBullish() == true means sweep
         // of lows (per the existing class semantics).
         if (sweep.isBullish() != biasBullish) return;
-        if (isScalpMode() && scalpMinRaidScore > 0 && scoreFromRaidPipeline
+        if (isScalpMode() && scalpMinRaidScore > 0
                 && raidScore < scalpMinRaidScore) {
             System.out.println("[" + symbol + "] SCALP raid-score gate: sweep rejected"
                     + " (score " + raidScore + " < floor " + scalpMinRaidScore + ")");

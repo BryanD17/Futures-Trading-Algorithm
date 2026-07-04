@@ -19,10 +19,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 
 /**
- * SA3 end-to-end scalp-mode test: the SAME fixture that produces the legacy
- * golden emission (entry 21023 / stop 21011 / target 21058 / RR 2.92) must,
- * with {@code -DscalpMode.enabled=true}, produce the SAME entry/stop but a
- * 1R-capped scalp target — and the real RR must ride on the signal.
+ * SA3/SA5 end-to-end scalp-mode test on {@link StdvOteScalpFixture}: the
+ * golden emission geometry (entry 21023 / stop 21011) with a 1R-capped scalp
+ * target — and the real RR must ride on the signal. The fixture's sweep
+ * raids a REAL equal-lows cluster whose raid scores 6, so the STRICT binary
+ * raid gate ({@code scalp.minRaidScore} 6, no fallback bypass) passes on
+ * merit.
  *
  * <p>Geometry: risk = 21023 − 21011 = 12.0 → 1R cap = 21035.0. Whatever the
  * level pipeline offers as Candidate A, the emitted target can never exceed
@@ -47,7 +49,7 @@ class StdvOteScalpModeIntegrationTest {
     @AfterEach
     void cleanup() {
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
-        StdvOteRegistry.unregister(StdvOteGoldenFixture.SYMBOL);
+        StdvOteRegistry.unregister(StdvOteScalpFixture.SYMBOL);
     }
 
     private static final class CapturingEventBus extends EventBus {
@@ -66,10 +68,10 @@ class StdvOteScalpModeIntegrationTest {
     void scalpModeEmitsCappedTarget() {
         CapturingEventBus bus = new CapturingEventBus();
         StdvOteRunnerStrategy s = new StdvOteRunnerStrategy(
-                StdvOteGoldenFixture.SYMBOL, "MES", bus);
+                StdvOteScalpFixture.SYMBOL, "MES", bus);
         s.initialize();
         DefaultStrategyContext ctx = new DefaultStrategyContext(new AccountState(50_000.0));
-        for (Candle c : StdvOteGoldenFixture.fullFixture()) {
+        for (Candle c : StdvOteScalpFixture.fullFixture()) {
             s.onCandle(c, ctx);
         }
 
@@ -115,10 +117,10 @@ class StdvOteScalpModeIntegrationTest {
         // within 1.5R of entry, so the deterministic result is exactly 1R.
         CapturingEventBus bus = new CapturingEventBus();
         StdvOteRunnerStrategy s = new StdvOteRunnerStrategy(
-                StdvOteGoldenFixture.SYMBOL, "MES", bus);
+                StdvOteScalpFixture.SYMBOL, "MES", bus);
         s.initialize();
         DefaultStrategyContext ctx = new DefaultStrategyContext(new AccountState(50_000.0));
-        for (Candle c : StdvOteGoldenFixture.fullFixture()) {
+        for (Candle c : StdvOteScalpFixture.fullFixture()) {
             s.onCandle(c, ctx);
         }
 

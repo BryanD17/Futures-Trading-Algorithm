@@ -16,7 +16,7 @@ Scope: makes multiple trades per session structurally possible in scalp mode (`-
 | M3 time gate (`ctx.killzoneOpen` ← `isInstrumentKillzone`) | NY killzones (9:45–12:30, 13:45–16:00 ET) ∪ Silver Bullet windows (3–4, 10–11, 14–15 ET); MGC additionally full London session 3:00–12:00 ET | **Full KillzoneClock killzones only**: NY AM 9:45–12:30 ET ∪ NY PM 13:45–16:00 ET; MGC additionally London restricted to its PRIME window (default 3:00–5:00 ET — a NARROWING of legacy's 3:00–12:00). The SB-only 3:00–4:00 ET window no longer opens indices | `scalp.londonPrimeStartEt` (03:00), `scalp.londonPrimeEndEt` (05:00) |
 | Silver Bullet hard gate | part of the M3 union (grants entry windows) | **not a hard gate** — remains a scoring input only: `RaidDetector.processCandle` stamps the SB window on the scoring context (RaidDetector L276–278) and `RaidQualityScorer` awards **+1** inside it (L109–112) — verified functioning | — |
 | M4 sweep + raid score ≥ instrument minimum (MNQ/MES 5, MGC 6) | blocking | **unchanged** (floor NOT lowered) | — |
-| **NEW: binary raid-quality gate** | none | **blocking, at sweep-record time**: a sweep whose *differentiated* raid-pipeline score is `< scalp.minRaidScore` (default 6) is rejected — the machine stays `MANIP_DONE` so a later, better sweep can still arm inside the window. See §2 for the base-score/fallback bypass | `scalp.minRaidScore` (6) |
+| **NEW: binary raid-quality gate** | none | **blocking, at sweep-record time, STRICT (SA5)**: a sweep whose raid score is `< scalp.minRaidScore` (default 6) is rejected — EVERY score is subject to the floor (pipeline-differentiated, starved-pipeline base fallback, and exact-base alike). The machine stays `MANIP_DONE` so a later, better sweep can still arm inside the window. See §2 | `scalp.minRaidScore` (6) |
 | M5 displacement + FVG in bias direction | blocking | **unchanged** | — |
 | M6 MSS / CHoCH in bias direction | blocking; counter-bias MSS invalidates | **unchanged** | — |
 | M7 OTE geometry + RR band | blocking; band [2.0, +∞) via `topstep50k()` signal band | **unchanged from SA3**: band [0.8, 1.5] via `topstep50kScalp()`; geometry checks identical | (SA3) `scalpMode.enabled` |
@@ -34,16 +34,16 @@ Setup sequence (bias → leg → sweep → displacement+FVG → MSS → OTE) ful
 
 ---
 
-## 2. Binary raid gate — placement and the base-score bypass
+## 2. Binary raid gate — placement, STRICT semantics (SA5 fix)
 
-Implemented in `StdvOteStrategy.recordSweep(sweep, score, scoreFromRaidPipeline)` (scalp mode only): a differentiated pipeline score `< scalp.minRaidScore` is rejected **at sweep time** — deliberately earlier than emission, so a low-quality sweep does not burn the 40-bar window (a later ≥floor sweep can still arm; pinned by `betterSweepAfterRejectionStillArms`).
+Implemented in `StdvOteStrategy.recordSweep(sweep, score)` (scalp mode only): any score `< scalp.minRaidScore` is rejected **at sweep time** — deliberately earlier than emission, so a low-quality sweep does not burn the 40-bar window (a later ≥floor sweep can still arm; pinned by `betterSweepAfterRejectionStillArms`).
 
-**Bypass (FLAGGED):** the runner computes `scoreFromRaidPipeline = raid.isPresent() && raid.qualityScore != spec.raidMinQuality()`. Two situations bypass the floor:
+**STRICT (SA5):** the floor applies to EVERY sweep score, with no provenance distinction. The SA4 first cut carried a bypass (a starved-pipeline fallback score, or a tracked raid scoring exactly the instrument base, skipped the check); SA5 removed it because it violated the hard success criterion "no trade emits with raid quality score < 6 in scalp mode". The conservative rule now in force: **a score that cannot be shown ≥ `scalp.minRaidScore` does not trade in scalp mode.** Concretely:
 
-1. **Starved pipeline** (no tracked raid): the score is the SA2 fallback (`spec.raidMinQuality()`), exactly the pre-SA4 semantics.
-2. **A tracked raid scoring exactly the instrument base**: raids are scored ONCE at creation (`RaidDetector.checkLevelForRaid` L188–203 — no re-scoring), and a base-level score carries zero differentiating information versus the fallback path. The SA2/SA3 golden fixture pins this case (its raid scores exactly 5 = killzone +2, SB +1, HTF +2): treating it as gated would have contradicted the pre-existing scalp integration tests.
+1. **Starved pipeline** (no tracked raid): the runner's fallback score is the instrument base (`spec.raidMinQuality()` — 5 for MNQ/MES, 6 for MGC). For the index instruments that is `< 6` and the sweep is REJECTED (the window stays alive per the original SA4 design; a later sweep that produces a real ≥6 raid can still arm). For MGC the base equals the default floor, so a starved-pipeline sweep still passes at exactly 6.
+2. **A tracked raid scoring below the floor** (including exactly the base): REJECTED — same rule, no exceptions.
 
-Consequence to be aware of: for MNQ/MES (base 5) the default floor 6 bites on differentiated scores only — a raid scoring 4↓ is rejected at sweep time, base-5 passes (indistinguishable from fallback), 6+ passes. Real sessions with PDH/PDL/session-extreme levels produce differentiated scores, where the floor works exactly as written; raising `scalp.minRaidScore` tightens further. Nothing was lowered: M4's instrument floors are untouched and legacy has no floor at all.
+The branch's scalp fixtures were reworked to reach the floor legitimately (`StdvOteScalpFixture`): an EQUAL_LOW cluster of 3 fractal swing lows (21014.02 / 21014.00 / 21013.98, within the EqualLevelDetector clustering tolerance, strictly descending so MSS bearish structure survives) is raided by the sweep candle after the HTF bias flip, scoring HTF aligned +2, NY AM killzone +2, Silver Bullet window +1, strong equal level (cluster ≥ 3) +1 = **6**. `scalp.minRaidScore` was NOT lowered anywhere; M4's instrument floors are untouched and legacy has no floor at all. Pinned by `StdvOteScalpRaidGateTest.fallbackScoreIsRejectedStrictly` (fallback 5 rejected, later 6 arms) and the reworked scalp integration tests.
 
 ---
 
@@ -100,15 +100,15 @@ Config (all `scalp.*`, read-once at runner construction, invalid values fall bac
 
 Tests (19 new, all green; 419 total across both modules, 0 failed, 0 skipped/disabled):
 - `StdvOteScalpFrequencyIntegrationTest` (3) — (a) TWO complete trades in one NY AM killzone off one deterministic fixture, closing trade 1 through the REAL `ExecutionEngine` funnel (fill → target → `closePosition` → event → cooldown → re-arm → second full sequence); (c) no re-arm while the position is open; (d) no re-arm inside the cooldown (same feed, cooldown 50 → exactly one emission).
-- `StdvOteScalpRaidGateTest` (5) — (b) raidScore-5 REJECTED / raidScore-6 PASSES; rejected sweep keeps the window alive; fallback bypass; legacy has no floor.
+- `StdvOteScalpRaidGateTest` (5) — (b) raidScore-5 REJECTED / raidScore-6 PASSES; rejected sweep keeps the window alive; starved-pipeline fallback REJECTED (strict, SA5); legacy has no floor.
 - `StdvOteScalpWindowsTest` (6) — full killzones, SB no longer a hard gate (but legacy keeps it), MGC London prime + configurability + MGC-only, flatten-gap check.
 - `PositionClosedEventFunnelTest` (2) — the funnel publishes exactly once, with market exit time; no-bus legacy path unaffected.
 - `ScalpFrequencyConfigTest` (3) — defaults / overrides / invalid-value fallbacks.
-- Fixture: `StdvOteScalpFrequencyFixture` extends the SA2/SA3 golden fixture (act 1 byte-identical) with a round-trip candle, cooldown bridge, and a legitimate second act (fresh sweep/displacement/MSS/OTE) — golden expectations untouched.
+- Fixture: `StdvOteScalpFrequencyFixture` extends `StdvOteScalpFixture` (SA5: the golden fixture plus a legitimate equal-lows cluster so both acts' raids really score 6 — see §2) with a round-trip candle, cooldown bridge, and a legitimate second act (fresh sweep/displacement/MSS/OTE). `StdvOteGoldenFixture` and the golden expectations are untouched.
 
 ## 7. Flags / deferrals
 
-1. **Base-score bypass on the binary gate** (§2) — the documented reconciliation between the default floor 6 and the pre-existing scalp fixture whose real raid scores exactly the MNQ base.
+1. ~~Base-score bypass on the binary gate~~ — **RESOLVED by SA5**: the gate is now strict (§2); the scalp fixtures were reworked to reach raid score ≥ 6 legitimately.
 2. **Emitted-but-never-filled signals**: `positionOpen` is set at emission and cleared only by `PositionClosedEvent`. If the risk engine denies the order (e.g. trade #7), no position ever opens and no close event fires — re-arm stays blocked for that run. Safe direction (fewer trades); a future `ORDER_REJECTED` subscription could release it.
 3. Re-arm may also fire in a LATER killzone (e.g. invalidated at NY AM close → re-arms when NY PM opens) — intentional, addresses SA1 blocker #7 (session-end dead-start); the frequency gates still cap the day.
 4. The frequency-gate mirror at re-arm needs the `StrategyContext` account; without it the mirror is skipped and `PropFirmRiskEngine` remains the (only, still blocking) enforcement.

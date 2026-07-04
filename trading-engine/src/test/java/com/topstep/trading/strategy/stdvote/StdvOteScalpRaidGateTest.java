@@ -25,16 +25,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * SA4 deliverable (b): the BINARY quality gate. In scalp mode the go/no-go
- * gate is {@code raidScore >= scalp.minRaidScore} (default 6) applied to
- * real raid-pipeline scores at sweep time:
+ * SA4/SA5 deliverable: the BINARY quality gate, STRICT. In scalp mode the
+ * go/no-go gate is {@code raidScore >= scalp.minRaidScore} (default 6)
+ * applied at sweep time to EVERY score — pipeline-differentiated,
+ * starved-pipeline base fallback, and exact-base alike:
  *
  * <ul>
  *   <li>a raidScore-5 sweep is REJECTED (machine stays MANIP_DONE, no
  *       emission);</li>
  *   <li>a raidScore-6 sweep PASSES and the identical setup emits;</li>
- *   <li>a starved-pipeline FALLBACK score bypasses the floor (SA2 base-score
- *       semantics preserved — no existing scoring lowered);</li>
+ *   <li>the starved-pipeline FALLBACK score (instrument base) is REJECTED
+ *       just the same — no bypass of any kind (SA5 strict-gate fix);</li>
  *   <li>legacy mode has NO floor (behaviour byte-for-byte).</li>
  * </ul>
  */
@@ -143,15 +144,23 @@ class StdvOteScalpRaidGateTest {
     }
 
     @Test
-    @DisplayName("starved-pipeline FALLBACK score bypasses the floor (SA2 semantics preserved)")
-    void fallbackScoreBypassesFloor() {
+    @DisplayName("STRICT: the starved-pipeline fallback score (instrument base 5) is REJECTED — no bypass")
+    void fallbackScoreIsRejectedStrictly() {
         StdvOteStrategy s = newScalpStrategy();
         driveToManipDone(s);
 
-        // scoreFromRaidPipeline=false — the instrument-base fallback the
-        // runner uses when the raid pipeline has no tracked raid.
-        s.recordSweep(new LiquiditySweep(true, 19952.0, Instant.now(), true),
-                5, /* scoreFromRaidPipeline */ false);
+        // The instrument-base fallback the runner uses when the raid
+        // pipeline has no tracked raid is 5 for MNQ. SA5 hard criterion:
+        // "no trade emits with raid quality score < 6 in scalp mode" — a
+        // score that cannot be shown >= the floor does not trade, so the
+        // fallback is gated exactly like any other sub-floor score. The
+        // window stays alive for a later, genuinely >= 6 sweep.
+        s.recordSweep(new LiquiditySweep(true, 19952.0, Instant.now(), true), 5);
+        assertThat(s.getSetupContext().state).isEqualTo(SetupState.MANIP_DONE);
+        assertThat(s.getSetupContext().sweep).isNull();
+
+        // A later sweep with a real >= 6 pipeline score still arms.
+        s.recordSweep(new LiquiditySweep(true, 19951.0, Instant.now(), true), 6);
         assertThat(s.getSetupContext().state).isEqualTo(SetupState.SWEEP_DONE);
     }
 

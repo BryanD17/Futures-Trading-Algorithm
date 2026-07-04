@@ -33,6 +33,18 @@ public class TradingEngineMain {
                 runBacktestMode();
                 break;
 
+            case "ABTEST":
+                // SA5: legacy-vs-scalp A/B comparison on the same candle set
+                // with explicit commission + slippage (gross AND net PnL).
+                com.topstep.trading.backtest.AbBacktestComparison.main(new String[0]);
+                break;
+
+            case "MONTECARLO":
+                // SA5: scalp ($150, 6/day, 3-loss stop) vs naive ($500, no
+                // stop) DLL/MLL breach probability comparison.
+                com.topstep.trading.montecarlo.MonteCarloScalpComparison.main(new String[0]);
+                break;
+
             case "SIM":
                 runSimMode();
                 break;
@@ -43,7 +55,7 @@ public class TradingEngineMain {
 
             default:
                 System.err.println("Unknown mode: " + mode);
-                System.err.println("Supported modes: BACKTEST, SIM, LIVE");
+                System.err.println("Supported modes: BACKTEST, ABTEST, MONTECARLO, SIM, LIVE");
                 System.exit(1);
         }
     }

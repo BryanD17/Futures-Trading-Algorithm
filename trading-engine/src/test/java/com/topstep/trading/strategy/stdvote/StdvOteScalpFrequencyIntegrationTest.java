@@ -43,11 +43,10 @@ class StdvOteScalpFrequencyIntegrationTest {
 
     @BeforeEach
     void enableScalpMode() {
-        // Default scalp configuration on purpose — the fixture's raids score
-        // exactly the MNQ instrument base (5), which is indistinguishable
-        // from the starved-pipeline fallback and therefore bypasses the
-        // binary floor by design (see SA4_frequency_gates.md). The floor
-        // itself is pinned by StdvOteScalpRaidGateTest.
+        // Default scalp configuration — including the STRICT binary raid
+        // gate (scalp.minRaidScore 6, no bypass). Both acts of the fixture
+        // raid a real EQUAL_LOW cluster whose raid scores exactly 6, so the
+        // gate passes on merit (see StdvOteScalpFixture).
         System.setProperty(ScalpConfig.ENABLED_PROPERTY, "true");
     }
 

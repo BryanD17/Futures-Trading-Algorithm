@@ -22,6 +22,13 @@ public class PathResult {
     private final int daysToComplete;
     private final double peakEquity;
 
+    /**
+     * Number of days on which the FULL Daily Loss Limit was breached
+     * (dailyPnl &le; −DLL). Additive SA5 field (default 0) so DLL breach
+     * probability can be reported alongside the MLL/blown probability.
+     */
+    private int dllBreachDays;
+
     public PathResult(Outcome outcome, List<Double> equityCurve, double finalEquity,
                       double maxDrawdown, double maxDrawdownFromHwm,
                       int tradesToComplete, int daysToComplete, double peakEquity) {
@@ -46,4 +53,16 @@ public class PathResult {
 
     public boolean passed() { return outcome == Outcome.PASSED; }
     public boolean blown() { return outcome == Outcome.BLOWN; }
+
+    /** Days with a full DLL breach on this path (SA5 additive metric). */
+    public int getDllBreachDays() { return dllBreachDays; }
+
+    /** True if the Daily Loss Limit was fully breached at least once. */
+    public boolean hadDllBreach() { return dllBreachDays > 0; }
+
+    /** Attach the DLL-breach-day count (fluent; used by the simulator). */
+    public PathResult withDllBreachDays(int days) {
+        this.dllBreachDays = days;
+        return this;
+    }
 }

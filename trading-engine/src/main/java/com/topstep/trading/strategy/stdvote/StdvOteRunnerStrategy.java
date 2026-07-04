@@ -812,23 +812,16 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         boolean wantBullishSweep = (lastBias == MarketBias.BULLISH);
         if (sweep.isBullish() != wantBullishSweep) return;
 
-        // Score provenance matters for the SA4 binary gate: a DIFFERENTIATED
-        // pipeline score (one that says more than the instrument base) is
-        // subject to scalp.minRaidScore. Two cases keep SA2's base-score
-        // semantics and bypass the floor instead:
-        //  - starved pipeline (no tracked raid) → fallback score == base;
-        //  - a tracked raid scoring EXACTLY the instrument base — carrying
-        //    zero differentiating information vs the fallback path (raids
-        //    are scored once at creation; base-level context yields base).
-        // A tracked raid scoring BELOW base is differentiated (negative
-        // signal) and is gated — it would fail M4 later anyway; rejecting at
-        // sweep time keeps the window alive for a better sweep.
-        RaidDirection want = sweep.isBullish() ? RaidDirection.LOW_SWEEP : RaidDirection.HIGH_SWEEP;
-        Optional<LiquidityRaid> activeRaid = raidDetector.getActiveRaidByDirection(want);
-        boolean scoreDifferentiated = activeRaid.isPresent()
-                && activeRaid.get().getQualityScore() != spec.raidMinQuality();
+        // SA5 STRICT binary gate: the score passed to the core is subject to
+        // scalp.minRaidScore in scalp mode regardless of provenance. When
+        // the raid pipeline has no tracked raid the fallback score is the
+        // instrument base (5 for MNQ/MES, 6 for MGC) — in scalp mode with
+        // the default floor 6 that fallback is REJECTED for the index
+        // instruments: a score that cannot be shown >= the floor does not
+        // trade. The core keeps the machine in MANIP_DONE so a later,
+        // pipeline-scored >= floor sweep can still arm inside the window.
         int score = currentRaidScore(sweep);
-        core.recordSweep(sweep, score, scoreDifferentiated);
+        core.recordSweep(sweep, score);
         if (core.getSetupContext().state == SetupState.SWEEP_DONE) {
             lastConsumedSweepTs = sweep.getTimestamp();
             // Begin tracking the reversal-leg origin from the swept extreme.

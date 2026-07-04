@@ -8,11 +8,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * SA4 two-trade fixture: extends the SA2/SA3 golden fixture with a second
- * complete, legitimate setup inside the SAME NY AM killzone (opens 9:45 ET).
+ * SA4/SA5 two-trade fixture: extends the SCALP fixture (the golden fixture
+ * plus a legitimate equal-lows cluster — see {@link StdvOteScalpFixture})
+ * with a second complete, legitimate setup inside the SAME NY AM killzone
+ * (opens 9:45 ET). Both acts produce raids that REALLY score &ge; 6, so the
+ * strict binary raid gate ({@code scalp.minRaidScore} 6) passes with no
+ * bypass of any kind.
  *
- * <p>Act 1 = the exact golden fixture (warmup + kz 0..22) ending in the
- * LONG MNQ emission @ 21023 / stop 21011. Then:
+ * <p>Act 1 = the scalp fixture (warmup + kz 0..22) ending in the LONG MNQ
+ * emission @ 21023 / stop 21011. Then:
  *
  * <ol>
  *   <li>{@code fill/close candle} (kz+23): dips to 21022 (fills the 21023
@@ -23,16 +27,17 @@ import java.util.List;
  *       cooldown (default 5 bars) elapses.</li>
  *   <li>Act 2 (kz+31..53): the same 23-candle price pattern as act 1's
  *       killzone sequence — every sequence gate genuinely fires a second
- *       time (fresh sweep of 21014 at kz+46, fresh displacement FVG
+ *       time (fresh sweep at kz+46 raiding the re-detected EQUAL_LOW
+ *       cluster at 21014 → raid score 6 again, fresh displacement FVG
  *       [21020, 21023], fresh MSS above 21035, OTE retrace) producing a
- *       second LONG emission @ 21023 at kz+53 (10:38 ET, still inside the
- *       9:45–12:30 killzone).</li>
+ *       second LONG emission @ 21023 (still inside the 9:45–12:30
+ *       killzone).</li>
  * </ol>
  */
 final class StdvOteScalpFrequencyFixture {
 
-    static final String SYMBOL = StdvOteGoldenFixture.SYMBOL;
-    static final Instant KILLZONE_OPEN = StdvOteGoldenFixture.KILLZONE_OPEN;
+    static final String SYMBOL = StdvOteScalpFixture.SYMBOL;
+    static final Instant KILLZONE_OPEN = StdvOteScalpFixture.KILLZONE_OPEN;
 
     /** Expected geometry shared by both emissions. */
     static final double EXPECTED_ENTRY = 21023.0;
@@ -64,9 +69,9 @@ final class StdvOteScalpFrequencyFixture {
         return c;
     }
 
-    /** Act 2: the golden killzone pattern replayed at kz+31..53. */
+    /** Act 2: the scalp killzone pattern (with the cluster) replayed at kz+31..53. */
     static List<Candle> secondActCandles() {
-        List<Candle> base = StdvOteGoldenFixture.killzoneCandles();
+        List<Candle> base = StdvOteScalpFixture.killzoneCandles();
         List<Candle> out = new ArrayList<>(base.size());
         for (int i = 0; i < base.size(); i++) {
             Candle b = base.get(i);
@@ -79,7 +84,7 @@ final class StdvOteScalpFrequencyFixture {
 
     /** Everything: warmup + act 1 + round trip + bridge + act 2. */
     static List<Candle> fullTwoTradeFixture() {
-        List<Candle> all = new ArrayList<>(StdvOteGoldenFixture.fullFixture());
+        List<Candle> all = new ArrayList<>(StdvOteScalpFixture.fullFixture());
         all.addAll(fillAndCloseCandles());
         all.addAll(bridgeCandles());
         all.addAll(secondActCandles());
