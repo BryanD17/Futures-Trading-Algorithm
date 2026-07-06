@@ -41,6 +41,19 @@ export const RiskService = {
   async getRiskMetrics(): Promise<RiskMetrics> {
     const response = await api.get('/risk')
     return response.data
+  },
+
+  /**
+   * Update user-adjustable risk settings. The backend is tighten-only:
+   * daily loss cap and per-trade risk above the engine baseline are clamped.
+   */
+  async updateSettings(settings: {
+    profitTarget?: number
+    maxDailyLoss?: number
+    riskPerTrade?: number
+  }): Promise<{ profitTarget: number; maxDailyLoss: number; riskPerTrade: number; status?: string; error?: string }> {
+    const response = await api.post('/risk/settings', settings)
+    return response.data
   }
 }
 

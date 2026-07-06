@@ -103,7 +103,9 @@ public class LiveEngineRunner {
 
     private final TradingConnector connector;
     private final AccountState accountState;
-    private final RiskLimits riskLimits;
+    // Volatile (not final): the dashboard risk-settings endpoint can swap in
+    // a tightened copy at runtime via setRiskLimits.
+    private volatile RiskLimits riskLimits;
     private final PropFirmRiskEngine riskEngine;
     private final ExecutionEngine executionEngine;
     private final BracketOrderManager bracketManager;  // OCO bracket order management
@@ -132,6 +134,7 @@ public class LiveEngineRunner {
     // EXPRESS Funded Account flag - these accounts start at $0 balance (not $50K)
     // Balance represents P&L accumulated since account creation
     private final boolean isExpressAccount;
+    private final com.topstep.trading.connector.TopstepCredentials credentials;
 
     // === Convex Payoff Optimization: Lifecycle-aware dynamic risk sizing ===
     private final AccountLifecycle lifecycle;
@@ -153,8 +156,14 @@ public class LiveEngineRunner {
      * Create a new LIVE engine with custom configuration.
      */
     public LiveEngineRunner(double startingBalance, RiskLimits riskLimits) {
+        // Resolve credentials once (system properties / ~/.topstep file / env)
+        // so the EXPRESS check and the connector agree on the account.
+        com.topstep.trading.connector.TopstepCredentials creds =
+            com.topstep.trading.connector.TopstepCredentials.load();
+        this.credentials = creds;
+
         // Check if this is an Express Funded Account (balance starts at $0)
-        String accountId = System.getenv("TOPSTEP_ACCOUNT_ID");
+        String accountId = creds.accountId;
         this.isExpressAccount = accountId != null && accountId.toUpperCase().contains("EXPRESS");
 
         // For Express accounts, override starting balance to $0
@@ -196,6 +205,11 @@ public class LiveEngineRunner {
                                              qty, bracket.entrySide);
                     System.out.println("  Stop PnL: $" + String.format("%.2f", pnl) + " (" + qty + " contracts)");
                     notifyPositionClosed(bracket.symbol, pnl);
+                    recordLiveTrade(bracket, fillPrice, qty, pnl, "Stop loss filled");
+                    // Book realized P&L so the DLL guard (getNetDailyPnl) sees
+                    // live losses — live closes bypass ExecutionEngine.closePosition,
+                    // which is where SIM/backtest book it.
+                    accountState.recordRealizedPnL(pnl);
                     // Clear position from account state
                     accountState.closePosition(bracket.symbol);
                     // Count the completed trade for the frequency gates
@@ -213,6 +227,18 @@ public class LiveEngineRunner {
                                              bracket.totalQuantity, bracket.entrySide);
                     System.out.println("  Total PnL: $" + String.format("%.2f", pnl));
                     notifyPositionClosed(bracket.symbol, pnl);
+                    // Multi-level TPs already booked/recorded every level via
+                    // onPartialTakeProfitFilled (which also fires for the last
+                    // level); only the legacy single-TP path arrives here with
+                    // an unbooked remainder. Book just that portion or the DLL
+                    // guard would double-count partials.
+                    int unbookedQty = bracket.totalQuantity - bracket.getTotalFilledTpQuantity();
+                    if (unbookedQty > 0) {
+                        double unbookedPnl = calculatePnl(bracket.symbol, bracket.entryPrice, fillPrice,
+                                                          unbookedQty, bracket.entrySide);
+                        recordLiveTrade(bracket, fillPrice, unbookedQty, unbookedPnl, "Take profit filled");
+                        accountState.recordRealizedPnL(unbookedPnl);
+                    }
                     // Clear position from account state
                     accountState.closePosition(bracket.symbol);
                     // Count the completed trade for the frequency gates.
@@ -230,6 +256,8 @@ public class LiveEngineRunner {
                                                      level.quantity, bracket.entrySide);
                     System.out.println("  Partial PnL: $" + String.format("%.2f", partialPnl) +
                                       " (" + level.quantity + " contracts at " + level.rMultiple + "R)");
+                    recordLiveTrade(bracket, fillPrice, level.quantity, partialPnl,
+                        "Partial take profit (" + level.rMultiple + "R)");
                     // Update realized PnL but don't close position
                     accountState.recordRealizedPnL(partialPnl);
                     // Update position quantity
@@ -438,22 +466,8 @@ public class LiveEngineRunner {
      * Create the Topstep connector from environment variables.
      */
     private TradingConnector createConnector() {
-        String apiUrl = System.getenv("TOPSTEP_API_URL");
-        String username = System.getenv("TOPSTEP_USERNAME");
-        String apiKey = System.getenv("TOPSTEP_API_KEY");
-        String accountId = System.getenv("TOPSTEP_ACCOUNT_ID");
-
-        if (apiUrl == null || username == null || apiKey == null || accountId == null) {
-            throw new IllegalStateException(
-                "Missing Topstep credentials. Set environment variables:\n" +
-                "  TOPSTEP_API_URL\n" +
-                "  TOPSTEP_USERNAME\n" +
-                "  TOPSTEP_API_KEY\n" +
-                "  TOPSTEP_ACCOUNT_ID"
-            );
-        }
-
-        return new TopstepConnector(apiUrl, username, apiKey, accountId);
+        return new TopstepConnector(credentials.apiUrl, credentials.username,
+            credentials.apiKey, credentials.accountId);
     }
 
     /**
@@ -1023,6 +1037,36 @@ public class LiveEngineRunner {
     /**
      * Calculate PnL for a closed position.
      */
+    /**
+     * Record a Trade for a live broker-side exit (bracket SL/TP/partial).
+     * Live fills bypass ExecutionEngine.closePosition, so without this the
+     * Trades tab / journal / metrics never see live trades. Journaling only:
+     * AccountState P&L and frequency gates are updated by the callers.
+     */
+    private void recordLiveTrade(BracketOrderManager.BracketOrder bracket, double exitPrice,
+                                 int quantity, double pnl, String reason) {
+        try {
+            double stopForRisk = bracket.originalStopPrice > 0 ? bracket.originalStopPrice : bracket.stopPrice;
+            double riskAmount = Math.abs(calculatePnl(bracket.symbol, bracket.entryPrice,
+                stopForRisk, quantity, bracket.entrySide));
+            executionEngine.recordExternalTrade(com.topstep.trading.domain.Trade.builder()
+                .symbol(bracket.symbol)
+                .side(bracket.entrySide)
+                .quantity(quantity)
+                .entryPrice(bracket.entryPrice)
+                .exitPrice(exitPrice)
+                .entryTime(bracket.createdAt)
+                .exitTime(java.time.Instant.now())
+                .realizedPnL(pnl)
+                .riskAmount(riskAmount)
+                .tier(bracket.tier)
+                .notes(reason)
+                .build());
+        } catch (Exception e) {
+            System.err.println("Failed to record live trade for " + bracket.symbol + ": " + e.getMessage());
+        }
+    }
+
     private double calculatePnl(String symbol, double entryPrice, double exitPrice, int quantity, OrderSide entrySide) {
         double tickValue = getTickValue(symbol);
         double priceDiff = (entrySide == OrderSide.BUY)
@@ -1413,9 +1457,34 @@ public class LiveEngineRunner {
                             0.0 // Market order, no price
                         );
 
+                        // Capture entry context now — the position is removed
+                        // from account state below, before the fill callback.
+                        final OrderSide entrySide = position.getSide();
+                        final double entryPrice = position.getAvgEntryPrice();
+                        final int closedQty = Math.abs(position.getQuantity());
+                        final java.time.Instant openedAt = position.getOpenedAt();
+                        final String flattenReason = reason;
+
                         String orderId = connector.submitOrder(closeOrder, (id, status, price, qty) -> {
-                            if (status == OrderStatus.FILLED) {
+                            if (status == OrderStatus.FILLED && price != null) {
                                 System.out.println("  ✓ Closed " + symbol + " at $" + price);
+                                double pnl = calculatePnl(symbol, entryPrice, price, closedQty, entrySide);
+                                // Book P&L and journal the trade — flatten fills
+                                // bypass both ExecutionEngine and the bracket
+                                // manager, so nothing else records them.
+                                accountState.recordRealizedPnL(pnl);
+                                accountState.recordTradeCompleted(pnl);
+                                executionEngine.recordExternalTrade(com.topstep.trading.domain.Trade.builder()
+                                    .symbol(symbol)
+                                    .side(entrySide)
+                                    .quantity(closedQty)
+                                    .entryPrice(entryPrice)
+                                    .exitPrice(price)
+                                    .entryTime(openedAt)
+                                    .exitTime(java.time.Instant.now())
+                                    .realizedPnL(pnl)
+                                    .notes("Flattened: " + flattenReason)
+                                    .build());
                             }
                         });
 
@@ -1654,6 +1723,8 @@ public class LiveEngineRunner {
     public AccountState getAccountState() { return accountState; }
     public ExecutionEngine getExecutionEngine() { return executionEngine; }
     public RiskLimits getRiskLimits() { return riskLimits; }
+    /** Swap in updated limits (tighten-only validation lives in EngineFacade.updateRiskSettings). */
+    public void setRiskLimits(RiskLimits limits) { this.riskLimits = limits; }
     public boolean isRunning() { return running.get(); }
     public boolean isPaused() { return paused.get(); }
     public boolean isKillSwitchActive() { return killSwitchActive.get(); }

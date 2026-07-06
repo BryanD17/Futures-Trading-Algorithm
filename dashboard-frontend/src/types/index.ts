@@ -33,10 +33,17 @@ export interface Trade {
 export interface RiskMetrics {
   maxDailyLoss: number
   currentDailyLoss: number
+  currentDailyPnL?: number
   remainingRiskBudget: number
   maxContracts: number
   currentContracts: number
   riskPerTrade: number
+  profitTarget?: number
+  profitTargetProgress?: number
+  maxLossLimit?: number
+  currentDrawdown?: number
+  remainingDrawdown?: number
+  accountInGoodStanding?: boolean
 }
 
 export interface DailyMetrics {

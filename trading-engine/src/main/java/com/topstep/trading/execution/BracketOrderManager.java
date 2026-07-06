@@ -82,6 +82,10 @@ public class BracketOrderManager {
         public double takeProfitPrice;
         public boolean takeProfitFilled = false;
 
+        // When the bracket was created ≈ entry fill time; used as the
+        // entryTime on Trade records built from live bracket exits.
+        public final java.time.Instant createdAt = java.time.Instant.now();
+
         public BracketOrder(String symbol, String entryOrderId, double entryPrice,
                            int quantity, OrderSide entrySide, TradeTier tier) {
             this.symbol = symbol;

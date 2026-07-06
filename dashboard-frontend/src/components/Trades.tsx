@@ -64,9 +64,39 @@ export default function Trades() {
     return <div className="error-state">{error}</div>
   }
 
+  const totalPnl = trades.reduce((sum, t) => sum + (t.realizedPnL ?? 0), 0)
+  const wins = trades.filter((t) => (t.realizedPnL ?? 0) > 0).length
+  const losses = trades.filter((t) => (t.realizedPnL ?? 0) < 0).length
+  const winRate = trades.length > 0 ? (wins / trades.length) * 100 : 0
+
   return (
     <div className="trades">
       <h2>Recent Trades</h2>
+
+      {trades.length > 0 && (
+        <div className="trades-summary">
+          <div className="trades-summary-item">
+            <span className="label">Trades</span>
+            <span className="value">{trades.length}</span>
+          </div>
+          <div className="trades-summary-item">
+            <span className="label">Wins / Losses</span>
+            <span className="value">
+              {wins} / {losses}
+            </span>
+          </div>
+          <div className="trades-summary-item">
+            <span className="label">Win Rate</span>
+            <span className="value">{winRate.toFixed(1)}%</span>
+          </div>
+          <div className="trades-summary-item">
+            <span className="label">Net P&L</span>
+            <span className="value" style={{ color: totalPnl >= 0 ? '#10b981' : '#ef4444' }}>
+              ${totalPnl.toFixed(2)}
+            </span>
+          </div>
+        </div>
+      )}
 
       {trades.length === 0 ? (
         <div className="empty-state">No trades yet</div>
@@ -75,7 +105,8 @@ export default function Trades() {
           <table>
             <thead>
               <tr>
-                <th>Time</th>
+                <th>Entry Time</th>
+                <th>Exit Time</th>
                 <th>Symbol</th>
                 <th>Side</th>
                 <th>Qty</th>
@@ -94,6 +125,7 @@ export default function Trades() {
 
                 return (
                   <tr key={trade.tradeId || idx}>
+                    <td>{formatDate(trade.entryTime)}</td>
                     <td>{formatDate(trade.exitTime)}</td>
                     <td className="symbol">{trade.symbol || '-'}</td>
                     <td>

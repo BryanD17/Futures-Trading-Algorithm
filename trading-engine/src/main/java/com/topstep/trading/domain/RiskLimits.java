@@ -53,6 +53,29 @@ public final class RiskLimits {
         this.maxConsecutiveLosses = builder.maxConsecutiveLosses;
     }
 
+    /**
+     * Copy this configuration into a Builder so individual fields can be
+     * overridden (used by the dashboard risk-settings endpoint).
+     */
+    public Builder toBuilder() {
+        return builder()
+                .maxDailyLoss(maxDailyLoss)
+                .maxLossLimit(maxLossLimit)
+                .profitTarget(profitTarget)
+                .trailingDrawdown(trailingDrawdown)
+                .maxContracts(maxContracts)
+                .maxTotalContracts(maxTotalContracts)
+                .riskPerTrade(riskPerTrade)
+                .minRiskRewardRatio(minRiskRewardRatio)
+                .maxRiskRewardRatio(maxRiskRewardRatio)
+                .flattenByTime(flattenByTime)
+                .allowWeekendTrading(allowWeekendTrading)
+                .signalMinRr(signalMinRr)
+                .signalMaxRr(signalMaxRr)
+                .maxTradesPerDay(maxTradesPerDay)
+                .maxConsecutiveLosses(maxConsecutiveLosses);
+    }
+
     // Getters
     public double getMaxDailyLoss() { return maxDailyLoss; }
     public double getDailyLossLimit() { return maxDailyLoss; } // Alias for backwards compatibility

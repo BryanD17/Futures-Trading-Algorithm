@@ -59,7 +59,9 @@ public class SimEngineRunner {
 
     private final TradingConnector connector;
     private final AccountState accountState;
-    private final RiskLimits riskLimits;
+    // Volatile (not final): the dashboard risk-settings endpoint can swap in
+    // a tightened copy at runtime via setRiskLimits.
+    private volatile RiskLimits riskLimits;
     private final PropFirmRiskEngine riskEngine;
     private final ExecutionEngine executionEngine;
     private final TradingStrategy strategy;
@@ -399,6 +401,11 @@ public class SimEngineRunner {
      */
     public RiskLimits getRiskLimits() {
         return riskLimits;
+    }
+
+    /** Swap in updated limits (tighten-only validation lives in EngineFacade.updateRiskSettings). */
+    public void setRiskLimits(RiskLimits limits) {
+        this.riskLimits = limits;
     }
 
     /**

@@ -77,6 +77,10 @@ public class TopstepConnector implements TradingConnector {
     // State
     private volatile boolean connected = false;
     private volatile String authToken;  // Made volatile for thread safety
+    // Numeric account ID resolved via strict match against the configured
+    // accountId. Cached after first resolution — it never changes for the
+    // lifetime of the connector, and order paths must not re-run discovery.
+    private volatile String cachedNumericAccountId;
     private final Map<String, MarketDataListener> marketDataListeners = new ConcurrentHashMap<>();
     private final Map<String, OrderListener> orderListeners = new ConcurrentHashMap<>();
     private final Map<String, String> symbolToContractId = new ConcurrentHashMap<>();
@@ -157,20 +161,11 @@ public class TopstepConnector implements TradingConnector {
      * Default constructor (requires environment variables).
      */
     public TopstepConnector() {
-        this(
-            getRequiredEnv("TOPSTEP_API_URL"),
-            getRequiredEnv("TOPSTEP_USERNAME"),
-            getRequiredEnv("TOPSTEP_API_KEY"),
-            getRequiredEnv("TOPSTEP_ACCOUNT_ID")
-        );
+        this(TopstepCredentials.load());
     }
 
-    private static String getRequiredEnv(String name) {
-        String value = System.getenv(name);
-        if (value == null || value.isEmpty()) {
-            throw new IllegalStateException("Required environment variable not set: " + name);
-        }
-        return value;
+    private TopstepConnector(TopstepCredentials creds) {
+        this(creds.apiUrl, creds.username, creds.apiKey, creds.accountId);
     }
 
     @Override
@@ -369,16 +364,31 @@ public class TopstepConnector implements TradingConnector {
             logger.debug("Auth response: {}", responseBody);
             JsonNode json = objectMapper.readTree(responseBody);
 
-            if (json.has("token")) {
-                authToken = json.get("token").asText();
-            } else if (json.has("accessToken")) {
-                authToken = json.get("accessToken").asText();
-            } else if (json.has("Token")) {
-                authToken = json.get("Token").asText();
-            } else {
+            // TopstepX returns HTTP 200 even on bad credentials, with
+            // success=false and token=null. Trusting has("token") alone
+            // turns a failed login into "Bearer null" 401s downstream.
+            if (json.has("success") && !json.get("success").asBoolean()) {
+                int errorCode = json.has("errorCode") ? json.get("errorCode").asInt() : -1;
+                String errorMessage = json.has("errorMessage") && !json.get("errorMessage").isNull()
+                    ? json.get("errorMessage").asText() : "invalid username or API key";
+                throw new IOException("Authentication rejected by TopstepX (errorCode="
+                    + errorCode + "): " + errorMessage);
+            }
+
+            String token = null;
+            if (json.hasNonNull("token")) {
+                token = json.get("token").asText();
+            } else if (json.hasNonNull("accessToken")) {
+                token = json.get("accessToken").asText();
+            } else if (json.hasNonNull("Token")) {
+                token = json.get("Token").asText();
+            }
+
+            if (token == null || token.isEmpty() || "null".equals(token)) {
                 throw new IOException("No auth token in response: " + responseBody);
             }
 
+            authToken = token;
             logger.info("Authentication successful");
         }
     }
@@ -1336,9 +1346,30 @@ public class TopstepConnector implements TradingConnector {
     }
 
     /**
-     * Get the numeric account ID from the TopstepX account.
+     * Get the numeric account ID for the configured account.
+     * Resolved strictly (exact match) and cached — see resolveAccountNode().
      */
     private String getNumericAccountId() throws Exception {
+        String cached = cachedNumericAccountId;
+        if (cached != null) {
+            return cached;
+        }
+        JsonNode account = resolveAccountNode();
+        return account.get("id").asText();
+    }
+
+    /**
+     * Fetch active accounts and return the one whose name or numeric id
+     * EXACTLY matches the configured accountId.
+     *
+     * Fuzzy matching (contains / single-account fallback) is deliberately
+     * not supported: a Topstep login routinely has several active accounts
+     * (practice + combines) and a loose match can route live orders to the
+     * wrong one. If the configured account is not found, or is not
+     * tradeable, this fails hard so the kill switch fires before any order
+     * is placed.
+     */
+    private JsonNode resolveAccountNode() throws Exception {
         String accountUrl = apiUrl + "/Account/search";
         String requestBody = objectMapper.writeValueAsString(Map.of(
             "onlyActiveAccounts", true
@@ -1352,25 +1383,50 @@ public class TopstepConnector implements TradingConnector {
 
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
-                throw new IOException("Failed to get account: " + response.code());
+                String body = response.body() != null ? response.body().string() : "No body";
+                throw new IOException("Account search failed: " + response.code() + " - " + body);
             }
 
             String responseBody = response.body().string();
             JsonNode json = objectMapper.readTree(responseBody);
             JsonNode accounts = json.has("accounts") ? json.get("accounts") : json;
 
-            if (accounts.isArray() && accounts.size() > 0) {
-                for (JsonNode account : accounts) {
-                    String accName = account.has("name") ? account.get("name").asText() : "";
-                    if (accName.contains(accountId) || accountId.contains(accName) || accounts.size() == 1) {
-                        if (account.has("id")) {
-                            return account.get("id").asText();
-                        }
-                    }
-                }
+            if (!accounts.isArray() || accounts.size() == 0) {
+                throw new IOException("No active accounts returned by TopstepX");
             }
 
-            throw new IOException("Could not find numeric account ID");
+            java.util.List<String> available = new java.util.ArrayList<>();
+            for (JsonNode account : accounts) {
+                String accId = account.has("id") ? account.get("id").asText() : "";
+                String accName = account.has("name") ? account.get("name").asText() : "";
+                available.add(accName + " (id=" + accId + ")");
+
+                if (!accName.equals(accountId) && !accId.equals(accountId)) {
+                    continue;
+                }
+                if (accId.isEmpty()) {
+                    throw new IOException("Account " + accName + " matched but has no numeric id");
+                }
+
+                boolean canTrade = !account.has("canTrade") || account.get("canTrade").asBoolean();
+                if (!canTrade) {
+                    throw new IOException("Account " + accName + " is not tradeable (canTrade=false)");
+                }
+
+                boolean simulated = account.has("simulated") && account.get("simulated").asBoolean();
+                if (!simulated && !Boolean.getBoolean("topstep.allowNonSimulated")) {
+                    throw new IOException("Account " + accName + " is NOT simulated. Refusing to trade "
+                        + "real money without -Dtopstep.allowNonSimulated=true");
+                }
+
+                cachedNumericAccountId = accId;
+                logger.info("Resolved trading account: {} (id={}, simulated={}, canTrade={})",
+                    accName, accId, simulated, canTrade);
+                return account;
+            }
+
+            throw new IOException("Configured account '" + accountId
+                + "' not found among active accounts: " + available);
         }
     }
 
@@ -1443,100 +1499,35 @@ public class TopstepConnector implements TradingConnector {
     public double getAccountBalance() throws Exception {
         logger.info("Fetching account balance...");
 
-        String accountUrl = apiUrl + "/Account/search";
-        String requestBody = objectMapper.writeValueAsString(Map.of(
-            "onlyActiveAccounts", true
-        ));
+        // Strict resolution: exact account match, canTrade/simulated checks.
+        JsonNode account = resolveAccountNode();
+        String accName = account.has("name") ? account.get("name").asText() : accountId;
 
-        Request request = new Request.Builder()
-            .url(accountUrl)
-            .header("Authorization", "Bearer " + authToken)
-            .post(RequestBody.create(requestBody, MediaType.parse("application/json")))
-            .build();
-
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                String body = response.body() != null ? response.body().string() : "No body";
-                throw new IOException("Failed to get balance: " + response.code() + " - " + body);
-            }
-
-            String responseBody = response.body().string();
-            logger.debug("Account response: {}", responseBody);
-            JsonNode json = objectMapper.readTree(responseBody);
-
-            // Check if this is an Express Funded Account
-            // EXPRESS accounts start at $0 balance, not $50K - profits accumulate from zero
-            boolean isExpressAccount = accountId != null && accountId.toUpperCase().contains("EXPRESS");
-
-            Double balance = null;  // Use null to track if we found a value
-            JsonNode accountsArray = json.has("accounts") ? json.get("accounts") : json;
-
-            if (accountsArray.isArray()) {
-                for (JsonNode account : accountsArray) {
-                    String accId = account.has("id") ? account.get("id").asText() : "";
-                    String accName = account.has("name") ? account.get("name").asText() : "";
-
-                    if (accId.equals(accountId) || accName.contains(accountId) ||
-                        accountId.contains(accId) || accountId.contains(accName) || accountsArray.size() == 1) {
-
-                        // Log all available fields for debugging
-                        logger.info("Account fields for {}: {}", accName, account.toString());
-
-                        // For EXPRESS accounts: balance field contains actual P&L (starts at $0)
-                        // For regular accounts: balance field contains full account value
-                        if (account.has("balance")) {
-                            balance = account.get("balance").asDouble();
-                            logger.info("Found balance field: ${}", balance);
-                        } else if (account.has("accountBalance")) {
-                            balance = account.get("accountBalance").asDouble();
-                            logger.info("Found accountBalance field: ${}", balance);
-                        } else if (account.has("equity")) {
-                            balance = account.get("equity").asDouble();
-                            logger.info("Found equity field: ${}", balance);
-                        }
-
-                        if (balance != null) {
-                            if (isExpressAccount) {
-                                // EXPRESS accounts: balance is P&L starting from $0
-                                // Valid range: -$2500 (below MLL buffer) to any positive
-                                if (balance >= -2500) {
-                                    logger.info("EXPRESS account {} balance (P&L): ${}", accName, String.format("%.2f", balance));
-                                    break;
-                                }
-                            } else {
-                                // Regular accounts: balance should be >= $1000
-                                if (balance >= 1000) {
-                                    logger.info("Found account: {} with balance: ${}", accName, balance);
-                                    break;
-                                }
-                            }
-                        }
-
-                        // Log what we found
-                        logger.info("Account {} - balance={}, accountBalance={}, equity={}, isExpress={}",
-                            accName,
-                            account.has("balance") ? account.get("balance").asDouble() : "N/A",
-                            account.has("accountBalance") ? account.get("accountBalance").asDouble() : "N/A",
-                            account.has("equity") ? account.get("equity").asDouble() : "N/A",
-                            isExpressAccount);
-                    }
-                }
-            }
-
-            // Handle missing or invalid balance
-            if (balance == null) {
-                if (isExpressAccount) {
-                    logger.warn("Could not find balance for EXPRESS account, using $0 (starting balance)");
-                    balance = 0.0;
-                } else {
-                    logger.warn("Could not find balance in response, using default $50000");
-                    balance = 50000.0;
-                }
-            }
-
-            logger.info("Account balance: ${}", String.format("%.2f", balance));
-            return balance;
+        Double balance = null;
+        if (account.hasNonNull("balance")) {
+            balance = account.get("balance").asDouble();
+        } else if (account.hasNonNull("accountBalance")) {
+            balance = account.get("accountBalance").asDouble();
+        } else if (account.hasNonNull("equity")) {
+            balance = account.get("equity").asDouble();
         }
+
+        // EXPRESS accounts start at $0 and the balance field is accumulated
+        // P&L, so 0 / negative values are legitimate there.
+        boolean isExpressAccount = accountId != null && accountId.toUpperCase().contains("EXPRESS");
+
+        if (balance == null) {
+            if (isExpressAccount) {
+                logger.warn("No balance field for EXPRESS account {}, using $0 (starting balance)", accName);
+                balance = 0.0;
+            } else {
+                throw new IOException("Account " + accName
+                    + " has no balance/accountBalance/equity field: " + account);
+            }
+        }
+
+        logger.info("Account balance for {}: ${}", accName, String.format("%.2f", balance));
+        return balance;
     }
 
     @Override

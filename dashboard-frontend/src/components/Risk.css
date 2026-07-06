@@ -79,3 +79,89 @@
   font-size: 0.875rem;
   color: #94a3b8;
 }
+
+.risk-settings {
+  margin-top: 2rem;
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 2rem;
+}
+
+.risk-settings h3 {
+  font-size: 1.125rem;
+  color: #f1f5f9;
+  margin-bottom: 0.5rem;
+}
+
+.risk-settings-note {
+  font-size: 0.8125rem;
+  color: #94a3b8;
+  margin-bottom: 1.25rem;
+  line-height: 1.4;
+}
+
+.risk-settings-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-end;
+}
+
+.risk-settings-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  color: #94a3b8;
+  font-weight: 600;
+  min-width: 160px;
+}
+
+.risk-settings-form input {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  color: #f1f5f9;
+  padding: 0.5rem 0.75rem;
+  font-size: 1rem;
+}
+
+.risk-settings-form input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.risk-settings-form button {
+  background: #3b82f6;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 0.625rem 1.25rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.risk-settings-form button:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.risk-settings-form button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.risk-settings-message {
+  margin-top: 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.risk-settings-message.ok {
+  color: #10b981;
+}
+
+.risk-settings-message.error {
+  color: #ef4444;
+}

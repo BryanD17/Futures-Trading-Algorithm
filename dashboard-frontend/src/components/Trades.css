@@ -8,6 +8,38 @@
   color: #f1f5f9;
 }
 
+.trades-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.trades-summary-item {
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 130px;
+}
+
+.trades-summary-item .label {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.trades-summary-item .value {
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: #f1f5f9;
+}
+
 .trades-table {
   background: #1e293b;
   border-radius: 12px;

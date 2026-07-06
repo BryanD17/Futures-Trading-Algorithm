@@ -583,6 +583,19 @@ public class ExecutionEngine {
     }
 
     /**
+     * Record a trade whose fills happened outside this engine (live broker
+     * fills routed through BracketOrderManager or flatten market orders).
+     * Only adds the record for journaling/dashboard — account P&L and
+     * trade-frequency accounting remain the caller's responsibility, since
+     * the live close paths already update AccountState themselves.
+     */
+    public void recordExternalTrade(Trade trade) {
+        if (trade != null) {
+            completedTrades.add(trade);
+        }
+    }
+
+    /**
      * Get current account state.
      */
     public AccountState getAccountState() {

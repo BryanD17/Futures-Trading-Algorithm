@@ -45,6 +45,9 @@ public class EngineFacade {
     private AccountState accountState;
     private ExecutionEngine executionEngine;
     private RiskLimits riskLimits;
+    // Profile limits captured at engine start; the dashboard risk-settings
+    // endpoint can never loosen beyond these.
+    private RiskLimits baselineRiskLimits;
     private TradingStrategy strategy;
     private PropFirmRiskEngine riskEngine;
     private SimEngineRunner simRunner;
@@ -87,6 +90,7 @@ public class EngineFacade {
         this.accountState = accountState;
         this.executionEngine = executionEngine;
         this.riskLimits = riskLimits;
+        this.baselineRiskLimits = riskLimits;
         this.strategy = strategy;
         this.riskEngine = riskEngine;
     }
@@ -365,6 +369,62 @@ public class EngineFacade {
             return com.topstep.trading.strategy.stdvote.ScalpConfig.activeRiskLimits();
         }
         return riskLimits;
+    }
+
+    /**
+     * Update user-adjustable risk settings from the dashboard.
+     *
+     * Tighten-only policy: the profit target may be set to any positive
+     * value, but the daily loss cap and per-trade risk can only be REDUCED
+     * relative to the profile baseline captured when the engine started.
+     * Requests above baseline are clamped to baseline — the dashboard must
+     * never be able to weaken a Topstep risk guarantee.
+     *
+     * @return the applied (possibly clamped) limits
+     */
+    public synchronized RiskLimits updateRiskSettings(Double profitTarget,
+                                                      Double maxDailyLoss,
+                                                      Double riskPerTrade) {
+        if (riskLimits == null) {
+            throw new IllegalStateException("Engine not initialized");
+        }
+        if (baselineRiskLimits == null) {
+            baselineRiskLimits = riskLimits;
+        }
+
+        RiskLimits.Builder builder = riskLimits.toBuilder();
+
+        if (profitTarget != null) {
+            if (profitTarget <= 0) {
+                throw new IllegalArgumentException("profitTarget must be positive");
+            }
+            builder.profitTarget(profitTarget);
+        }
+        if (maxDailyLoss != null) {
+            if (maxDailyLoss <= 0) {
+                throw new IllegalArgumentException("maxDailyLoss must be positive");
+            }
+            builder.maxDailyLoss(Math.min(maxDailyLoss, baselineRiskLimits.getMaxDailyLoss()));
+        }
+        if (riskPerTrade != null) {
+            if (riskPerTrade <= 0) {
+                throw new IllegalArgumentException("riskPerTrade must be positive");
+            }
+            builder.riskPerTrade(Math.min(riskPerTrade, baselineRiskLimits.getRiskPerTrade()));
+        }
+
+        RiskLimits updated = builder.build();
+        this.riskLimits = updated;
+        if (currentMode == Mode.LIVE && liveRunner != null) {
+            liveRunner.setRiskLimits(updated);
+        } else if (currentMode == Mode.SIM && simRunner != null) {
+            simRunner.setRiskLimits(updated);
+        }
+
+        System.out.println(String.format(
+            "[RISK SETTINGS] Updated: profitTarget=$%.2f, maxDailyLoss=$%.2f, riskPerTrade=$%.2f",
+            updated.getProfitTarget(), updated.getMaxDailyLoss(), updated.getRiskPerTrade()));
+        return updated;
     }
 
     /**

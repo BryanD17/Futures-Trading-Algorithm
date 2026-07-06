@@ -82,4 +82,43 @@ public class RiskController {
 
         return ResponseEntity.ok(risk);
     }
+
+    /**
+     * Update user-adjustable risk settings (profit target, daily loss cap,
+     * per-trade risk). Tighten-only: values above the engine-start baseline
+     * are clamped by EngineFacade — the dashboard cannot weaken limits.
+     */
+    @PostMapping("/settings")
+    public ResponseEntity<Map<String, Object>> updateRiskSettings(@RequestBody Map<String, Object> body) {
+        Map<String, Object> response = new HashMap<>();
+        try {
+            Double profitTarget = toDouble(body.get("profitTarget"));
+            Double maxDailyLoss = toDouble(body.get("maxDailyLoss"));
+            Double riskPerTrade = toDouble(body.get("riskPerTrade"));
+
+            RiskLimits updated = engine.updateRiskSettings(profitTarget, maxDailyLoss, riskPerTrade);
+
+            response.put("profitTarget", updated.getProfitTarget());
+            response.put("maxDailyLoss", updated.getMaxDailyLoss());
+            response.put("riskPerTrade", updated.getRiskPerTrade());
+            response.put("status", "applied");
+            return ResponseEntity.ok(response);
+        } catch (IllegalStateException e) {
+            response.put("error", "Engine not initialized — start SIM or LIVE first");
+            return ResponseEntity.status(409).body(response);
+        } catch (IllegalArgumentException e) {
+            response.put("error", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        } catch (Exception e) {
+            response.put("error", e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
+        }
+    }
+
+    private static Double toDouble(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number) return ((Number) value).doubleValue();
+        String s = value.toString().trim();
+        return s.isEmpty() ? null : Double.parseDouble(s);
+    }
 }

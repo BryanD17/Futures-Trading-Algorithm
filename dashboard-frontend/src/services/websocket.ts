@@ -22,7 +22,28 @@ class TradingWebSocket {
   private callbacks: Set<UpdateCallback> = new Set();
   private reconnectTimeout: number | null = null;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
+
+  constructor() {
+    // Kick a reconnect when the tab becomes visible or the network returns —
+    // otherwise a backend restart while the tab is backgrounded leaves the
+    // dashboard silently stale.
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && this.callbacks.size > 0) {
+          this.reconnectAttempts = 0;
+          this.connect();
+        }
+      });
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', () => {
+        if (this.callbacks.size > 0) {
+          this.reconnectAttempts = 0;
+          this.connect();
+        }
+      });
+    }
+  }
 
   connect() {
     if (this.ws?.readyState === WebSocket.OPEN) {
@@ -65,12 +86,14 @@ class TradingWebSocket {
   }
 
   private scheduleReconnect() {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.log('Max reconnect attempts reached');
-      return;
+    // Never give up: exponential backoff capped at 30s. A hard cap on
+    // attempts left the dashboard permanently stale after ~10 failures
+    // (backend restart, laptop sleep) with no way back except a reload.
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
     }
 
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+    const delay = Math.min(1000 * Math.pow(2, Math.min(this.reconnectAttempts, 5)), 30000);
     this.reconnectAttempts++;
 
     this.reconnectTimeout = window.setTimeout(() => {

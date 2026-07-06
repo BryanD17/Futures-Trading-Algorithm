@@ -64,7 +64,7 @@ public class RiskProfile {
     public static RiskProfile topstep50kEvaluation() {
         return builder()
             .phase(AccountPhase.EVALUATION)
-            .baseRiskPct(0.50)              // 0.5% of $50K = $250 per trade
+            .baseRiskPct(0.005)             // 0.5% of $50K = $250 per trade
             .maxDailyLossPct(0.75)          // Self-imposed: 75% of DLL ($750 vs $1000)
             .maxTradesPerDay(4)
             .maxConsecutiveLosses(3)
@@ -91,7 +91,7 @@ public class RiskProfile {
     public static RiskProfile topstep50kFunded() {
         return builder()
             .phase(AccountPhase.FUNDED_PROBATION)
-            .baseRiskPct(0.40)              // 0.4% of $50K = $200 per trade
+            .baseRiskPct(0.004)             // 0.4% of $50K = $200 per trade
             .maxDailyLossPct(0.60)          // Self-imposed: 60% of DLL ($600 vs $1000)
             .maxTradesPerDay(3)
             .maxConsecutiveLosses(2)
@@ -118,7 +118,7 @@ public class RiskProfile {
     public static RiskProfile topstep50kScaling() {
         return builder()
             .phase(AccountPhase.FUNDED_SCALING)
-            .baseRiskPct(0.45)
+            .baseRiskPct(0.0045)            // 0.45% of $50K = $225 per trade
             .maxDailyLossPct(0.65)
             .maxTradesPerDay(3)
             .maxConsecutiveLosses(2)
