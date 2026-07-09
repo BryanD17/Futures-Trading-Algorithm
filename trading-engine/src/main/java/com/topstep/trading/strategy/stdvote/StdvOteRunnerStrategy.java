@@ -664,10 +664,17 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                         + rearmCooldownBars + " bars");
             }
         }
-        // Detect an INVALIDATED transition (session end, bias flip, OTE
-        // expiry, counter-bias MSS, ...) and start the same cooldown.
+        // An INVALIDATED setup with no pending cooldown starts one. FIELD
+        // BUG FIX (2026-07-09 LIVE, 7.5h dead in NY AM): this used to
+        // require a lastSeenState EDGE (!= INVALIDATED), but invalidations
+        // fired AFTER this step within the same candle — the HTF bias hook
+        // (step 6), counter-bias MSS, impulse-origin violation, OTE-window
+        // expiry — were written into lastSeenState at end-of-candle before
+        // this detector ever saw the edge, leaving the machine INVALIDATED
+        // forever (the core's bar-count expiry at step 5a was the ONLY
+        // source it could see). The rearmCooldownRemaining < 0 guard alone
+        // already guarantees the cooldown starts exactly once per episode.
         if (ctx.state == SetupState.INVALIDATED
-                && lastSeenState != SetupState.INVALIDATED
                 && rearmCooldownRemaining < 0) {
             rearmCooldownRemaining = rearmCooldownBars;
             detectedThisBar = true;

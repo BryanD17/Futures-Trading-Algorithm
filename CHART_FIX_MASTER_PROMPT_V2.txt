@@ -255,6 +255,26 @@ SECTION 2 — PROGRESS LEDGER
     counterfactual + oteStats BEFORE enabling hysteresis or changing any
     gate. The full runbook is at the end of docs/QUICK_START.md.
   ═════════════════════════════════════════════════════════════════════════
+
+  2026-07-09  POST-V2 FIELD INCIDENT + FIXUP PR (escalation rule):
+              LIVE ran London + NY AM with ZERO trades. Telemetry diagnosis
+              (the V2 instruments did their job): warm=true (4,589 bars),
+              kzActive=true, chartOnly=13 — but ALL 31 live [GATES] bars
+              showed state=INVALIDATED, lastGateFailed="HTF bias became
+              NEUTRAL". ROOT CAUSE (pre-existing SA4 bug): the scalp
+              re-arm's INVALIDATED detection required a lastSeenState EDGE,
+              but every invalidation source firing AFTER the re-arm step
+              within the same candle (bias hook, counter-bias MSS,
+              impulse-origin violation, OTE-window expiry) was written into
+              lastSeenState at end-of-candle — the edge was never visible,
+              so the machine stayed dead until process restart. Evidence:
+              the session's only 4 re-arms all came from the core's
+              bar-count expiry (the ONE source firing before the re-arm
+              step). FIX (fixup PR): drop the edge condition —
+              rearmCooldownRemaining < 0 already guarantees once-per-
+              episode. Regression test StdvOteScalpRearmStuckTest drives
+              the REAL path (bias hook NEUTRAL on a 15m close): FAILS on
+              old code, PASSES on the fix. Suite: 454 tests, 0 failed.
   ------------------------------------------------------------------
 
 ================================================================================
