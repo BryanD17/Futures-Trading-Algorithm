@@ -200,7 +200,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 04 — Bias Stability: NEUTRAL-Flip Hysteresis (Config-Gated)
   [✅] Agent 05 — Per-Instrument Chart Tuning + Leg Telemetry
   [✅] Agent 06 — OTE Agreement Counter (Data Path to Gate Adoption)
-  [⬜] Agent 07 — FINAL VERIFICATION & CLOSE-OUT
+  [✅] Agent 07 — FINAL VERIFICATION & CLOSE-OUT
 
   LEDGER NOTES (append one dated line per completion):
   ------------------------------------------------------------------
@@ -229,6 +229,32 @@ SECTION 2 — PROGRESS LEDGER
               scoped) wired: /api/chart oteStats (SIM showed chartOnly=20,
               ring capped at 10 events) + [GATES] rollup; a natural [BIAS]
               counterfactual fired in the same run. 453 tests green.
+  2026-07-09  Agent 07 ✅  fresh-checkout builds green (gradle 28s + npm
+              ci/build), end-to-end warm run proven, safety audit zero
+              violations, PR audit 121-126 (+this one) all base Main.
+
+  ══════════════════ FINAL SUMMARY (Agent 07 close-out) ═══════════════════
+  AGENTS: 7/7 ✅ — zero ⛔ items.
+  PRs (all squash-merged, base Main): #121 re-verify, #122 SIM warm boot,
+    #123 Bot Chart + warm pill, #124 bias hysteresis, #125 chart tuning,
+    #126 oteStats, #127 this close-out.
+  TESTS: 453 total, 0 failures (V2 added 18: 5 warm-boot, 7 hysteresis,
+    2 tuning, 4 oteStats); dashboard builds with zero TS errors.
+  SAFETY: MandatoryConfluenceValidator / PropFirmRiskEngine / RiskLimits
+    have ZERO diff vs pre-V2 baseline b311f4d; bias.hysteresis.enabled
+    defaults FALSE with the emission-time non-NEUTRAL re-check
+    (StdvOteStrategy:439) and its mandatory invariant test; warmup guards
+    intact in LIVE (3 layers) and now mirrored in SIM (layers 1+2); no
+    secrets in source; SIM synthetic data lives strictly inside the
+    MockConnector boundary.
+  NOTABLE FIXES FOUND ALONG THE WAY: EngineFacade.stop() used to keep a
+    dead engine's chart warm (fixed in #123 — stop now serves the honest
+    empty shape); leg telemetry deduped before it could spam (in #125).
+  THE OPERATING LINE: Before LIVE — warm=true on /api/chart, Bot Chart
+    matches TopstepX, run 3–5 SIM sessions and read the [BIAS]
+    counterfactual + oteStats BEFORE enabling hysteresis or changing any
+    gate. The full runbook is at the end of docs/QUICK_START.md.
+  ═════════════════════════════════════════════════════════════════════════
   ------------------------------------------------------------------
 
 ================================================================================
@@ -1204,22 +1230,64 @@ a block empty for an agent marked ✅.
     - none
 
 ··· APPENDIX A-07 — Agent 07: Final Verification & Close-Out ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-09
+  PR NUMBER:         (#127, base Main — this document's close-out PR)
   COMMIT HASH:       (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - Fresh-checkout builds (git clone --branch Main --depth 1 into a
+      scratch dir): root gradle clean build (engine + API, ALL tests) ->
+      "BUILD SUCCESSFUL in 28s, 17 actionable tasks", 453 tests /
+      0 failures; dashboard npm ci && npm run build -> "✓ built in
+      3.33s", exit 0, zero TS errors.
+    - END-TO-END WARM RUN (SIM stack on :8090, agent-06 build):
+        * warm within seconds: /api/chart/MNQ warm=true bars=4321 after
+          the replay ([SimWarmBoot] lines for MNQ/MGC/MES + "✓ SIM warmup
+          complete") — Agent 02.
+        * Bot Chart payload: warm=true bars=4407 candles30m.count=100
+          with ote FORMING/BULLISH + all fibs (rendered verbatim by the
+          BotChart tab; warm pill green from the same payload) — Agent 03.
+        * [CHART CFG MNQ/MES/MGC] minLegTicks=40 swingStrength=2
+          expiryBars=32 + 74 distinct [CHART ... ACCEPTED/REJECTED] leg
+          events — Agent 05.
+        * [GATES MGC] ... chart30mOte=FORMING/BEAR oteAgree=0
+          oteDisagree=0 chartOnly=9 (rollup live); /api/chart oteStats
+          showed chartOnly=20 with the event ring capped at 10 — Agent 06.
+        * A NATURAL counterfactual fired in the run: "[BIAS] NEUTRAL flip
+          invalidated setup (hysteresis OFF — grace would have held it 2
+          more bar(s))" — Agent 04 (plus its 7 unit tests).
+        * stop -> warm=false bars=0 (honest COLD) -> start -> warm=true
+          bars=4321 (PROOF-4 stays closed across restarts).
+    - Appendix A self-audit: blocks A-01..A-06 re-read — every block
+      filled with concrete evidence (builds, curls, log lines, test
+      names/counts, file:line anchors); no agent bounced back.
+    - Ledger: 7/7 ✅, zero ⛔.
+    - Safety grep-audit (outputs pasted in session):
+        * TOPSTEP_PASSWORD in src: 0 hits; no credential literals.
+        * git diff b311f4d..HEAD -- MandatoryConfluenceValidator.java
+          PropFirmRiskEngine.java RiskLimits.java: EMPTY (zero edits
+          across all six V2 PRs).
+        * bias.hysteresis.enabled default FALSE
+          (StdvOteStrategy.java:174, Boolean.getBoolean); emission-time
+          non-NEUTRAL re-check at :439; invariant test green.
+        * Warmup guards: 3 suppression sites in LiveEngineRunner, 2 in
+          SimEngineRunner (layers 1+2), all at the top of their
+          handleStrategySignal methods.
+    - PR audit (gh pr list --state merged --base Main): #126 agent-06,
+      #125 agent-05, #124 agent-04, #123 agent-03, #122 agent-02,
+      #121 agent-01 — one merged PR per agent, all base Main; #127 is
+      this close-out.
+    - FINAL SUMMARY written into LEDGER NOTES; Owner's Runbook
+      (Appendix F) appended to docs/QUICK_START.md.
   Q1/Q2/Q3 ANSWERS (where the agent requires them):
-    - Q1: (evidence)   Q2: (sweep results)   Q3: (triggers found/filed)
+    - Q1: everything re-proven from a FRESH checkout, not the working
+      clone. Q2/Q3: covered per-agent; no open items.
   ADAPTATIONS MADE (anchors drifted? code adapted? why):
-    - (exact change + reason, or "none")
+    - none in this agent (verification + docs only).
   REGRESSIONS FOUND & FIXED:
-    - (what broke, how fixed, fixup PR number, or "none")
+    - none found in final verification.
   BLOCKED ITEMS (⛔ only):
-    - (exact owner action required, or "none")
+    - none.
 
   SPECIAL FIELD — APPENDIX A-04 ONLY (mandatory, verbatim):
     SAFETY INVARIANT EVIDENCE:
