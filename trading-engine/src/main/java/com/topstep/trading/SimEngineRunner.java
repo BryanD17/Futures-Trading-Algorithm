@@ -143,6 +143,9 @@ public class SimEngineRunner {
             chartEngine.registerInstrument(s,
                     com.topstep.trading.strategy.InstrumentCharacteristics
                             .getProfile(s).getTickSize());
+            // V2 Agent 05: per-instrument leg thresholds via
+            // -Dchart.minLegTicks.<SYM> etc.; defaults preserved, logged.
+            chartEngine.applySystemPropertyTuning(s);
         }
         if (multiEngine != null) {
             multiEngine.setCandleTap(chartEngine::onCandle);

@@ -247,6 +247,24 @@ invariant, tested:** entries NEVER fire while the live bias evaluation is
 NEUTRAL — grace preserves progress, not entry permission. If you ever
 see an entry during NEUTRAL, kill the engine and file it.
 
+### TUNING THE BOT CHART (V2 — per-instrument leg thresholds)
+
+The ChartEngine's leg-significance floor is now per-instrument (defaults
+identical to before: minLegTicks=40, swingStrength=2, expiryBars=32):
+
+- `-Dchart.minLegTicks.<SYM>` (e.g. `-Dchart.minLegTicks.MGC=80`)
+- `-Dchart.swingStrength.<SYM>` (optional)
+- `-Dchart.zoneExpiryBars.<SYM>` (optional)
+
+Two log lines drive the tuning: the startup config
+`[CHART CFG MGC] minLegTicks=40 swingStrength=2 expiryBars=32`, and the
+per-leg telemetry `[CHART MNQ] leg ACCEPTED origin=... size=200t -> OTE
+drawn (...)` / `[CHART MNQ] leg REJECTED size=32t < minLegTicks=40`.
+The method: watch a few sessions of `[CHART]` lines per instrument (next
+to the Bot Chart tab), then set `minLegTicks` so obvious structural legs
+are ACCEPTED and noise legs are REJECTED. Frequent REJECTED on legs you
+consider obvious → lower it; zones drawn on every wiggle → raise it.
+
 ## SCALP FLOOR — known deadlock while the raid pipeline is starved
 
 If `scalpMode.enabled=true`, the default floor `scalp.minRaidScore=6`
