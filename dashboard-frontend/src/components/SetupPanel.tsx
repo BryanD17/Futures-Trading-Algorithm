@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import './SetupPanel.css';
 import { SetupApi } from '../services/setupApi';
+import { ChartApi } from '../services/chartApi';
+import type { BotChartResponse, ChartSymbol } from '../types/chart';
 import {
   INSTRUMENT_PRECISION,
   MANDATORY_GATES,
@@ -50,6 +52,22 @@ export default function SetupPanel() {
     return () => clearInterval(id);
   }, [symbol, fetchSnapshot]);
 
+  // Warm/cold tripwire (V2 Agent 03): the chart-warmth flag from
+  // /api/chart, shown next to the HTF/Killzone/SMT pills so the one
+  // screen the owner watches carries it. 15s cadence is plenty — warmth
+  // only changes at engine start/stop.
+  const [chartWarmth, setChartWarmth] = useState<BotChartResponse | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchWarmth = () =>
+      ChartApi.getChart(symbol as ChartSymbol, 1)
+        .then((r) => { if (!cancelled) setChartWarmth(r); })
+        .catch(() => { if (!cancelled) setChartWarmth(null); });
+    fetchWarmth();
+    const id = setInterval(fetchWarmth, 15_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [symbol]);
+
   const precision = INSTRUMENT_PRECISION[symbol];
 
   return (
@@ -88,6 +106,7 @@ export default function SetupPanel() {
             <KillzonePill open={snapshot.killzoneOpen} />
             <SmtPill state={snapshot.smtState} />
             {snapshot.tier && <TierBadge tier={snapshot.tier} />}
+            <WarmPill warmth={chartWarmth} />
           </div>
 
           <div className="setup-grid">
@@ -166,6 +185,21 @@ function SmtPill({ state }: { state: string }) {
   return (
     <div className={`pill smt smt-${state.toLowerCase()}`}>
       SMT: <strong>{state}</strong>
+    </div>
+  );
+}
+
+function WarmPill({ warmth }: { warmth: BotChartResponse | null }) {
+  if (!warmth) {
+    return <div className="pill chartwarm unknown">Chart: <strong>?</strong></div>;
+  }
+  return warmth.warm ? (
+    <div className="pill chartwarm warm">
+      CHART WARM <strong>({warmth.barsIngested1m} bars)</strong>
+    </div>
+  ) : (
+    <div className="pill chartwarm cold" role="alert">
+      CHART <strong>COLD</strong>
     </div>
   );
 }

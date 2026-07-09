@@ -12,6 +12,7 @@ import EquityFanChart from './components/EquityFanChart'
 import SimulatorView from './components/SimulatorView'
 import ChallengeEconomicsPanel from './components/ChallengeEconomicsPanel'
 import SetupPanel from './components/SetupPanel'
+import BotChart from './components/BotChart'
 import { StatusService } from './services/api'
 
 function App() {
@@ -58,6 +59,12 @@ function App() {
           onClick={() => setActiveTab('setup')}
         >
           Setup
+        </button>
+        <button
+          className={activeTab === 'botchart' ? 'active' : ''}
+          onClick={() => setActiveTab('botchart')}
+        >
+          Bot Chart
         </button>
         <button
           className={activeTab === 'positions' ? 'active' : ''}
@@ -108,6 +115,7 @@ function App() {
           </>
         )}
         {activeTab === 'setup' && <SetupPanel />}
+        {activeTab === 'botchart' && <BotChart />}
         {activeTab === 'positions' && <Positions />}
         {activeTab === 'trades' && <Trades />}
         {activeTab === 'risk' && <Risk />}

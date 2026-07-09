@@ -196,7 +196,7 @@ SECTION 2 — PROGRESS LEDGER
 
   [✅] Agent 01 — V1 Re-Verification Sweep (Q1/Q2/Q3) + Baseline Builds
   [✅] Agent 02 — SIM Warm Boot: Synthetic Backfill Through the Listener Path
-  [⬜] Agent 03 — Dashboard Bot Chart (Physical Candles + OTE Overlay + Warm Pill)
+  [✅] Agent 03 — Dashboard Bot Chart (Physical Candles + OTE Overlay + Warm Pill)
   [⬜] Agent 04 — Bias Stability: NEUTRAL-Flip Hysteresis (Config-Gated)
   [⬜] Agent 05 — Per-Instrument Chart Tuning + Leg Telemetry
   [⬜] Agent 06 — OTE Agreement Counter (Data Path to Gate Adoption)
@@ -212,6 +212,11 @@ SECTION 2 — PROGRESS LEDGER
               bars/symbol through the listener before ticks; SIM warm=true
               in ~15s of boot AND after stop->start (PROOF-4 closed); SIM
               gets warmup layers 1+2; 440 tests green (5 new).
+  2026-07-09  Agent 03 ✅  Bot Chart tab live (lightweight-charts 5.2.0,
+              candles + OTE fib lines + state badge + warm pill), warm pill
+              on Setup panel, all four UI states; FIXED EngineFacade.stop()
+              keeping a dead engine's chart warm (stop now serves the
+              honest empty shape). npm build 0 TS errors.
   ------------------------------------------------------------------
 
 ================================================================================
@@ -924,20 +929,69 @@ a block empty for an agent marked ✅.
     - none
 
 ··· APPENDIX A-03 — Agent 03: Dashboard Bot Chart + Warm Pill ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-09
+  PR NUMBER:         (feat/agent-03-bot-chart — number recorded post-merge)
   COMMIT HASH:       (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - Library: lightweight-charts 5.2.0 installed (v5 API:
+      chart.addSeries(CandlestickSeries, ...)). Recorded per task 1.
+    - chartApi.ts typed to the exact V1 contract via src/types/chart.ts
+      (BotCandle, OteOverlay incl. the five fib_* keys, BotChartResponse,
+      ChartSymbol/LookbackOption) — zero `any`; axios wrapper mirrors
+      setupApi.ts (baseURL /api/chart).
+    - BotChart renders the API payload VERBATIM (G-R4: no client-side
+      aggregation — candles map 1:1 to series.setData). Warm SIM stack
+      evidence (:8090): /api/chart/MNQ?lookback=100 -> warm=true,
+      bars=4407, candles30m.count=100, last candle
+      {"t":"2026-07-09T06:30:00Z","o":19999.56,...} — the exact array the
+      candlestick series receives.
+    - OTE overlay + badge: payload carried ote state=FORMING dir=BULLISH
+      fib_0.62=19971.28 fib_0.705=19965.90 fib_0.786=19960.78
+      fib_1.0=19947.25 -> four labeled createPriceLine calls (0.705 solid,
+      others dashed, 1.0 in amber) + OteBadge pill (CSS: REACTED loudest —
+      solid green, bold, pulsing box-shadow; ARMED amber; INVALIDATED/
+      EXPIRED struck through).
+    - Four UI states implemented in BotChart.tsx (each an explicit render
+      branch, no blank boxes): loading skeleton (shimmer bars, first load
+      only), friendly empty state, error banner with Retry button, and the
+      unmissable COLD banner ("Bot chart is COLD — backfill has not run;
+      the engine cannot see enough history to trade" + bar count).
+      COLD path demonstrated: after /api/control/stop the endpoint returns
+      warm=false bars=0 candles=0 (see REGRESSIONS for the fix that made
+      this honest).
+    - Polling pauses on hidden tab: the 15s interval early-returns when
+      document.visibilityState === 'hidden', and a visibilitychange
+      listener refetches immediately on return to visible.
+    - "Bot Chart" tab mounted in App.tsx following the existing nav
+      pattern (button between Setup and Positions; render branch
+      activeTab === 'botchart').
+    - Warm pill on SetupPanel.tsx: WarmPill component in the setup-row
+      next to Bias/Killzone/SMT pills, fed by ChartApi.getChart(symbol, 1)
+      on a 15s cadence; green "CHART WARM (N bars)" / red "CHART COLD" /
+      muted "Chart: ?" when the endpoint is unreachable. CSS added to
+      SetupPanel.css (.pill.chartwarm.*).
+    - npm run build -> "✓ built in 3.30s", exit 0, ZERO TypeScript errors
+      (only the pre-existing chunk-size warning).
   Q1/Q2/Q3 ANSWERS (where the agent requires them):
-    - Q1: (evidence)   Q2: (sweep results)   Q3: (triggers found/filed)
+    - Q1: /api/chart contract unchanged and consumed as-is. Q2: no other
+      UI surface pretended to show engine memory (grep in A-01). Q3: the
+      "green RUNNING banner hides a blind engine" trigger is closed by the
+      warm pill on the panel the owner actually watches.
   ADAPTATIONS MADE (anchors drifted? code adapted? why):
-    - (exact change + reason, or "none")
+    - Browser-screenshot evidence is not available in this environment;
+      per the acceptance criteria's "precise DOM/terminal description"
+      alternative, the payloads above are the exact props each branch
+      renders, and every branch is an explicit conditional in
+      BotChart.tsx.
   REGRESSIONS FOUND & FIXED:
-    - (what broke, how fixed, fixup PR number, or "none")
+    - FOUND: EngineFacade.stop() nulled the runners but KEPT the stopped
+      engine's ChartEngine, so /api/chart reported warm=true (bars=4407)
+      with the engine STOPPED — the COLD banner would never show after a
+      stop, exactly the dishonesty B10 forbids. FIXED in this agent's PR:
+      stop() now clears the chartEngine reference; the lazy facade getter
+      then serves the honest empty shape. Re-proven: stop -> warm=false,
+      bars=0. Engine tests re-run green with the fix.
   BLOCKED ITEMS (⛔ only):
     - (exact owner action required, or "none")
 
