@@ -99,6 +99,19 @@ public class TopstepConnector implements TradingConnector {
     // Track scheduled futures for each symbol so they can be cancelled
     private final Map<String, java.util.concurrent.ScheduledFuture<?>> symbolPollers = new ConcurrentHashMap<>();
 
+    /**
+     * Symbols whose startup backfill already ran — a re-subscription must not
+     * replay history a second time (the aggregators downstream are warm).
+     */
+    private final java.util.Set<String> backfilledSymbols = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Backfill depth in days: -Dbackfill.days=N (default 3, clamped to [1,7]).
+     * Read once at class load so every symbol uses the same depth.
+     */
+    private static final int BACKFILL_DAYS =
+        Math.min(7, Math.max(1, Integer.getInteger("backfill.days", 3)));
+
     // Polling interval in seconds (30 seconds for near real-time data)
     private static final int POLL_INTERVAL_SECONDS = 30;
     // Order status polling interval (faster - every 2 seconds to detect fills quickly)
@@ -963,6 +976,28 @@ public class TopstepConnector implements TradingConnector {
     private void startMarketDataPolling(String symbol, String contractId) {
         logger.info("Starting market data polling for {} (contract: {}), interval: {}s",
             symbol, contractId, POLL_INTERVAL_SECONDS);
+
+        // ── STARTUP BACKFILL ─────────────────────────────────────────
+        // Warm the entire pipeline (HTF bias, PDH/PDL, raid levels,
+        // ChartEngine) with BACKFILL_DAYS of 1m history, replayed through
+        // the SAME listener path as live data. lastBarTimestamp is set to
+        // the last replayed bar so the live poller resumes with zero
+        // duplicates. Runs at most once per symbol per process.
+        if (backfilledSymbols.add(symbol)) {
+            MarketDataListener backfillListener = marketDataListeners.get(symbol);
+            if (backfillListener != null) {
+                logger.info("Starting historical backfill for {} ({} days, -Dbackfill.days)",
+                    symbol, BACKFILL_DAYS);
+                com.topstep.trading.chart.HistoricalBackfill.run(
+                        symbol,
+                        BACKFILL_DAYS,
+                        (start, end) -> fetchBarsRange(symbol, contractId, start, end),
+                        backfillListener::onCandle,
+                        ts -> lastBarTimestamp.put(symbol, ts));
+            } else {
+                logger.warn("No listener registered for {} — skipping historical backfill", symbol);
+            }
+        }
 
         // Initial fetch immediately
         logger.info("Performing initial fetch for {}", symbol);

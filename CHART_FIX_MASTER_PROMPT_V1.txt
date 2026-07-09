@@ -171,7 +171,7 @@ SECTION 2 — PROGRESS LEDGER
 
   [✅] Agent 01 — Pre-Flight Verification & Baseline Build
   [✅] Agent 02 — TopstepConnector: Extract fetchBarsRange(...)
-  [⬜] Agent 03 — HistoricalBackfill: 3-Day Startup Replay
+  [✅] Agent 03 — HistoricalBackfill: 3-Day Startup Replay
   [⬜] Agent 04 — LiveEngineRunner: Warmup Guard (No Ghost Orders)
   [⬜] Agent 05 — ChartEngine Package (Chart-In-Memory + 30m OTE)
   [⬜] Agent 06 — Wire ChartEngine into LiveEngineRunner + EngineFacade
@@ -192,6 +192,10 @@ SECTION 2 — PROGRESS LEDGER
   2026-07-08  Agent 02 ✅  fetchBarsRange extracted (one HTTP path, two
               callers), fetchBars now a thin 60-min wrapper, build+tests
               green in 19s.
+  2026-07-08  Agent 03 ✅  HistoricalBackfill.java added byte-for-byte, wired
+              into startMarketDataPolling before initial fetch, backfill.days
+              clamped [1,7] default 3, per-symbol double-backfill guard,
+              build+tests green.
   ------------------------------------------------------------------
 
 ================================================================================
@@ -1635,20 +1639,47 @@ an agent marked ✅.
     - none
 
 ··· APPENDIX A-03 — Agent 03: HistoricalBackfill: 3-Day Startup Replay ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  COMMIT HASH:       (from git log --oneline -1 after the push)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-08
+  COMMIT HASH:       (agent-03-v1 commit — see git log)
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - criterion 3:   (file:line / pasted output)
-    - (continue one line per criterion — every box in the agent)
+    - HistoricalBackfill.java created byte-for-byte as embedded at
+      trading-engine/src/main/java/com/topstep/trading/chart/
+      HistoricalBackfill.java (99 lines; content verified against the
+      embedded block in Agent 03 — identical, including the 6h CHUNK,
+      chronological sort + de-dup, markDelivered, and [Backfill] logs).
+    - Wiring inserted in startMarketDataPolling BEFORE the "Initial fetch
+      immediately" block (TopstepConnector.java, "── STARTUP BACKFILL ──"
+      comment block): HistoricalBackfill.run(symbol, BACKFILL_DAYS,
+      (start,end) -> fetchBarsRange(symbol, contractId, start, end),
+      backfillListener::onCandle, ts -> lastBarTimestamp.put(symbol, ts))
+      where backfillListener = marketDataListeners.get(symbol) (the exact
+      listener reference recorded in A-02).
+    - lastBarTimestamp path traced: backfill delivers sorted+de-duped bars,
+      then markDelivered puts the MAX delivered timestamp into
+      lastBarTimestamp; the wrapper fetchBars skips every bar with
+      timestamp <= lastBarTimestamp.get(symbol), so the first live poll
+      resumes seamlessly with zero duplicates.
+    - backfill.days honored: BACKFILL_DAYS = Math.min(7, Math.max(1,
+      Integer.getInteger("backfill.days", 3))) — default 3, clamped [1,7],
+      read once; chosen value logged ("Starting historical backfill for {}
+      ({} days, -Dbackfill.days)").
+    - Double-backfill guard: backfilledSymbols =
+      ConcurrentHashMap.newKeySet(); backfill body runs only when
+      backfilledSymbols.add(symbol) returns true (first subscription).
+    - Chunk fault tolerance: HistoricalBackfill.java:66-79 — each 6h chunk
+      fetched inside try/catch; a throwing chunk logs "[Backfill] ...
+      failed:" and the loop continues (cursor advances regardless).
+    - Build: .\gradlew.bat :trading-engine:clean :trading-engine:build ->
+      "BUILD SUCCESSFUL in 19s, 9 actionable tasks" (tests green).
   ADAPTATIONS MADE (embedded code changed? anchors drifted?):
-    - (exact change + compiler/API reason, or "none")
+    - none to HistoricalBackfill.java. Wiring uses BACKFILL_DAYS constant
+      + null-listener defensive branch (logs a warning and skips backfill
+      rather than NPE-ing) — additive safety only.
   REGRESSIONS FOUND & FIXED:
-    - (what broke, how fixed, fixup commit hash, or "none")
+    - none
   BLOCKED ITEMS (⛔ only):
-    - (exact owner action required, or "none")
+    - none
 
 ··· APPENDIX A-04 — Agent 04: LiveEngineRunner: Warmup Guard ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)
