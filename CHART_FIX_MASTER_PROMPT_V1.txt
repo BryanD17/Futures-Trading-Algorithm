@@ -175,7 +175,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 04 — LiveEngineRunner: Warmup Guard (No Ghost Orders)
   [✅] Agent 05 — ChartEngine Package (Chart-In-Memory + 30m OTE)
   [✅] Agent 06 — Wire ChartEngine into LiveEngineRunner + EngineFacade
-  [⬜] Agent 07 — API: GET /api/chart/{symbol} (ChartStateController)
+  [✅] Agent 07 — API: GET /api/chart/{symbol} (ChartStateController)
   [⬜] Agent 08 — Gate Telemetry: state + lastGateFailed Every 15m Bar
   [⬜] Agent 09 — Config Corrections + Documentation Updates
   [⬜] Agent 10 — Unit Tests for Every New Component
@@ -207,6 +207,9 @@ SECTION 2 — PROGRESS LEDGER
               subscribes dispatchCandle directly) — added candle tap, which
               also fixes Agent 04's lastCandleTs in the default mode. Both
               builds green.
+  2026-07-08  Agent 07 ✅  /api/chart/{symbol} live; booted the API and
+              curled it — 200 with the exact JSON contract (warm=false
+              empty shape pre-engine). CORS covers /** already.
   ------------------------------------------------------------------
 
 ================================================================================
@@ -1840,20 +1843,45 @@ an agent marked ✅.
     - none
 
 ··· APPENDIX A-07 — Agent 07: API: GET /api/chart/{symbol} ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  COMMIT HASH:       (from git log --oneline -1 after the push)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-08
+  COMMIT HASH:       (agent-07-v1 commit — see git log)
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - criterion 3:   (file:line / pasted output)
-    - (continue one line per criterion — every box in the agent)
+    - Controller created as embedded at api-backend/src/main/java/com/
+      topstep/api/controller/ChartStateController.java. WIRING ADAPTATION
+      (the one the doc explicitly allows): the module's controllers do NOT
+      use constructor injection for engine access — StatusController.java:19
+      reads "private final EngineFacade engine = EngineFacade.getInstance()".
+      ChartStateController follows that exact pattern and resolves
+      engine.getChartEngine() PER REQUEST, because each SIM/LIVE (re)start
+      registers a fresh ChartEngine with the facade and the controller must
+      serve the current one. Handler body otherwise byte-identical.
+    - Gradle dependency verified, NOT changed: api-backend already depends
+      on trading-engine (build imported com.topstep.trading.* before this
+      agent; the :api-backend:build run shows :trading-engine:jar built
+      first). No build.gradle diff.
+    - CORS verified: CorsConfig.java:39 registers the config for "/**"
+      (source.registerCorsConfiguration("/**", config)) — covers
+      /api/chart/** with no change needed.
+    - Error handling verified: unknown symbol → ChartEngine.snapshot
+      returns the empty ChartSnapshot → 200 with empty candles +
+      warm=false (confirmed by the curl below, engine not running);
+      lookback clamped server-side to [1, 2000] (safeLookback line).
+    - Build: :api-backend:clean :api-backend:build ->
+      "BUILD SUCCESSFUL in 25s, 11 actionable tasks".
+    - curl http://localhost:8080/api/chart/MNQ?lookback=50 (booted boot
+      jar) -> HTTP 200:
+      {"symbol":"MNQ","timeframe":"30m","candles30m":[],"ote":null,
+       "barsIngested1m":0,"lastCandleTime":null,"warm":false}
+      — the full JSON contract; warm data is Agent 11's proof.
   ADAPTATIONS MADE (embedded code changed? anchors drifted?):
-    - (exact change + compiler/API reason, or "none")
+    - Constructor injection replaced with the module's EngineFacade
+      singleton pattern (see above) — imports adjusted accordingly
+      (ChartEngine import dropped, EngineFacade added).
   REGRESSIONS FOUND & FIXED:
-    - (what broke, how fixed, fixup commit hash, or "none")
+    - none
   BLOCKED ITEMS (⛔ only):
-    - (exact owner action required, or "none")
+    - none
 
 ··· APPENDIX A-08 — Agent 08: Gate Telemetry ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)
