@@ -90,6 +90,26 @@ public final class ScalpConfig {
     public static final String SIZER_SAFETY_CUSHION_PROPERTY = "scalp.sizerSafetyCushion";
     public static final double DEFAULT_SIZER_SAFETY_CUSHION = 200.0;
 
+    /**
+     * System property: take entries in ANY open session, not just the prime
+     * killzones. Default TRUE (owner directive 2026-07-08). The M3 time gate
+     * still applies — its window becomes "market open minus the daily
+     * 14:45–17:00 CT no-entry block" instead of the killzone union. Set
+     * {@code -Dscalp.allSessions=false} to restore killzone-only entries.
+     */
+    public static final String ALL_SESSIONS_PROPERTY = "scalp.allSessions";
+    public static final boolean DEFAULT_ALL_SESSIONS = true;
+
+    /**
+     * System property: position-size multiplier applied INSIDE the prime
+     * killzones (NY AM/PM, MGC London prime). Default 1.5, clamped to
+     * [1.0, 2.0]. The boosted size still passes through every existing cap
+     * (tier cap, topstepMicroMax, the [5, 20] micro band) and the
+     * PropFirmRiskEngine — the boost can request more, never bypass.
+     */
+    public static final String KILLZONE_SIZE_BOOST_PROPERTY = "scalp.killzoneSizeBoost";
+    public static final double DEFAULT_KILLZONE_SIZE_BOOST = 1.5;
+
     private ScalpConfig() {}
 
     /** True when scalp mode is on. Absent property means OFF (opt-in). */
@@ -155,6 +175,19 @@ public final class ScalpConfig {
     /** Safety cushion (dollars) held back in the sizer wiring. */
     public static double sizerSafetyCushion() {
         return doubleProperty(SIZER_SAFETY_CUSHION_PROPERTY, DEFAULT_SIZER_SAFETY_CUSHION);
+    }
+
+    /** True when scalp entries are allowed in any open session (see property doc). */
+    public static boolean allSessions() {
+        String prop = System.getProperty(ALL_SESSIONS_PROPERTY);
+        if (prop == null) return DEFAULT_ALL_SESSIONS;
+        return "true".equalsIgnoreCase(prop.trim());
+    }
+
+    /** Killzone size multiplier, clamped to [1.0, 2.0] (1.0 = no boost). */
+    public static double killzoneSizeBoost() {
+        double v = doubleProperty(KILLZONE_SIZE_BOOST_PROPERTY, DEFAULT_KILLZONE_SIZE_BOOST);
+        return Math.min(2.0, Math.max(1.0, v));
     }
 
     private static int intProperty(String name, int defaultValue) {

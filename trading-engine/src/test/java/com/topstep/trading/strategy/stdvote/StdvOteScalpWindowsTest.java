@@ -36,6 +36,7 @@ class StdvOteScalpWindowsTest {
     @AfterEach
     void cleanup() {
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
+        System.clearProperty(ScalpConfig.ALL_SESSIONS_PROPERTY);
         System.clearProperty(ScalpConfig.LONDON_PRIME_START_ET_PROPERTY);
         System.clearProperty(ScalpConfig.LONDON_PRIME_END_ET_PROPERTY);
         StdvOteRegistry.unregister("MNQ");
@@ -56,6 +57,12 @@ class StdvOteScalpWindowsTest {
         } else {
             System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
         }
+        // This suite documents the PRIME KILLZONE boundaries. scalp.allSessions
+        // (default true since 2026-07-08) widens the M3 window to all market
+        // hours; pin it OFF here so the killzone-boundary assertions keep
+        // testing the killzone logic. ScalpAllSessionsTest covers the widened
+        // window.
+        System.setProperty(ScalpConfig.ALL_SESSIONS_PROPERTY, "false");
         try {
             StdvOteRunnerStrategy s = new StdvOteRunnerStrategy(symbol, null, new NullBus());
             s.onCandle(new Candle(symbol, ts, 21000, 21001, 20999, 21000.5, 100), null);

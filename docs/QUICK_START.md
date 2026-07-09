@@ -206,6 +206,30 @@ verified real raid scores in the logs**, the recommended launch flag is:
 The conservative default in code is intentional and unchanged — the fix
 is warmth plus an informed owner, not a weaker floor.
 
+## ALL-SESSIONS TRADING + KILLZONE SIZE BOOST (owner directive 2026-07-08)
+
+Scalp mode now takes entries in **any open session** by default, not just
+the prime killzones:
+
+- `-Dscalp.allSessions` (default `true`) — the M3 time gate becomes
+  "market open" MINUS a hard no-new-entries block **14:45–17:00 CT** every
+  day (protects the 15:10 CT flatten and spans the Globex halt) and the
+  weekend gap (Fri 14:45 CT → Sun 17:00 CT). Set `false` to restore
+  killzone-only entries. The prime killzone windows themselves are
+  unchanged and OR-ed in.
+- `-Dscalp.killzoneSizeBoost` (default `1.5`, clamped `[1.0, 2.0]`) —
+  inside the prime killzones (NY AM/PM, MGC London prime) the sizer's
+  output is multiplied by this factor. Every existing cap still binds:
+  tier cap, `topstepMicroMax`, the `[5, 20]` micro band, and the
+  PropFirmRiskEngine's evaluation of the final signal. Look for the
+  `KILLZONE SIZE BOOST x1.5` log line. NOTE: a boosted trade risks up to
+  1.5× the per-trade dollar budget — that is the point, and it is why the
+  boost only requests more size and can never bypass a cap.
+- Tier scoring is NOT inflated by the wider hours: the O1 "killzone open"
+  confluence point still counts only the prime killzones.
+- Expect `kzActive=true` in the `[GATES]` lines for most of the day now —
+  the boost, not the entry permission, is what distinguishes killzones.
+
 ## TOPSTEP AUTOMATION POLICY
 
 Before pointing the engine at a **FUNDED** (non-eval) account, re-verify

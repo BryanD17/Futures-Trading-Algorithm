@@ -36,9 +36,11 @@ import com.topstep.trading.strategy.TradeTier;
 import com.topstep.trading.strategy.TradingStrategy;
 import com.topstep.trading.validation.MandatoryConfluenceValidator;
 
+import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -176,6 +178,23 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** London prime window (ET) gating MGC scalp entries. */
     private final LocalTime londonPrimeStartEt;
     private final LocalTime londonPrimeEndEt;
+
+    // ── All-sessions trading + killzone size boost (owner directive
+    //    2026-07-08) ─────────────────────────────────────────────────────
+    /** {@code scalp.allSessions}: entries allowed any time the market is
+     *  open except the daily 14:45–17:00 CT no-entry block (flatten
+     *  guarantee + Globex halt) and the weekend gap. */
+    private final boolean allSessions;
+    /** {@code scalp.killzoneSizeBoost}: sizer multiplier INSIDE prime
+     *  killzones; clamped [1.0, 2.0]; every existing size cap still binds. */
+    private final double killzoneSizeBoost;
+    /** True while the CURRENT candle is inside a prime killzone (NY AM/PM,
+     *  MGC London prime). Drives the O1 tier confluence and the size boost
+     *  — deliberately NOT the widened M3 entry window, so widening the
+     *  trading hours does not inflate tier quality. */
+    private boolean primeKillzoneNow;
+    /** Timestamp of the candle being processed (candle time, not wall clock). */
+    private Instant lastCandleInstant;
     /** Buffer-based sizer, wired in scalp mode when account state is available. */
     private final StdvOteSizer sizer = new StdvOteSizer();
     private final double sizerSafetyCushion;
@@ -324,6 +343,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.rearmCooldownBars = ScalpConfig.rearmCooldownBars();
         this.londonPrimeStartEt = ScalpConfig.londonPrimeStartEt();
         this.londonPrimeEndEt = ScalpConfig.londonPrimeEndEt();
+        this.allSessions = ScalpConfig.allSessions();
+        this.killzoneSizeBoost = ScalpConfig.killzoneSizeBoost();
         this.sizerSafetyCushion = ScalpConfig.sizerSafetyCushion();
         if (scalpMode) {
             core.enableScalpMode(ScalpConfig.targetCalculator(), ScalpConfig.minRaidScore());
@@ -442,7 +463,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
 
         // 5. Killzone bookkeeping: buffer candles from the killzone open so
         // the manipulation-leg detector can anchor the Judas swing there.
+        lastCandleInstant = now;
         boolean inKillzone = isInstrumentKillzone(now);
+        // Prime-killzone flag for tier confluence (O1) and the size boost.
+        // In legacy (non-scalp) mode it equals the legacy killzone check, so
+        // legacy behavior is unchanged.
+        primeKillzoneNow = scalpMode ? isPrimeKillzone(now) : inKillzone;
         if (inKillzone && !killzoneActive) {
             killzoneCandles.clear();
         }
@@ -804,6 +830,27 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
      * scoring context and RaidQualityScorer awards +1 inside it.
      */
     private boolean isScalpWindow(Instant now) {
+        // Owner directive 2026-07-08 (scalp.allSessions, default on): the M3
+        // time gate widens from "prime killzones only" to "any time the
+        // market is open", MINUS the daily 14:45–17:00 CT no-entry block
+        // (protects the 15:10 CT Topstep flatten and spans the Globex halt)
+        // and the weekend gap. The prime killzones are OR-ed in unchanged so
+        // their exact historical boundaries (e.g. NY PM entries until
+        // 15:00 CT) are preserved.
+        if (allSessions) {
+            return isPrimeKillzone(now)
+                    || allSessionEntryWindow(now.atZone(CT_ZONE));
+        }
+        return isPrimeKillzone(now);
+    }
+
+    /**
+     * The ORIGINAL scalp windows — NY AM/PM for every instrument, plus the
+     * London prime window for MGC. Still used verbatim for: (1) the M3 gate
+     * when {@code scalp.allSessions=false}; (2) the O1 tier confluence;
+     * (3) the killzone size boost.
+     */
+    private boolean isPrimeKillzone(Instant now) {
         LocalTime et = now.atZone(ET_ZONE).toLocalTime();
         boolean nyKillzone = killzoneClock.isInNyAmKillzone(et)
                 || killzoneClock.isInNyPmKillzone(et);
@@ -814,6 +861,28 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             return nyKillzone || londonPrime;
         }
         return nyKillzone;
+    }
+
+    /** Daily no-new-entries block start: 25 min before the 15:10 CT flatten. */
+    static final LocalTime ENTRY_BLOCK_START_CT = LocalTime.of(14, 45);
+    /** Globex reopen (and entry-block end): 17:00 CT. */
+    static final LocalTime REOPEN_CT = LocalTime.of(17, 0);
+    private static final ZoneId CT_ZONE = ZoneId.of("America/Chicago");
+
+    /**
+     * All-sessions entry window: any time the futures market is open EXCEPT
+     * the daily no-entry block {@link #ENTRY_BLOCK_START_CT}–{@link #REOPEN_CT}
+     * and the weekend gap (Friday 14:45 CT → Sunday 17:00 CT). Pure function
+     * of the candle-time argument — package-private for direct unit testing.
+     */
+    static boolean allSessionEntryWindow(ZonedDateTime ct) {
+        DayOfWeek day = ct.getDayOfWeek();
+        LocalTime t = ct.toLocalTime();
+        if (day == DayOfWeek.SATURDAY) return false;
+        if (day == DayOfWeek.SUNDAY) return !t.isBefore(REOPEN_CT);
+        if (day == DayOfWeek.FRIDAY) return t.isBefore(ENTRY_BLOCK_START_CT);
+        boolean inDailyBlock = !t.isBefore(ENTRY_BLOCK_START_CT) && t.isBefore(REOPEN_CT);
+        return !inDailyBlock;
     }
 
     /**
@@ -1050,15 +1119,29 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             riskFraction = Math.min(riskFraction,
                     activeRiskLimits.getRiskPerTrade() / availableRoom);
         }
+        // Killzone size boost (scalp.killzoneSizeBoost, clamp [1.0, 2.0]):
+        // rides the sizer's multiplier slot, so the result is floored and
+        // re-clamped against the tier cap, topstepMicroMax, and the [5, 20]
+        // band — the boost can request more size, never bypass a cap. The
+        // PropFirmRiskEngine still evaluates the final signal.
+        double sizeMultiplier = 1.0;
+        if (killzoneSizeBoost > 1.0 && lastCandleInstant != null
+                && isPrimeKillzone(lastCandleInstant)) {
+            sizeMultiplier = killzoneSizeBoost;
+        }
         StdvOteSizer.SizingDecision decision = sizer.decide(
                 new StdvOteSizer.SizeRequest(entry, stop, spec, tier),
                 new StdvOteSizer.SizeContext(equity, mllFloor, sizerSafetyCushion,
-                        riskFraction, /* newsMultiplier */ 1.0,
+                        riskFraction, /* multiplier: 1.0 or killzone boost */ sizeMultiplier,
                         activeRiskLimits.getMaxContracts()));
         if (!decision.shouldTrade()) {
             System.out.println("[" + symbol + "] SCALP sizer stand-down: "
                     + decision.reason() + " (" + decision.detail() + ")");
             return 0;
+        }
+        if (sizeMultiplier > 1.0) {
+            System.out.println("[" + symbol + "] KILLZONE SIZE BOOST x" + sizeMultiplier
+                    + " -> " + decision.contracts() + " micros (all caps still applied)");
         }
         return decision.contracts();
     }
@@ -1066,7 +1149,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private TradeTier computeTier(SetupContext ctx) {
         // Optional confluence count (O1..O8 from STDV_OTE_MODEL.md §5).
         int opt = 0;
-        if (ctx.killzoneOpen) opt++;                                // O1
+        // O1 counts the PRIME killzone, not the widened all-sessions entry
+        // window — otherwise scalp.allSessions would hand every off-hours
+        // setup a free confluence point and inflate tiers.
+        if (primeKillzoneNow) opt++;                                // O1
         if ("DIVERGENT".equals(ctx.smtState)) opt++;                // O2
         if (ctx.sweep != null) opt++;                               // O3 (sweep present is M4, but
                                                                     //     swept-level type is the O3 hook)

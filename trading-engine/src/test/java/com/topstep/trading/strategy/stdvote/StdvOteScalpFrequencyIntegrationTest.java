@@ -48,11 +48,18 @@ class StdvOteScalpFrequencyIntegrationTest {
         // raid a real EQUAL_LOW cluster whose raid scores exactly 6, so the
         // gate passes on merit (see StdvOteScalpFixture).
         System.setProperty(ScalpConfig.ENABLED_PROPERTY, "true");
+        // This suite asserts exact sizes computed by the buffer-based sizer.
+        // The killzone size boost (scalp.killzoneSizeBoost, default 1.5 since
+        // 2026-07-08) would scale those fixtures' in-killzone sizes; pin it
+        // to 1.0 so the assertions keep testing the base sizing math.
+        // ScalpAllSessionsTest covers the boost.
+        System.setProperty(ScalpConfig.KILLZONE_SIZE_BOOST_PROPERTY, "1.0");
     }
 
     @AfterEach
     void cleanup() {
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
+        System.clearProperty(ScalpConfig.KILLZONE_SIZE_BOOST_PROPERTY);
         System.clearProperty(ScalpConfig.MIN_RAID_SCORE_PROPERTY);
         System.clearProperty(ScalpConfig.REARM_COOLDOWN_BARS_PROPERTY);
         StdvOteRegistry.unregister(StdvOteScalpFrequencyFixture.SYMBOL);
