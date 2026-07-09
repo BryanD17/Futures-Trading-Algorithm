@@ -54,13 +54,26 @@ Boots `SimEngineRunner` with the MockConnector — safe for testing.
 ./gradlew :trading-engine:run --args="LIVE"
 ```
 
-Requires the following environment variables to be set (the runner
-will refuse to start without them):
+Credentials resolve in PRIORITY ORDER — higher sources silently win:
 
-- `TOPSTEP_API_URL`
-- `TOPSTEP_USERNAME`
-- `TOPSTEP_API_KEY`
-- `TOPSTEP_ACCOUNT_ID`
+1. Java system properties (`-Dtopstep.*`)
+2. **`~/.topstep/credentials.properties`** (keys: `apiUrl`, `username`,
+   `apiKey`, `accountId`)
+3. Environment variables:
+   - `TOPSTEP_API_URL`
+   - `TOPSTEP_USERNAME`
+   - `TOPSTEP_API_KEY`
+   - `TOPSTEP_ACCOUNT_ID`
+
+**GOTCHA (bitten in production 2026-07-08):** if the credentials file
+exists, setting `$env:TOPSTEP_ACCOUNT_ID` does NOTHING — the file's
+`accountId` wins. When Topstep rotates/replaces an account (e.g. a new
+PRAC account), update the FILE. The startup log prints which source was
+used and which account was resolved; the engine refuses to start unless
+the configured account exact-matches an active account, and refuses
+non-simulated accounts without `-Dtopstep.allowNonSimulated=true`.
+Always confirm the `Resolved trading account: ...` line before leaving
+the engine running.
 
 **This connects to real markets and risks real money. Do not enable
 LIVE until you have run a SIM session and watched the new Setup panel
