@@ -351,3 +351,49 @@ candle-for-candle before trusting any signal.
   `dashboard-frontend/src/types/setup.ts`,
   `dashboard-frontend/src/services/setupApi.ts`
 - Design / architecture: `docs/architecture/STDV_OTE_MODEL.md`
+
+## OWNER'S OPERATING RUNBOOK (POST-V2)
+
+### F1. Start of day (SIM or LIVE)
+1. Start the stack (`api-backend bootRun`; dashboard `npm run dev`).
+2. Dashboard -> Setup tab: the WARM PILL must be green ("CHART WARM
+   (>=1500 bars)"). If red/COLD — LIVE: grep the log for `[Backfill]`
+   (missing = backfill never ran, restart; failing = the line names the
+   chunk+error). SIM: should never be cold post-V2; if it is, the warm
+   boot regressed — file it.
+3. Bot Chart tab: sanity-check against TopstepX on 30m — same candles,
+   same most-recent swing. Divergence means the bot trades a different
+   market than you are looking at: stop and investigate first.
+
+### F2. Reading the telemetry during a session
+- `[GATES <sym>]` every 15m: state, bias, lastGateFailed, kzActive,
+  chart30mOte, oteAgree/oteDisagree/chartOnly — the single answer to
+  "why is it not trading right now."
+- `[CHART <sym>] leg ACCEPTED/REJECTED`: is the 30m brain seeing the
+  structure you see? Obvious legs REJECTED -> lower
+  `chart.minLegTicks.<sym>`; zones on noise -> raise it.
+- `[BIAS]` counterfactual (hysteresis OFF): each line is a setup that
+  died to a NEUTRAL wobble and WOULD have been held.
+
+### F3. The hysteresis decision (from data, not frustration)
+1. Run 3-5 SIM sessions with `bias.hysteresis.enabled=false` (default).
+2. Count `[BIAS]` counterfactual lines vs setups reaching BIAS SET.
+3. If wobbles kill a meaningful share of multi-gate setups (like
+   2026-07-09), enable `-Dbias.hysteresis.enabled=true
+   -Dbias.neutralGraceBars=2` and re-observe. Setups surviving to M5+
+   should rise; entries during NEUTRAL must remain ZERO (impossible by
+   tested invariant — if you ever see one, kill the engine and file it).
+
+### F4. The OTE-gate decision (a later, separate decision)
+Read `oteStats` after several sessions: agreement dominating -> gating
+adds little. `chartReacted_machineSilent` dominating while the machine
+dies upstream -> fix upstream fragility first (F3), then REVISIT whether
+`hasReactedOte` becomes a gate — that is its own plan, backtest, and PR.
+
+### F5. Before going LIVE, every time
+- [ ] warm=true on /api/chart for every traded symbol
+- [ ] Bot Chart matches TopstepX on 30m
+- [ ] [GATES] lines flowing; lastGateFailed is a market reason, not plumbing
+- [ ] Risk panel: DLL/MLL/flatten-by unchanged and correct for the account
+- [ ] Topstep's CURRENT written automation policy re-checked (eval vs funded)
+- [ ] Kill switch reachable and tested this week
