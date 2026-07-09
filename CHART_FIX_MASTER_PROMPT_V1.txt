@@ -180,7 +180,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 09 — Config Corrections + Documentation Updates
   [✅] Agent 10 — Unit Tests for Every New Component
   [✅] Agent 11 — SIM End-to-End Verification (Warm Chart Proven)
-  [⬜] Agent 12 — FINAL VERIFICATION & CLOSE-OUT
+  [✅] Agent 12 — FINAL VERIFICATION & CLOSE-OUT
 
   LEDGER NOTES (append one dated line per completion):
   ------------------------------------------------------------------
@@ -227,6 +227,31 @@ SECTION 2 — PROGRESS LEDGER
               live-only item PROVEN with a read-only TopstepX probe:
               retrieveBars limit=1000 6h window -> 326 bars, errorCode=0.
               No blocked items.
+  2026-07-08  Agent 12 ✅  FINAL: both clean builds green (49s, 17 tasks,
+              430 tests / 0 failed), safety grep-audit clean, ledger 12/12.
+
+  ══════════════════ FINAL SUMMARY (Agent 12 close-out) ═══════════════════
+  AGENTS COMPLETED:  12 / 12 ✅ — zero ⛔ blocked items (the expected
+                     live-API blocker was resolved with a read-only
+                     TopstepX probe: limit=1000 works for 6h 1m windows).
+  TOTAL COMMITS:     12 agent commits on remote Main
+                     (agent-01 54a999c .. agent-11 93fcc51 + agent-12).
+  TESTS:             430 total, 0 failures (15 new across 5 new classes).
+  SAFETY AUDIT:      0 TOPSTEP_PASSWORD refs in src; every "Bearer " hit
+                     is auth-header construction in TopstepConnector;
+                     MandatoryConfluenceValidator / PropFirmRiskEngine /
+                     RiskLimits show ZERO diff vs pre-Agent-01 baseline
+                     572bd16; warmup guard live in handleStrategySignal
+                     (LiveEngineRunner.java:739-758, three layers).
+  NOTABLE DRIFTS FIXED ALONG THE WAY:
+    - Default branch is "Main" (capital M); gradlew lives at repo root.
+    - STDV+OTE multi mode bypasses LiveEngineRunner.onMarketData — a
+      candle tap on StdvOteMultiInstrumentEngine.dispatchCandle now feeds
+      the ChartEngine AND the warmup staleness reference in every mode.
+  OPERATIONAL INSTRUCTION (the one line that matters):
+    Check GET /api/chart/<symbol> for warm=true (barsIngested1m >= ~1500)
+    before expecting trades. warm=false = backfill did not run = blind.
+  ═════════════════════════════════════════════════════════════════════════
   ------------------------------------------------------------------
 
 ================================================================================
@@ -2113,20 +2138,75 @@ an agent marked ✅.
       read-only probe above.
 
 ··· APPENDIX A-12 — Agent 12: Final Verification & Close-Out ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  COMMIT HASH:       (from git log --oneline -1 after the push)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-08
+  COMMIT HASH:       (agent-12-v1 commit — the final push; see git log)
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - criterion 3:   (file:line / pasted output)
-    - (continue one line per criterion — every box in the agent)
+    - Both clean builds green: ".\gradlew.bat clean build" from the repo
+      root (multi-project: trading-engine + api-backend, all tests) ->
+      "BUILD SUCCESSFUL in 49s, 17 actionable tasks: 17 executed".
+      Test suite at this HEAD: 430 tests, 0 failures, 0 errors.
+    - Appendix A self-audit: blocks A-01 through A-11 re-read top to
+      bottom — every block is filled with concrete evidence (file:line
+      anchors, pasted build tails, pasted curl/JSON responses, pasted
+      [GATES] log lines, test counts). No agent needed to be bounced back
+      via the GOLDEN LOOP. Adaptations are recorded in A-01 (branch name
+      Main, root gradlew), A-02 (Instant window + de-dup placement),
+      A-06 (candle tap for the multi-mode dispatch bypass), A-07 (facade
+      singleton wiring), A-09 (validator package location), A-10
+      (WarmupGuard extraction, sanctioned by task 5), A-11 (opt-in mock
+      acceleration properties, sanctioned by task 2).
+    - Ledger audit: 12/12 ✅, ZERO ⛔ entries — Agent 11's expected
+      live-API item was proven instead of blocked (read-only probe:
+      Auth/loginKey success, Contract/search -> CON.F.US.MNQ.U26,
+      History/retrieveBars unit=1m window=6h limit=1000 ->
+      success=true errorCode=0 count=326).
+    - Safety grep-audit outputs (all pasted in the session, summarized):
+        * git grep -in "TOPSTEP_PASSWORD" -- */src/*  -> ZERO hits.
+        * git grep -in "Bearer " -- */src/main/*      -> 9 hits, ALL in
+          TopstepConnector.java: 8 are ".header(\"Authorization\",
+          \"Bearer \" + authToken)" header construction, 1 is a comment.
+          No credential literals anywhere.
+        * git diff 572bd16..HEAD -- MandatoryConfluenceValidator.java
+          PropFirmRiskEngine.java RiskLimits.java -> EMPTY (zero edits of
+          any kind to gate/risk files across the entire document).
+        * Warmup guard present in handleStrategySignal:
+          LiveEngineRunner.java:739 (flag layer), :747 (replay-created
+          layer), :757-758 (WarmupGuard.isStaleSignal staleness layer).
+    - FINAL SUMMARY written into LEDGER NOTES (Section 2) — agents,
+      commits, tests, safety audit, drifts fixed, and the one-line
+      operational instruction.
+    - git log --oneline 572bd16..HEAD (all pushed to origin Main, local
+      HEAD == origin/Main == 93fcc51 before this final commit):
+        93fcc51 agent-11-v1: SIM end-to-end proof — warm chart, OTE
+                overlay, gate telemetry
+        44363ed agent-10-v1: unit tests — OTE lifecycle, determinism,
+                backfill, warmup guard
+        628214a agent-09-v1: run-guide updates — warmth, gates, scalp
+                floor, policy note
+        647dffa agent-08-v1: per-15m gate telemetry — state, bias,
+                lastGateFailed, OTE
+        25d39bc agent-07-v1: /api/chart endpoint exposing internal 30m
+                chart + OTE overlay
+        b017bc7 agent-06-v1: wire ChartEngine into runners and expose via
+                EngineFacade
+        a7c2bed agent-05-v1: ChartEngine package — in-memory 30m chart
+                with OTE lifecycle
+        1f346e8 agent-04-v1: warmup guard — suppress strategy signals
+                during historical replay
+        13a9c3d agent-03-v1: 3-day historical backfill replayed through
+                live listener path
+        27be4f2 agent-02-v1: extract range-based bar fetch from
+                TopstepConnector.fetchBars
+        54a999c agent-01-v1: pre-flight verification, baseline build,
+                master prompt in repo
+      (agent-12-v1 is the commit carrying this appendix block.)
   ADAPTATIONS MADE (embedded code changed? anchors drifted?):
-    - (exact change + compiler/API reason, or "none")
+    - none in this agent (verification only).
   REGRESSIONS FOUND & FIXED:
-    - (what broke, how fixed, fixup commit hash, or "none")
+    - none found in final verification.
   BLOCKED ITEMS (⛔ only):
-    - (exact owner action required, or "none")
+    - none.
 
 ────────────────────────────────────────────────────────────────────────────────
 APPENDIX B — ENGINEERING CONVENTIONS FOR THIS REPO
