@@ -220,6 +220,33 @@ One-line meaning of each mandatory gate (from
 | M8 | Size request >= instrument minimum (5 micros). |
 | M9 | Clean diagnostics — no unresolved failure after the risk-engine pre-flight. |
 
+### BIAS HYSTERESIS (V2 — config-gated, DEFAULT OFF)
+
+Field evidence 2026-07-09: a session passed M1–M4 and was destroyed by
+"HTF bias became NEUTRAL" before M5. NEUTRAL is *uncertainty*; an
+OPPOSITE bias is *contradiction* — hysteresis makes the machine treat
+them differently for **in-flight setups only**:
+
+- `-Dbias.hysteresis.enabled` (default **false**) — when true, an
+  in-flight setup survives brief NEUTRAL wobbles; an OPPOSITE flip still
+  kills it instantly.
+- `-Dbias.neutralGraceBars` (default 2, clamped [1,4]) — consecutive
+  NEUTRAL 15m evaluations the setup survives before "HTF bias NEUTRAL
+  beyond grace".
+
+**The counterfactual line** (hysteresis OFF — the default): every
+`[BIAS] NEUTRAL flip invalidated setup (hysteresis OFF — grace would
+have held it N more bar(s))` is a setup that died to a wobble and WOULD
+have been held.
+
+**Adoption path — decide from data, not frustration:** run 3–5 SIM
+sessions with the default OFF; count counterfactual lines vs setups that
+reached BIAS SET; enable with `graceBars=2` only if NEUTRAL flips are
+demonstrably killing multi-gate setups (like 2026-07-09). **Hard
+invariant, tested:** entries NEVER fire while the live bias evaluation is
+NEUTRAL — grace preserves progress, not entry permission. If you ever
+see an entry during NEUTRAL, kill the engine and file it.
+
 ## SCALP FLOOR — known deadlock while the raid pipeline is starved
 
 If `scalpMode.enabled=true`, the default floor `scalp.minRaidScore=6`

@@ -197,7 +197,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 01 — V1 Re-Verification Sweep (Q1/Q2/Q3) + Baseline Builds
   [✅] Agent 02 — SIM Warm Boot: Synthetic Backfill Through the Listener Path
   [✅] Agent 03 — Dashboard Bot Chart (Physical Candles + OTE Overlay + Warm Pill)
-  [⬜] Agent 04 — Bias Stability: NEUTRAL-Flip Hysteresis (Config-Gated)
+  [✅] Agent 04 — Bias Stability: NEUTRAL-Flip Hysteresis (Config-Gated)
   [⬜] Agent 05 — Per-Instrument Chart Tuning + Leg Telemetry
   [⬜] Agent 06 — OTE Agreement Counter (Data Path to Gate Adoption)
   [⬜] Agent 07 — FINAL VERIFICATION & CLOSE-OUT
@@ -217,6 +217,10 @@ SECTION 2 — PROGRESS LEDGER
               on Setup panel, all four UI states; FIXED EngineFacade.stop()
               keeping a dead engine's chart warm (stop now serves the
               honest empty shape). npm build 0 TS errors.
+  2026-07-09  Agent 04 ✅  NEUTRAL-flip hysteresis (default OFF, grace 2
+              clamped [1,4]) + counterfactual log + emission-time
+              non-NEUTRAL invariant (tested); runner now records EVERY 15m
+              bias evaluation (idempotent); 447 tests green (7 new).
   ------------------------------------------------------------------
 
 ================================================================================
@@ -996,22 +1000,90 @@ a block empty for an agent marked ✅.
     - (exact owner action required, or "none")
 
 ··· APPENDIX A-04 — Agent 04: Bias Stability (NEUTRAL-Flip Hysteresis) ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-09
+  PR NUMBER:         (feat/agent-04-hysteresis — number recorded post-merge)
   COMMIT HASH:       (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - Properties: bias.hysteresis.enabled read at StdvOteStrategy.java:191
+      (Boolean.getBoolean — DEFAULT false), bias.neutralGraceBars at :193
+      (default 2) through clampGraceBars [1,4]; configureBiasHysteresis
+      wiring/test hook at :439 mirrors enableScalpMode's pattern.
+    - OPPOSITE-flip path unchanged: identical predicate + identical reason
+      text "HTF bias flip X -> Y" (StdvOteStrategy.java:268); test (c)
+      proves it fires immediately even during grace; the pre-existing
+      StdvOteStrategyTest bias-flip tests pass UNCHANGED.
+    - OFF path: invalidates on the first NEUTRAL exactly as before
+      ("HTF bias became NEUTRAL", :279) PLUS the counterfactual line
+      captured from the test run: "[BIAS] NEUTRAL flip invalidated setup
+      (hysteresis OFF — grace would have held it 2 more bar(s))"
+      (asserted via stdout capture in test (e)).
+    - ON path: consecutive-neutral counter with all three lines —
+      "[BIAS] NEUTRAL wobble (k/N grace) — setup held", invalidation
+      "HTF bias NEUTRAL beyond grace" (:284), restoration "[BIAS] bias
+      restored to X within grace — setup continues, counter reset".
+      Counter resets in invalidate() and resetForNextWindow() so no grace
+      leaks across setups.
+    - SAFETY INVARIANT: emission-time re-check at StdvOteStrategy.java:177
+      (comment block :173) — tryEmit returns false unless lastRecordedBias
+      (the most recent EVALUATION, tracked separately from the setup's held
+      direction) is non-NEUTRAL AND equals setup.htfBias. Covered by the
+      MANDATORY test (d).
+    - Tests a–f + config-clamp test in StdvOteBiasHysteresisTest (7 tests,
+      all passing): (a) wobble held + restore + machine continues to a
+      real emission; (b) beyond-grace invalidation with the grace reason;
+      (c) OPPOSITE during grace dies instantly; (d) INVARIANT — NEUTRAL
+      within grace at OTE_ARMED with every other condition satisfied ->
+      tryEmit false, zero events, setup survives, and emits after bias
+      returns; (e) OFF path identical + counterfactual log asserted;
+      (f) determinism — identical transition lists across two runs.
+      Full suite: 447 tests, 0 failures (pre-existing suite untouched).
+    - Q2/Q3 INVALIDATION-REASON INVENTORY (all 9 call sites at HEAD):
+        1. "expired (N bars without progress)" (StdvOteStrategy:226) —
+           TIMEOUT DISCIPLINE, correct to kill (it bounds every window;
+           hysteresis on it would defeat its purpose).
+        2. "session ended" (:241) — STRUCTURAL, correct (the killzone the
+           setup was anchored to no longer exists).
+        3. "HTF bias flip X -> Y" (:268) — CONTRADICTION, correct.
+        4. "HTF bias became NEUTRAL" (:279, OFF path) — NOISE, the
+           hysteresis target (this agent).
+        5. "HTF bias NEUTRAL beyond grace" (:284, ON path) — bounded
+           noise-tolerance expiry, correct.
+        6. "OTE window expired (8 bars)" (RunnerStrategy:532) — freshness
+           discipline, correct; NOTE: on very slow tape this is the next
+           most plausible noise candidate — FILED as a note, no change.
+        7. "counter-bias MSS observed" (:1007) — CONTRADICTION (structure
+           shifted against the setup), correct.
+        8. "impulse origin violated before OTE entry" (:1035) —
+           CONTRADICTION (the 1.0 invalidation level broke), correct.
+        9. "no qualifying tier" (:1058) — QUALITY FLOOR, correct (a setup
+           that cannot earn a tier does not trade).
+    - QUICK_START "READING THE GATES" extended with the BIAS HYSTERESIS
+      subsection (flags, counterfactual line, adoption path, invariant).
   Q1/Q2/Q3 ANSWERS (where the agent requires them):
-    - Q1: (evidence)   Q2: (sweep results)   Q3: (triggers found/filed)
+    - Q1: OFF-path equivalence proven by unchanged pre-existing tests.
+      Q2/Q3: the inventory above IS the sweep; one candidate filed
+      (OTE window expiry), nothing changed.
   ADAPTATIONS MADE (anchors drifted? code adapted? why):
-    - (exact change + reason, or "none")
+    - REQUIRED INTEGRATION FIX: StdvOteRunnerStrategy previously called
+      core.recordHtfBias only ON CHANGE, which would have frozen the grace
+      counter at 1 forever (grace counts CONSECUTIVE 15m EVALUATIONS).
+      The runner now records every completed-HTF-bar evaluation; repeats
+      of the same bias are idempotent in the core (INVALIDATED sits above
+      IN_TRADE in the enum, so dead setups ignore repeats) — OFF-path
+      behavior unchanged, proven by the full suite.
   REGRESSIONS FOUND & FIXED:
-    - (what broke, how fixed, fixup PR number, or "none")
+    - none (447/447 green on first full run)
   BLOCKED ITEMS (⛔ only):
-    - (exact owner action required, or "none")
+    - none
+
+  SAFETY INVARIANT EVIDENCE (special field):
+    - emission-time non-NEUTRAL re-check: StdvOteStrategy.java:177
+      (lastRecordedBias == NEUTRAL || != setup.htfBias -> no emission)
+    - invariant unit test name + result:
+      StdvOteBiasHysteresisTest.noEmissionWhileNeutralWithinGrace — PASSED
+      (asserts tryEmit false, zero published events, setup survives at
+      OTE_ARMED, and the SAME setup emits after bias restores).
 
 ··· APPENDIX A-05 — Agent 05: Per-Instrument Chart Tuning + Leg Telemetry ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)

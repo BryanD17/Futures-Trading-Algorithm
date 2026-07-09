@@ -492,13 +492,15 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             processScalpRearm(ctx, context, inKillzone);
         }
 
-        // 6. HTF bias hook — completed HTF bar close ONLY, and only on change.
+        // 6. HTF bias hook — completed HTF bar close ONLY. V2 Agent 04:
+        // record EVERY completed-bar evaluation (not just changes) — the
+        // hysteresis grace counts CONSECUTIVE NEUTRAL 15m evaluations, and
+        // repeated same-bias records are idempotent in the core (INVALIDATED
+        // sits above IN_TRADE, so a dead setup ignores repeats).
         if (htfBarClosed) {
             MarketBias bias = mapTrendToBias(htfTrend.getTrendState());
-            if (bias != lastBias) {
-                core.recordHtfBias(bias);
-                lastBias = bias;
-            }
+            core.recordHtfBias(bias);
+            lastBias = bias;
         }
 
         // 6b. GATE TELEMETRY — one line per completed 15m bar so "why is it

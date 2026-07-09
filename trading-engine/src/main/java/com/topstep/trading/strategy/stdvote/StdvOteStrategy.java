@@ -160,6 +160,39 @@ public final class StdvOteStrategy implements TradingStrategy {
         this.scalpMinRaidScore = Math.max(0, minRaidScore);
     }
 
+    // ── BIAS HYSTERESIS (V2 Agent 04, config-gated, DEFAULT OFF) ────────
+    // PRINCIPLE: NEUTRAL is UNCERTAINTY; OPPOSITE bias is CONTRADICTION.
+    // With hysteresis ON, an in-flight setup survives a bounded number of
+    // consecutive NEUTRAL evaluations (the 15m structure wobbling in and
+    // out of definition) instead of being shredded on the first one; an
+    // OPPOSITE flip still kills it instantly. HARD INVARIANT (tested):
+    // entries STILL require the CURRENT bias evaluation to be non-NEUTRAL
+    // and aligned — grace preserves PROGRESS, never entry permission.
+
+    /** {@code bias.hysteresis.enabled} — DEFAULT false (counterfactual-log-only). */
+    private boolean biasHysteresisEnabled =
+            Boolean.getBoolean("bias.hysteresis.enabled");
+    /** {@code bias.neutralGraceBars} — consecutive NEUTRAL 15m evaluations
+     *  an in-flight setup survives; default 2, clamped [1,4]. */
+    private int neutralGraceBars = clampGraceBars(
+            Integer.getInteger("bias.neutralGraceBars", 2));
+    /** Consecutive NEUTRAL evaluations seen while holding the setup. */
+    private int neutralGraceCount = 0;
+    /** The most recent bias EVALUATION (as opposed to the setup's stored
+     *  direction, which is deliberately NOT overwritten during grace).
+     *  The emission-time safety invariant reads this. */
+    private MarketBias lastRecordedBias = MarketBias.NEUTRAL;
+
+    private static int clampGraceBars(int v) {
+        return Math.min(4, Math.max(1, v));
+    }
+
+    /** Wiring/test hook, mirroring {@link #enableScalpMode}'s pattern. */
+    void configureBiasHysteresis(boolean enabled, int graceBars) {
+        this.biasHysteresisEnabled = enabled;
+        this.neutralGraceBars = clampGraceBars(graceBars);
+    }
+
     /** True when this core targets via the scalp model. */
     boolean isScalpMode() {
         return scalpTargetCalculator != null;
@@ -225,6 +258,9 @@ public final class StdvOteStrategy implements TradingStrategy {
      */
     void recordHtfBias(MarketBias bias) {
         if (bias == null) bias = MarketBias.NEUTRAL;
+        lastRecordedBias = bias;
+        // OPPOSITE flip = CONTRADICTION: dies immediately, hysteresis or
+        // not (behavior unchanged from pre-V2).
         if (setup.htfBias != MarketBias.NEUTRAL
                 && bias != MarketBias.NEUTRAL
                 && bias != setup.htfBias
@@ -233,9 +269,34 @@ public final class StdvOteStrategy implements TradingStrategy {
         }
         if (bias == MarketBias.NEUTRAL && setup.state != SetupState.IDLE
                 && setup.state.ordinal() < SetupState.IN_TRADE.ordinal()) {
-            invalidate("HTF bias became NEUTRAL");
+            if (!biasHysteresisEnabled) {
+                // Counterfactual telemetry: identical invalidation to
+                // pre-V2, PLUS the line the owner counts across sessions
+                // to decide whether grace is worth enabling (Appendix F3).
+                System.out.println("[BIAS] NEUTRAL flip invalidated setup "
+                        + "(hysteresis OFF — grace would have held it "
+                        + neutralGraceBars + " more bar(s))");
+                invalidate("HTF bias became NEUTRAL");
+                return;
+            }
+            neutralGraceCount++;
+            if (neutralGraceCount > neutralGraceBars) {
+                invalidate("HTF bias NEUTRAL beyond grace");
+                return;
+            }
+            System.out.println("[BIAS] NEUTRAL wobble (" + neutralGraceCount
+                    + "/" + neutralGraceBars + " grace) — setup held");
+            // The setup keeps its ORIGINAL direction while held: htfBias is
+            // deliberately not overwritten. lastRecordedBias (above) makes
+            // the emission invariant see the real NEUTRAL.
             return;
         }
+        if (neutralGraceCount > 0 && bias == setup.htfBias
+                && bias != MarketBias.NEUTRAL) {
+            System.out.println("[BIAS] bias restored to " + bias
+                    + " within grace — setup continues, counter reset");
+        }
+        neutralGraceCount = 0;
         setup.htfBias = bias;
         if (bias != MarketBias.NEUTRAL && setup.state == SetupState.IDLE) {
             setup.state = SetupState.BIAS_SET;
@@ -369,6 +430,20 @@ public final class StdvOteStrategy implements TradingStrategy {
             gateDiagnosticSelfWritten = false;
         }
 
+        // ── BIAS SAFETY INVARIANT (V2 Agent 04, non-negotiable): an ENTRY
+        // requires the CURRENT bias evaluation to be non-NEUTRAL and
+        // aligned with the setup's direction, INDEPENDENT of any hysteresis
+        // grace window. Grace preserves in-flight progress between gates;
+        // it never, under any circumstances, permits an emission while the
+        // live bias reads NEUTRAL (or contradicts the setup).
+        if (lastRecordedBias == MarketBias.NEUTRAL
+                || lastRecordedBias != setup.htfBias) {
+            System.out.println("[BIAS] emission blocked: current bias "
+                    + lastRecordedBias + " not aligned with setup "
+                    + setup.htfBias + " (grace preserves progress, not entries)");
+            return false;
+        }
+
         double entry = oteCalculator.chooseEntry(
                 setup.ote, OptionalDouble.of(setup.pdArrayInOte), tickSize);
         double stop = oteCalculator.stopPrice(setup.ote, tickSize, stopBufferTicks);
@@ -467,10 +542,12 @@ public final class StdvOteStrategy implements TradingStrategy {
     void invalidate(String reason) {
         setup.lastGateFailed = reason;
         setup.state = SetupState.INVALIDATED;
+        neutralGraceCount = 0; // a dead setup carries no grace window
     }
 
     /** Reset to IDLE for the next window — one-move discipline. */
     void resetForNextWindow() {
         setup.resetForNextWindow();
+        neutralGraceCount = 0;
     }
 }
