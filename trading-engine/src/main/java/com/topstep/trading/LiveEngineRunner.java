@@ -416,6 +416,9 @@ public class LiveEngineRunner {
         for (String s : new String[] {"MNQ", "MES", "MGC"}) {
             chartEngine.registerInstrument(s,
                     InstrumentCharacteristics.getProfile(s).getTickSize());
+            // V2 Agent 05: per-instrument leg thresholds via
+            // -Dchart.minLegTicks.<SYM> etc.; defaults preserved, logged.
+            chartEngine.applySystemPropertyTuning(s);
         }
         // In STDV+OTE multi-instrument mode the engine subscribes symbols
         // ITSELF (connector → dispatchCandle) — onMarketData never sees those

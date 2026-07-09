@@ -77,6 +77,54 @@ public final class ChartEngine {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // PER-INSTRUMENT TUNING (V2 Agent 05 — additive; defaults preserved)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Per-instrument threshold overrides. Exists because one global
+     * minLegTicks means very different leg sizes across instruments
+     * (40 ticks = 10.0 pts on MNQ/MES but 4.0 pts on MGC). Symbols without
+     * an override use the constructor values EXACTLY — with no overrides
+     * set, behavior is identical to pre-V2.
+     */
+    public record InstrumentTuning(int minLegTicks, int swingStrength, int zoneExpiryBars) {}
+
+    private final Map<String, InstrumentTuning> tunings = new ConcurrentHashMap<>();
+
+    /** Override the leg thresholds for ONE symbol (others keep defaults). */
+    public void configureInstrument(String symbol, int minLegTicks,
+                                    int swingStrength, int zoneExpiryBars) {
+        if (symbol == null) return;
+        tunings.put(symbol, new InstrumentTuning(
+                Math.max(1, minLegTicks),
+                Math.max(1, swingStrength),
+                Math.max(1, zoneExpiryBars)));
+    }
+
+    /**
+     * Resolve the per-symbol system-property overrides
+     * ({@code chart.minLegTicks.<SYM>}, {@code chart.swingStrength.<SYM>},
+     * {@code chart.zoneExpiryBars.<SYM>}; defaults = this engine's
+     * constructor values) and log the resolved config. Runners call this
+     * at wiring time, once per registered instrument.
+     */
+    public void applySystemPropertyTuning(String symbol) {
+        if (symbol == null) return;
+        int mlt = Integer.getInteger("chart.minLegTicks." + symbol, minLegTicks);
+        int ss  = Integer.getInteger("chart.swingStrength." + symbol, swingStrength);
+        int zeb = Integer.getInteger("chart.zoneExpiryBars." + symbol, zoneExpiryBars);
+        configureInstrument(symbol, mlt, ss, zeb);
+        System.out.println("[CHART CFG " + symbol + "] minLegTicks=" + mlt
+                + " swingStrength=" + ss + " expiryBars=" + zeb);
+    }
+
+    private InstrumentTuning tuningFor(String symbol) {
+        InstrumentTuning t = tunings.get(symbol);
+        return (t != null) ? t
+                : new InstrumentTuning(minLegTicks, swingStrength, zoneExpiryBars);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // INGEST
     // ═══════════════════════════════════════════════════════════════════════
 
@@ -163,6 +211,13 @@ public final class ChartEngine {
         long oneMinuteCount;
         Instant lastCandleTime;
         int barsSinceZoneCreated;
+        // Leg-telemetry dedup: only log a REJECTED/ACCEPTED leg once until
+        // the candidate pair changes (tuning telemetry, not per-bar spam —
+        // an expired zone redrawn from the SAME leg logs nothing new).
+        double lastRejectedOrigin = Double.NaN;
+        double lastRejectedExtreme = Double.NaN;
+        double lastAcceptedOrigin = Double.NaN;
+        double lastAcceptedExtreme = Double.NaN;
 
         SymbolChart(String symbol) {
             this.symbol = symbol;
@@ -186,7 +241,7 @@ public final class ChartEngine {
             if (done30 != null) {
                 if (activeZone != null
                         && activeZone.state() == OteState.FORMING
-                        && ++barsSinceZoneCreated > zoneExpiryBars) {
+                        && ++barsSinceZoneCreated > tuningFor(symbol).zoneExpiryBars()) {
                     activeZone = activeZone.withState(OteState.EXPIRED);
                 }
                 rebuildZoneIfNeeded();
@@ -195,25 +250,38 @@ public final class ChartEngine {
 
         /** Find the latest significant 30m leg and (re)draw the OTE on it. */
         void rebuildZoneIfNeeded() {
+            InstrumentTuning tune = tuningFor(symbol);
+            int strength = tune.swingStrength();
             List<Candle> series = bars.getCandles(Timeframe.M30);
             int n = series.size();
-            if (n < swingStrength * 2 + 3) return;
+            if (n < strength * 2 + 3) return;
 
-            List<Swing> highs = fractals(series, true);
-            List<Swing> lows = fractals(series, false);
+            List<Swing> highs = fractals(series, true, strength);
+            List<Swing> lows = fractals(series, false, strength);
             if (highs.isEmpty() || lows.isEmpty()) return;
 
             Swing lastHigh = highs.get(highs.size() - 1);
             Swing lastLow = lows.get(lows.size() - 1);
             double tick = tickSizes.getOrDefault(symbol, 0.25);
-            double minLeg = minLegTicks * tick;
+            double minLeg = tune.minLegTicks() * tick;
 
             // Most recent leg = the later swing defines direction.
             boolean bullishLeg = lastHigh.index > lastLow.index; // low → high = up leg
             Swing origin = bullishLeg ? lastLow : lastHigh;
             Swing extreme = bullishLeg ? lastHigh : lastLow;
             double legSize = Math.abs(extreme.price - origin.price);
-            if (legSize < minLeg) return;
+            long legTicks = Math.round(legSize / tick);
+            if (legSize < minLeg) {
+                // Tuning telemetry: once per candidate pair, never per-bar spam.
+                if (origin.price != lastRejectedOrigin
+                        || extreme.price != lastRejectedExtreme) {
+                    lastRejectedOrigin = origin.price;
+                    lastRejectedExtreme = extreme.price;
+                    System.out.println("[CHART " + symbol + "] leg REJECTED size="
+                            + legTicks + "t < minLegTicks=" + tune.minLegTicks());
+                }
+                return;
+            }
 
             // Don't replace a still-live zone with the SAME leg.
             if (activeZone != null
@@ -228,6 +296,17 @@ public final class ChartEngine {
                     symbol, bullishLeg, origin.price, extreme.price,
                     origin.time, extreme.time);
             barsSinceZoneCreated = 0;
+            lastRejectedOrigin = Double.NaN;
+            lastRejectedExtreme = Double.NaN;
+            if (origin.price != lastAcceptedOrigin
+                    || extreme.price != lastAcceptedExtreme) {
+                lastAcceptedOrigin = origin.price;
+                lastAcceptedExtreme = extreme.price;
+                System.out.println("[CHART " + symbol + "] leg ACCEPTED origin="
+                        + origin.price + " extreme=" + extreme.price
+                        + " size=" + legTicks + "t -> OTE drawn (0.62="
+                        + activeZone.oteStart() + ", 0.705=" + activeZone.oteSweet() + ")");
+            }
         }
 
         /** Progress FORMING → ARMED → REACTED → INVALIDATED on each 1m bar. */
@@ -265,7 +344,7 @@ public final class ChartEngine {
         }
 
         /** Classic fractal swings on the 30m series. */
-        List<Swing> fractals(List<Candle> s, boolean highs) {
+        List<Swing> fractals(List<Candle> s, boolean highs, int swingStrength) {
             List<Swing> out = new ArrayList<>();
             for (int i = swingStrength; i < s.size() - swingStrength; i++) {
                 double v = highs ? s.get(i).getHigh() : s.get(i).getLow();

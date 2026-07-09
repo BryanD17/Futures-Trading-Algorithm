@@ -198,7 +198,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 02 — SIM Warm Boot: Synthetic Backfill Through the Listener Path
   [✅] Agent 03 — Dashboard Bot Chart (Physical Candles + OTE Overlay + Warm Pill)
   [✅] Agent 04 — Bias Stability: NEUTRAL-Flip Hysteresis (Config-Gated)
-  [⬜] Agent 05 — Per-Instrument Chart Tuning + Leg Telemetry
+  [✅] Agent 05 — Per-Instrument Chart Tuning + Leg Telemetry
   [⬜] Agent 06 — OTE Agreement Counter (Data Path to Gate Adoption)
   [⬜] Agent 07 — FINAL VERIFICATION & CLOSE-OUT
 
@@ -221,6 +221,10 @@ SECTION 2 — PROGRESS LEDGER
               clamped [1,4]) + counterfactual log + emission-time
               non-NEUTRAL invariant (tested); runner now records EVERY 15m
               bias evaluation (idempotent); 447 tests green (7 new).
+  2026-07-09  Agent 05 ✅  per-instrument tuning (chart.minLegTicks.<SYM>
+              et al., defaults preserved — pre-existing chart tests pass
+              UNCHANGED), [CHART CFG] startup lines + deduped ACCEPTED/
+              REJECTED leg telemetry proven on SIM; 449 tests green.
   ------------------------------------------------------------------
 
 ================================================================================
@@ -1086,22 +1090,56 @@ a block empty for an agent marked ✅.
       OTE_ARMED, and the SAME setup emits after bias restores).
 
 ··· APPENDIX A-05 — Agent 05: Per-Instrument Chart Tuning + Leg Telemetry ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-09
+  PR NUMBER:         (feat/agent-05-chart-tuning — number recorded post-merge)
   COMMIT HASH:       (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - Per-symbol config, additive: ChartEngine gains InstrumentTuning
+      (record), configureInstrument(...), applySystemPropertyTuning(sym)
+      (reads chart.minLegTicks.<SYM> / chart.swingStrength.<SYM> /
+      chart.zoneExpiryBars.<SYM> with the CONSTRUCTOR values as defaults)
+      and tuningFor(sym); SymbolChart resolves thresholds per symbol.
+      Constructors untouched. DEFAULTS PRESERVED — proven by the
+      UNCHANGED pre-existing ChartEngine tests all passing (449 total,
+      0 failures).
+    - Startup config log from the SIM boot:
+        [CHART CFG MNQ] minLegTicks=40 swingStrength=2 expiryBars=32
+        [CHART CFG MES] minLegTicks=40 swingStrength=2 expiryBars=32
+        [CHART CFG MGC] minLegTicks=40 swingStrength=2 expiryBars=32
+      (both runners call applySystemPropertyTuning after
+      registerInstrument).
+    - Leg telemetry in rebuildZoneIfNeeded (once per completed 30m bar),
+      deduped by candidate leg pair (nothing logs on bars where nothing
+      changed). SIM examples (74 distinct leg events, 3-day replay x 3
+      symbols):
+        [CHART MNQ] leg ACCEPTED origin=19999.03 extreme=20024.99
+          size=104t -> OTE drawn (0.62=20008.89, 0.705=20006.69)
+        [CHART MNQ] leg ACCEPTED origin=20024.99 extreme=19971.53
+          size=214t -> OTE drawn (...)
+      REJECTED form ("[CHART <sym>] leg REJECTED size=Nt <
+      minLegTicks=N") exercised by the override tests.
+    - New override tests (ChartEnginePerInstrumentTuningTest, 2 passing):
+      configureInstrument("MES", 250, 2, 32) rejects the 200-tick leg for
+      MES ONLY while default-tuned MNQ draws its zone from the identical
+      shape; -Dchart.minLegTicks.MGC=250 via applySystemPropertyTuning
+      raises MGC's floor only.
+    - QUICK_START "TUNING THE BOT CHART" subsection added.
+    - Full suite green: 449 tests, 0 failures.
   Q1/Q2/Q3 ANSWERS (where the agent requires them):
-    - Q1: (evidence)   Q2: (sweep results)   Q3: (triggers found/filed)
+    - Q1: defaults preserved (unchanged tests green). Q2: no other
+      global-vs-instrument threshold exists in the chart package.
+      Q3: telemetry spam was a real trigger — the first evidence run
+      logged the SAME leg on every redraw of an expired zone; fixed with
+      accepted-pair dedup BEFORE the PR and re-proven on a fresh boot.
   ADAPTATIONS MADE (anchors drifted? code adapted? why):
-    - (exact change + reason, or "none")
+    - fractals() now takes swing strength as a parameter (private inner
+      method; no external surface change).
   REGRESSIONS FOUND & FIXED:
-    - (what broke, how fixed, fixup PR number, or "none")
+    - ACCEPTED-line spam on same-leg redraws — deduped (see Q3), verified
+      on a fresh SIM boot: every telemetry line is a distinct leg.
   BLOCKED ITEMS (⛔ only):
-    - (exact owner action required, or "none")
+    - none
 
 ··· APPENDIX A-06 — Agent 06: OTE Agreement Counter ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)
