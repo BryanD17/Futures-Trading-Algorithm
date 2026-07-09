@@ -1,0 +1,1892 @@
+================================================================================
+================================================================================
+
+   ██████╗██╗  ██╗ █████╗ ██████╗ ████████╗    ███████╗██╗██╗  ██╗
+  ██╔════╝██║  ██║██╔══██╗██╔══██╗╚══██╔══╝    ██╔════╝██║╚██╗██╔╝
+  ██║     ███████║███████║██████╔╝   ██║       █████╗  ██║ ╚███╔╝
+  ██║     ██╔══██║██╔══██║██╔══██╗   ██║       ██╔══╝  ██║ ██╔██╗
+  ╚██████╗██║  ██║██║  ██║██║  ██║   ██║       ██║     ██║██╔╝ ██╗
+   ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝       ╚═╝     ╚═╝╚═╝  ╚═╝
+
+        CHART-IN-MEMORY + HISTORICAL BACKFILL + 30M OTE ENGINE
+                 MASTER IMPLEMENTATION PROMPT — V1
+
+================================================================================
+================================================================================
+
+DOCUMENT NAME:    CHART_FIX_MASTER_PROMPT_V1.txt
+VERSION:          V1 (first master prompt for this repo)
+REPOSITORY:       https://github.com/BryanD17/Futures-Trading-Algorithm.git
+PREDECESSOR:      None — this document is derived from a full manual diagnosis
+                  of the repo performed on 2026-07-08 (see PRE-FLIGHT FINDINGS).
+TOTAL AGENTS:     12
+EXECUTED BY:      Claude Code, autonomously, agent by agent, using the
+                  GOLDEN LOOP defined below.
+
+CURRENT APP STATE (the problem this document exists to fix):
+  The trading engine has run LIVE against TopstepX for 2+ days and has NOT
+  taken a single trade. Root cause is NOT the strategy logic — it is that the
+  bot's in-memory chart starts nearly EMPTY. TopstepConnector fetches only the
+  last 60 minutes of 1-minute bars at startup, so:
+    - HTF bias stays NEUTRAL for ~5-10 hours after every restart (gate M2
+      blocks everything, the STDV+OTE state machine never leaves IDLE);
+    - LevelEngine has no PDH/PDL for ~24 hours (it only learns them by living
+      through a day rollover), starving the raid pipeline so raid scores fall
+      back below the quality floor (gate M4 / SCALP floor deadlock);
+    - the multi-hour 30-minute OTE leg visible on the TopstepX chart literally
+      does not exist inside the bot's memory.
+
+TARGET END STATE (what "done" means for this entire document):
+  1. On startup, the engine backfills ~3 days of 1m history per instrument
+     through the SAME listener path the live feed uses, so every downstream
+     component (HTF bias, LevelEngine PDH/PDL, raid pipeline, ChartEngine) is
+     warm within ~30 seconds of boot.
+  2. A new ChartEngine holds a true in-memory 30m chart per instrument,
+     detects the significant swing leg via fractals, draws the OTE fib band
+     (0.62 / 0.705 / 0.786) on it, and tracks the zone lifecycle
+     FORMING -> ARMED -> REACTED -> INVALIDATED/EXPIRED.
+  3. A warmup guard guarantees historical replay can NEVER fire a real order.
+  4. GET /api/chart/{symbol} serves the bot's internal 30m candles + OTE
+     overlay so the dashboard can render the bot's chart next to TopstepX and
+     the owner can verify they match candle-for-candle.
+  5. Per-15m-bar gate telemetry logs state + lastGateFailed so "why no trade"
+     is answerable in one glance.
+  6. All new code is unit-tested, the full Gradle build passes, everything is
+     committed and pushed to main on the remote.
+
+================================================================================
+
+================================================================================
+SECTION 1 — THE EXECUTION PROTOCOL  (READ THIS FIRST, EVERY SESSION)
+================================================================================
+
+You are Claude Code. This document is your single source of truth. You will
+execute it agent by agent, in order, until every agent is COMPLETE. You do not
+ask for permission between agents. You do not stop halfway. You do not skip.
+
+────────────────────────────────────────────────────────────────────────────────
+THE GOLDEN LOOP
+────────────────────────────────────────────────────────────────────────────────
+
+  STEP 1: Open this document (CHART_FIX_MASTER_PROMPT_V1.txt at the repo root).
+  STEP 2: Read the PROGRESS LEDGER (Section 2). Find the FIRST agent whose
+          status is not ✅ COMPLETE.
+  STEP 3: Execute EVERY task in that agent, in order, end to end.
+  STEP 4: Run the agent's ACCEPTANCE CRITERIA. Every checkbox must be checked
+          with REAL EVIDENCE (file:line, command output, build result, test
+          output). "The code looks right" is NEVER evidence.
+  STEP 5: Update the PROGRESS LEDGER for this agent (⬜ -> ✅, with a dated
+          note) and fill in the agent's block in APPENDIX A (Verification Log).
+  STEP 6: Commit using the agent's exact COMMIT MESSAGE and push to main
+          (workflow below). Confirm the remote is updated.
+  STEP 7: RETURN TO STEP 1. Immediately. You do NOT stop and wait — you
+          re-open this document and begin the next incomplete agent.
+
+THE ONLY ACCEPTABLE STOPPING CONDITION:
+  ALL 12 agents are ✅ COMPLETE in the PROGRESS LEDGER, AND Agent 12 (Final
+  Verification) has passed every one of its acceptance criteria with evidence.
+
+RESUME BEHAVIOR:
+  If your session is interrupted, compacted, or restarted for ANY reason:
+  re-open this document, re-read the PROGRESS LEDGER and APPENDIX A, and
+  resume at STEP 2 with the first incomplete agent. The ledger IS your memory.
+  Trust the ledger, not your recollection.
+
+────────────────────────────────────────────────────────────────────────────────
+CRITICAL RULES (NON-NEGOTIABLE)
+────────────────────────────────────────────────────────────────────────────────
+
+  1. NEVER skip an agent. NEVER reorder agents. Dependencies are sequential.
+  2. NEVER mark an acceptance criterion complete without concrete evidence.
+     Record the evidence in Appendix A. Evidence = file:line references,
+     pasted command output, pasted test results, pasted build results.
+  3. NEVER ship mock, fake, or placeholder data in the live path. Test
+     fixtures live in src/test only.
+  4. ALWAYS run the full Gradle build for the touched module before an agent
+     is marked complete:  ./gradlew clean build   (use gradlew.bat on
+     Windows/PowerShell). A red build means the agent is NOT done.
+  5. ALWAYS commit and push to main after every agent using the workflow
+     below. One agent = one commit (plus fixup commits if a later agent
+     uncovers a regression — name them "agent-NN-v1-fixup: <what>").
+  6. If a task is impossible without an owner-only action (e.g. TopstepX
+     credentials for a live API check), mark that agent's ledger entry
+     ⛔ BLOCKED with the EXACT action the owner must take, complete every
+     part of the agent that does not need the blocker, and move on. Never
+     silently pass a blocked item.
+  7. The embedded Java source in Agents 03 and 05 has been compiled against
+     this repo's real classes and smoke-tested. Paste it EXACTLY as given
+     first; only adapt if the compiler proves an API drift, and record any
+     adaptation in Appendix A with the reason.
+  8. NEVER weaken existing risk gates (M1–M9, PropFirmRiskEngine, DLL/MLL).
+     This document ADDS warmth and visibility; it does not loosen safety.
+  9. Real data only. Every new async/API surface needs loading, empty, and
+     error handling.
+
+────────────────────────────────────────────────────────────────────────────────
+GIT + PUSH-TO-MAIN WORKFLOW (run after EVERY agent)
+────────────────────────────────────────────────────────────────────────────────
+
+  git add -A
+  git commit -m "<the agent's specified COMMIT MESSAGE>"
+  git push origin main
+
+  If the remote is not configured yet (fresh clone should already have it):
+    git remote add origin https://github.com/BryanD17/Futures-Trading-Algorithm.git
+    git branch -M main
+    git push -u origin main
+
+  After pushing, verify with:
+    git log --oneline -1
+    git status            (must be clean)
+  and confirm the remote main was updated. Record the commit hash in
+  Appendix A for the agent.
+
+────────────────────────────────────────────────────────────────────────────────
+BUILD + TEST WORKFLOW (JAVA / GRADLE)
+────────────────────────────────────────────────────────────────────────────────
+
+  Trading engine:   cd trading-engine  && ./gradlew clean build
+  API backend:      cd api-backend     && ./gradlew clean build
+  Run tests only:   ./gradlew test --tests "com.topstep.trading.chart.*"
+  On Windows PowerShell use .\gradlew.bat instead of ./gradlew.
+
+  Requirements: Java 21. If the environment lacks it, install it or mark
+  ⛔ BLOCKED with the exact install step for the owner.
+
+────────────────────────────────────────────────────────────────────────────────
+WHAT THIS DOCUMENT IS NOT
+────────────────────────────────────────────────────────────────────────────────
+
+  - It is NOT a strategy rewrite. The STDV+OTE state machine, the M1–M9
+    validator, PropFirmRiskEngine, and all Topstep risk limits stay intact.
+  - It is NOT permission to trade live. Agent 11 verifies in SIM only.
+  - It does NOT touch credentials. TOPSTEP_USERNAME / TOPSTEP_PASSWORD stay
+    in environment variables, never in source or logs.
+
+================================================================================
+SECTION 2 — PROGRESS LEDGER
+================================================================================
+
+  Status markers:  ⬜ NOT STARTED   🔄 IN PROGRESS   ✅ COMPLETE   ⛔ BLOCKED
+
+  [✅] Agent 01 — Pre-Flight Verification & Baseline Build
+  [⬜] Agent 02 — TopstepConnector: Extract fetchBarsRange(...)
+  [⬜] Agent 03 — HistoricalBackfill: 3-Day Startup Replay
+  [⬜] Agent 04 — LiveEngineRunner: Warmup Guard (No Ghost Orders)
+  [⬜] Agent 05 — ChartEngine Package (Chart-In-Memory + 30m OTE)
+  [⬜] Agent 06 — Wire ChartEngine into LiveEngineRunner + EngineFacade
+  [⬜] Agent 07 — API: GET /api/chart/{symbol} (ChartStateController)
+  [⬜] Agent 08 — Gate Telemetry: state + lastGateFailed Every 15m Bar
+  [⬜] Agent 09 — Config Corrections + Documentation Updates
+  [⬜] Agent 10 — Unit Tests for Every New Component
+  [⬜] Agent 11 — SIM End-to-End Verification (Warm Chart Proven)
+  [⬜] Agent 12 — FINAL VERIFICATION & CLOSE-OUT
+
+  LEDGER NOTES (append one dated line per completion):
+  ------------------------------------------------------------------
+  2026-07-08  Agent 01 ✅  baseline build green (BUILD SUCCESSFUL in 38s, 17 tasks,
+              root-level multi-project gradlew), F1-F9 all confirmed at HEAD
+              572bd16, no com.topstep.trading.chart package exists, Java 21.0.10.
+              NOTE: default branch is "Main" (capital M) — all pushes go to
+              origin Main, not origin main.
+  ------------------------------------------------------------------
+
+================================================================================
+SECTION 3 — PRE-FLIGHT FINDINGS (VERIFIED AGAINST THE REPO ON 2026-07-08)
+================================================================================
+
+These findings were established by direct inspection of the codebase BEFORE
+this document was written. Claude Code starts from truth, not assumption.
+Agent 01 re-verifies each anchor so drift since 2026-07-08 is caught.
+
+  F1. TopstepConnector.fetchBars(symbol, contractId) hardcodes a window of
+      now-60min -> now, unit = BAR_UNIT_MINUTE (constant value 2),
+      unitNumber = 1, limit = 30, includePartialBar = false, posting to
+      {apiUrl}/History/retrieveBars. It parses bars (fields t/timestamp/time,
+      o/h/l/c, v), sorts ascending, de-dups against
+      lastBarTimestamp.get(symbol), and delivers via listener.onCandle(...).
+      THERE IS NO HISTORICAL BACKFILL ANYWHERE IN THE REPO.
+
+  F2. startMarketDataPolling(symbol, contractId) performs one immediate
+      fetchBars(...) then schedules fetchBars every POLL_INTERVAL_SECONDS
+      (30s) via marketDataPoller; the ScheduledFuture is stored in
+      symbolPollers.
+
+  F3. HtfTrendAnalyzer derives bias from 15m swing structure aggregated by
+      BarAggregationManager (1m -> 15m/30m, clock-aligned). It requires at
+      least TWO confirmed 15m swing highs AND TWO swing lows before the trend
+      state can map to BULLISH/BEARISH; until then bias is NEUTRAL. From a
+      cold 60-minute start this takes ~5–10 hours of live runtime.
+
+  F4. StdvOteStrategy (the active default; stdvOte.enabled defaults true) is
+      a strict sequential state machine: recordHtfBias -> recordManipulationLeg
+      -> recordSweep -> recordDisplacement -> recordMss -> recordOteImpulse ->
+      tryEmit, validated by MandatoryConfluenceValidator gates M1..M9.
+      NEUTRAL bias means the machine never leaves IDLE (gate M2). Bias flips
+      and session end INVALIDATE in-flight setups.
+
+  F5. LevelEngine only registers PDH/PDL after it has itself observed a day
+      rollover — with no backfill, the raid pipeline has no previous-day
+      levels for the first ~24h of runtime.
+
+  F6. StdvOteRunnerStrategy.currentRaidScore(...) falls back to the
+      instrument base score (5 for MNQ/MES, 6 for MGC) when the raid pipeline
+      has no tracked raid. In scalp mode (scalpMode.enabled=true) the default
+      floor scalp.minRaidScore = 6 REJECTS that fallback for the index
+      instruments by design ("a score that cannot be shown >= the floor does
+      not trade") — a structural deadlock while the pipeline is starved.
+
+  F7. SetupContext carries `state` and `lastGateFailed`, and SetupController
+      exposes setup state via the API — but nothing logs the blocking gate
+      periodically, so a stalled engine looks like silence.
+
+  F8. BarAggregationManager exists at
+      trading-engine/src/main/java/com/topstep/trading/strategy/BarAggregationManager.java
+      with: enum Timeframe {M1,M3,M5,M15,M30,H1}; constructor
+      (String symbol, int maxCandles); Map<Timeframe,Candle>
+      processCandle(Candle); List<Candle> getCandles(Timeframe).
+
+  F9. Candle is at trading-engine/.../domain/Candle.java with constructor
+      Candle(String symbol, Instant timestamp, double open, double high,
+      double low, double close, long volume) and getters getSymbol(),
+      getTimestamp(), getOpen(), getHigh(), getLow(), getClose(), getVolume().
+
+  F10. The five new source files embedded in this document (Agents 03 and 05)
+       were compiled OFFLINE against the repo's real Candle and
+       BarAggregationManager classes with javac (Java 21) and passed a
+       functional smoke test reproducing the exact screenshot pattern:
+       leg -> fibs -> band tag (ARMED) -> rejection (REACTED) ->
+       hasReactedOte(...) == true.
+
+================================================================================
+
+================================================================================
+SECTION 4 — THE AGENTS
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 01 — PRE-FLIGHT VERIFICATION & BASELINE BUILD
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 30–45 minutes
+
+CONTEXT:
+  This agent owns nothing but truth. Before a single line changes, prove the
+  repo builds green today and confirm every PRE-FLIGHT FINDING (F1–F9) still
+  holds at the current HEAD. If any finding has drifted, record the drift in
+  Appendix A and adapt the later agents' file/line anchors accordingly —
+  the PLAN does not change, only the anchors.
+
+TASKS:
+  1. Clone or pull the repo:
+       git clone https://github.com/BryanD17/Futures-Trading-Algorithm.git
+       (or: git pull origin main if already cloned)
+     Confirm you are on main and the working tree is clean.
+  2. Verify Java 21 is available: java -version. If not, install it or mark
+     ⛔ BLOCKED with the exact install command for the owner.
+  3. Baseline build BOTH Java modules and record output:
+       cd trading-engine && ./gradlew clean build
+       cd ../api-backend && ./gradlew clean build
+     If the baseline is already red, FIX the baseline first (smallest possible
+     change), commit it as "agent-01-v1-baseline: fix pre-existing build
+     break", and note it in Appendix A. Later agents require a green start.
+  4. Re-verify each PRE-FLIGHT FINDING F1–F9 against HEAD. For each one,
+     record the file path and line numbers where you confirmed it (e.g.
+     "F1 confirmed: TopstepConnector.java:697–724").
+  5. Verify there is no existing package com.topstep.trading.chart (Agents 03
+     and 05 create it). If one exists, record its contents and reconcile.
+  6. Create this master prompt file at the repo root as
+     CHART_FIX_MASTER_PROMPT_V1.txt (this exact document) so the ledger and
+     Appendix A live IN the repo and survive across sessions.
+
+ACCEPTANCE CRITERIA (each box needs evidence in Appendix A-01):
+  [ ] Repo cloned/pulled, on main, clean tree (git status output pasted).
+  [ ] java -version shows Java 21.x (output pasted).
+  [ ] trading-engine ./gradlew clean build -> BUILD SUCCESSFUL (output tail).
+  [ ] api-backend ./gradlew clean build -> BUILD SUCCESSFUL (output tail).
+  [ ] F1–F9 each confirmed or drift-documented with file:line evidence.
+  [ ] CHART_FIX_MASTER_PROMPT_V1.txt exists at repo root and is committed.
+
+COMMIT MESSAGE:
+  agent-01-v1: pre-flight verification, baseline build, master prompt in repo
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER (Agent 01 -> ✅ with a dated note), fill in
+  APPENDIX A-01 with all evidence, commit with the message above, push to
+  main, verify the remote updated, then RETURN TO GOLDEN LOOP STEP 1 and
+  begin the next incomplete agent. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 02 — TOPSTEPCONNECTOR: EXTRACT fetchBarsRange(...)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 45–60 minutes
+
+CONTEXT:
+  Owns: trading-engine/src/main/java/com/topstep/trading/connector/TopstepConnector.java
+  fetchBars(...) currently hardcodes the now-60min window AND delivers
+  candles straight to the listener. The backfill (Agent 03) needs the same
+  HTTP + parsing logic for ARBITRARY windows that RETURNS candles instead of
+  delivering them. One HTTP path, two callers — no duplicated parsing logic.
+
+TASKS:
+  1. In TopstepConnector, create a new private method:
+       private java.util.List<Candle> fetchBarsRange(String symbol,
+               String contractId, java.time.Instant start,
+               java.time.Instant end)
+     Move the request construction + HTTP call + JSON parsing loop from
+     fetchBars into it, with these request parameters:
+       contractId, live = useLiveData,
+       startTime = start.toString(), endTime = end.toString(),
+       unit = BAR_UNIT_MINUTE, unitNumber = 1,
+       limit = 1000, includePartialBar = false.
+     It RETURNS the parsed List<Candle> (unsorted is fine), and returns an
+     EMPTY list (never null) on "no bars" (market closed) responses. It must
+     preserve the existing success/errorCode checks: on an API error it logs
+     exactly as fetchBars does today and returns an empty list. It must NOT
+     touch lastBarTimestamp and must NOT call listener.onCandle.
+  2. Rewrite fetchBars(symbol, contractId) as a thin wrapper:
+       - compute end = now, start = now - 60 minutes;
+       - call fetchBarsRange(symbol, contractId, start, end);
+       - keep the EXISTING post-processing exactly: sort ascending by
+         timestamp, skip bars <= lastBarTimestamp.get(symbol), deliver each
+         surviving candle via listener.onCandle, update lastBarTimestamp to
+         the max delivered timestamp, keep the existing log lines.
+     Net behavior of live polling must be IDENTICAL to before this agent.
+  3. Confirm the listener reference used by fetchBars is reachable for Agent
+     03 (identify the exact field/parameter name that holds the
+     MarketDataListener for a symbol and record it in Appendix A-02 — Agent
+     03's wiring snippet references it).
+  4. Build: cd trading-engine && ./gradlew clean build.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-02):
+  [ ] fetchBarsRange exists with the exact signature above (file:line).
+  [ ] It returns candles and never delivers to the listener (code shown).
+  [ ] It returns empty list (not null) on no-bars and on API error paths.
+  [ ] limit raised to 1000 ONLY in fetchBarsRange; behavior of the 60-min
+      live poll otherwise unchanged (diff shown).
+  [ ] fetchBars is now a wrapper; sort/de-dup/deliver/lastBarTimestamp logic
+      preserved verbatim (diff shown).
+  [ ] Listener field/param name for a symbol identified and recorded.
+  [ ] ./gradlew clean build -> BUILD SUCCESSFUL (output tail pasted).
+
+COMMIT MESSAGE:
+  agent-02-v1: extract range-based bar fetch from TopstepConnector.fetchBars
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-02, commit, push to main,
+  verify remote, then RETURN TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 03 — HISTORICALBACKFILL: 3-DAY STARTUP REPLAY  (THE FIX THAT MATTERS MOST)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 60–90 minutes
+
+CONTEXT:
+  Owns: NEW file trading-engine/src/main/java/com/topstep/trading/chart/HistoricalBackfill.java
+        plus a small wiring change in TopstepConnector.startMarketDataPolling.
+  This is the single highest-impact change in the document. It replays ~3
+  days of 1m history through the SAME listener path the live feed uses,
+  BEFORE live polling starts — which warms HTF bias, PDH/PDL, the raid
+  pipeline, and (after Agent 05) the ChartEngine, all at once. Because
+  lastBarTimestamp is set to the last backfilled bar, the existing poller's
+  de-dup makes live polling resume seamlessly with zero duplicates.
+
+TASKS:
+  1. Create the package directory
+     trading-engine/src/main/java/com/topstep/trading/chart/ and add the
+     file HistoricalBackfill.java with EXACTLY this content (verified to
+     compile against this repo's Candle class):
+
+--------8<-------- FILE: trading-engine/src/main/java/com/topstep/trading/chart/HistoricalBackfill.java --------
+package com.topstep.trading.chart;
+
+import com.topstep.trading.domain.Candle;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+
+/**
+ * Startup backfill: fetch N days of 1m history in chunks and replay it through
+ * the SAME candle listener the live feed uses, oldest → newest, BEFORE live
+ * polling starts.
+ *
+ * <p>This is the single highest-impact fix in the system. Without it:
+ * <ul>
+ *   <li>HTF bias stays NEUTRAL for hours after every restart (needs 15m swing
+ *       structure), so gate M2 blocks everything;</li>
+ *   <li>LevelEngine has no PDH/PDL for ~24h (it only learns them by living
+ *       through a day rollover), so the raid pipeline is starved and raid
+ *       scores fall back to values below the quality floor;</li>
+ *   <li>the ChartEngine's 30m chart is empty, so the multi-hour OTE leg
+ *       visible on the broker chart does not exist in memory.</li>
+ * </ul>
+ *
+ * <p>Usage from TopstepConnector.startMarketDataPolling(), before the initial
+ * live fetch (see PATCHES.md for the exact insertion):
+ *
+ * <pre>
+ * HistoricalBackfill.run(symbol, 3,
+ *     (start, end) -> fetchBarsRange(symbol, contractId, start, end),
+ *     listener::onCandle,
+ *     ts -> lastBarTimestamp.put(symbol, ts));
+ * </pre>
+ */
+public final class HistoricalBackfill {
+
+    /** Chunk width — small enough to stay under API row limits at 1m granularity. */
+    private static final Duration CHUNK = Duration.ofHours(6);
+
+    private HistoricalBackfill() {}
+
+    /**
+     * @param symbol        instrument (logging only)
+     * @param days          how many days back to fill (2–3 covers PDH/PDL,
+     *                      weekly opens, and full 15m/30m swing structure)
+     * @param fetchRange    (startInclusive, endExclusive) → candles for that
+     *                      window, ANY order, or empty list on market-closed
+     * @param deliver       the same consumer the live feed uses
+     *                      (must be idempotent for duplicate timestamps)
+     * @param markDelivered called with the max delivered timestamp so the live
+     *                      poller skips bars the backfill already replayed
+     * @return number of candles delivered
+     */
+    public static int run(String symbol,
+                          int days,
+                          BiFunction<Instant, Instant, List<Candle>> fetchRange,
+                          Consumer<Candle> deliver,
+                          Consumer<Instant> markDelivered) {
+        Instant end = Instant.now();
+        Instant cursor = end.minus(Duration.ofDays(Math.max(1, days)));
+        List<Candle> all = new ArrayList<>();
+
+        while (cursor.isBefore(end)) {
+            Instant chunkEnd = cursor.plus(CHUNK);
+            if (chunkEnd.isAfter(end)) chunkEnd = end;
+            try {
+                List<Candle> chunk = fetchRange.apply(cursor, chunkEnd);
+                if (chunk != null) all.addAll(chunk);
+            } catch (Exception e) {
+                // A failed chunk (weekend gap, transient 5xx) must not abort
+                // the whole backfill — log and continue.
+                System.err.println("[Backfill] " + symbol + " chunk "
+                        + cursor + " → " + chunkEnd + " failed: " + e.getMessage());
+            }
+            cursor = chunkEnd;
+        }
+
+        // Strict chronological replay + de-dup by timestamp.
+        all.sort((a, b) -> a.getTimestamp().compareTo(b.getTimestamp()));
+        Instant last = null;
+        int delivered = 0;
+        for (Candle c : all) {
+            if (last != null && !c.getTimestamp().isAfter(last)) continue;
+            deliver.accept(c);
+            last = c.getTimestamp();
+            delivered++;
+        }
+        if (last != null && markDelivered != null) {
+            markDelivered.accept(last);
+        }
+        System.out.println("[Backfill] " + symbol + ": delivered " + delivered
+                + " historical 1m bars (" + days + " days). Chart memory is warm.");
+        return delivered;
+    }
+}
+--------8<-------- END FILE --------
+
+  2. Wire it into TopstepConnector.startMarketDataPolling(symbol, contractId)
+     BEFORE the "Initial fetch immediately" call, using the listener
+     reference identified in Agent 02 (adjust the field/param name to what
+     you recorded in Appendix A-02):
+
+       // ── STARTUP BACKFILL ─────────────────────────────────────────
+       // Warm the entire pipeline (HTF bias, PDH/PDL, raid levels,
+       // ChartEngine) with 3 days of 1m history, replayed through the
+       // SAME listener path as live data.
+       com.topstep.trading.chart.HistoricalBackfill.run(
+               symbol,
+               3,
+               (start, end) -> fetchBarsRange(symbol, contractId, start, end),
+               <listener>::onCandle,
+               ts -> lastBarTimestamp.put(symbol, ts));
+
+  3. Make the number of backfill days configurable via system property
+     "backfill.days" (default 3, min 1, max 7), read once in the connector
+     and passed to HistoricalBackfill.run. Log the chosen value.
+  4. Guard against double-backfill: if startMarketDataPolling can be called
+     twice for the same symbol (re-subscription), run the backfill only the
+     first time per symbol (e.g. a ConcurrentHashMap.newKeySet() of
+     backfilled symbols).
+  5. Build: cd trading-engine && ./gradlew clean build.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-03):
+  [ ] HistoricalBackfill.java created byte-for-byte as embedded (file shown).
+  [ ] Wiring inserted BEFORE the initial live fetch in
+      startMarketDataPolling (file:line + diff shown).
+  [ ] lastBarTimestamp is set to the last backfilled bar so the live poller
+      skips already-replayed bars (code path traced and explained).
+  [ ] backfill.days property honored with default 3, clamped to [1,7].
+  [ ] Double-backfill guard present per symbol.
+  [ ] Chunked fetching (6h chunks) tolerates failed chunks without aborting
+      (weekend gaps / transient 5xx) — code shown.
+  [ ] ./gradlew clean build -> BUILD SUCCESSFUL (output tail pasted).
+
+COMMIT MESSAGE:
+  agent-03-v1: 3-day historical backfill replayed through live listener path
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-03, commit, push to main,
+  verify remote, then RETURN TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 04 — LIVEENGINERUNNER: WARMUP GUARD  (NO GHOST ORDERS, EVER)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL — SAFETY          ESTIMATED EFFORT: 30–45 minutes
+
+CONTEXT:
+  Owns: trading-engine/src/main/java/com/topstep/trading/LiveEngineRunner.java
+  Backfilled candles flow through the strategies. A historical candle inside
+  a past killzone could, in theory, satisfy every gate and emit a signal for
+  a price from yesterday. That signal must NEVER become an order. This agent
+  installs a two-layer guard. This agent MUST be completed before any live
+  or SIM run that includes the backfill.
+
+TASKS:
+  1. Add to LiveEngineRunner a timestamp-based staleness guard at the top of
+     handleStrategySignal(StrategySignalEvent signal):
+       - Track the timestamp of the most recent candle processed per symbol
+         (a ConcurrentHashMap<String, Instant> lastCandleTs updated in
+         onMarketData before strategy dispatch).
+       - In handleStrategySignal: if lastCandleTs for the signal's symbol is
+         older than 5 minutes relative to Instant.now(), LOG
+         "[Warmup] Suppressing signal from historical/stale data: <type> <symbol>"
+         and RETURN without creating any order. This is self-healing across
+         reconnects and replays.
+  2. Add a belt-and-suspenders volatile boolean warmupComplete, initialized
+     false, set true only after ALL initial subscriptions (and therefore all
+     backfills, which run synchronously inside startMarketDataPolling) have
+     returned in start(). handleStrategySignal also returns early (with the
+     same log style) while warmupComplete == false.
+  3. Verify order-side safety: confirm by code reading that NO other path
+     (BracketOrderManager price triggers, TrailingStopManager, ExecutionEngine
+     onNewCandle) can SUBMIT A NEW ENTRY order from a historical candle.
+     Managing/closing logic reacting to replayed prices while there are no
+     open positions is a no-op — state that explicitly with evidence.
+  4. Build: cd trading-engine && ./gradlew clean build.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-04):
+  [ ] Staleness guard present; 5-minute threshold; per-symbol lastCandleTs
+      updated in onMarketData (file:line + diff).
+  [ ] warmupComplete flag present, false until subscriptions complete,
+      checked in handleStrategySignal (file:line + diff).
+  [ ] Both guards LOG suppressions (log lines shown).
+  [ ] Written trace in Appendix A-04 proving no other new-entry path exists
+      for historical candles (file:line references for each checked class).
+  [ ] ./gradlew clean build -> BUILD SUCCESSFUL (output tail pasted).
+
+COMMIT MESSAGE:
+  agent-04-v1: warmup guard — suppress strategy signals during historical replay
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-04, commit, push to main,
+  verify remote, then RETURN TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 05 — CHARTENGINE PACKAGE  (THE CHART-IN-MEMORY + 30M OTE BRAIN)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 60–90 minutes
+
+CONTEXT:
+  Owns: NEW package com.topstep.trading.chart (four more files).
+  This is the component the owner asked for by name: the bot's own chart in
+  memory. It ingests every 1m candle (backfill first, then live — same path),
+  rebuilds clock-aligned 30m candles via the repo's existing
+  BarAggregationManager, finds the significant swing leg with fractal
+  detection, draws the OTE fib band (0.62 / 0.705 / 0.786) on it exactly like
+  the retracement tool on the TopstepX screenshot, and tracks the zone:
+  FORMING -> ARMED (price tags the band) -> REACTED (rejection back out) ->
+  INVALIDATED (close beyond the leg origin) / EXPIRED (aged out).
+  The strategy-facing gate is one call: hasReactedOte(symbol, bullish).
+  ALL FOUR FILES BELOW COMPILED CLEAN against this repo's real Candle and
+  BarAggregationManager and passed a functional smoke test reproducing the
+  screenshot pattern end-to-end (F10). Paste them EXACTLY.
+
+TASKS:
+  1. Create the following four files with EXACTLY the embedded contents.
+
+--------8<-------- FILE: trading-engine/src/main/java/com/topstep/trading/chart/OteState.java --------
+package com.topstep.trading.chart;
+
+/** Lifecycle of an OTE fib zone on the 30m chart. */
+public enum OteState {
+    /** Leg identified, fibs drawn, price has not entered the 0.62–0.79 band yet. */
+    FORMING,
+    /** Price traded into the OTE band — entry conditions are live. */
+    ARMED,
+    /** Price rejected back out of the band toward the extreme — the screenshot pattern. */
+    REACTED,
+    /** Price closed beyond the leg origin (1.0) — setup dead. */
+    INVALIDATED,
+    /** Zone aged out without a tag. */
+    EXPIRED
+}
+--------8<-------- END FILE --------
+
+--------8<-------- FILE: trading-engine/src/main/java/com/topstep/trading/chart/OteZoneSnapshot.java --------
+package com.topstep.trading.chart;
+
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * Immutable snapshot of a 30m OTE (Optimal Trade Entry) fib zone — the
+ * in-memory equivalent of the retracement tool drawn on the TopstepX chart.
+ *
+ * <p>Fib convention matches the screenshot: 0.0 sits at the LEG EXTREME
+ * (the high of an up-leg), 1.0 at the LEG ORIGIN (the low of an up-leg).
+ * So fib(0.705) for a bullish leg is 70.5% of the way back DOWN from the
+ * high toward the low — the OTE sweet spot.
+ */
+public record OteZoneSnapshot(
+        String symbol,
+        boolean bullish,
+        double legOrigin,      // the 1.0 level (low of up-leg / high of down-leg)
+        double legExtreme,     // the 0.0 level (high of up-leg / low of down-leg)
+        Instant originTime,
+        Instant extremeTime,
+        OteState state,
+        Instant taggedAt       // when price first entered the band; null until ARMED
+) {
+
+    public static OteZoneSnapshot forLeg(String symbol, boolean bullish,
+                                         double origin, double extreme,
+                                         Instant originTime, Instant extremeTime) {
+        return new OteZoneSnapshot(symbol, bullish, origin, extreme,
+                originTime, extremeTime, OteState.FORMING, null);
+    }
+
+    /** Price at a given fib ratio (0.0 = extreme, 1.0 = origin). */
+    public double fib(double ratio) {
+        return legExtreme + (legOrigin - legExtreme) * ratio;
+    }
+
+    public double oteStart() { return fib(ChartEngine.OTE_START); }
+    public double oteSweet() { return fib(ChartEngine.OTE_SWEET); }
+    public double oteEnd()   { return fib(ChartEngine.OTE_END); }
+
+    /** Suggested protective stop: just beyond the leg origin (1.0). */
+    public double protectiveStop(double tickSize, int bufferTicks) {
+        double buf = tickSize * Math.max(0, bufferTicks);
+        return bullish ? legOrigin - buf : legOrigin + buf;
+    }
+
+    /** First natural target: return to the leg extreme (0.0). */
+    public double primaryTarget() { return legExtreme; }
+
+    public OteZoneSnapshot withState(OteState newState) {
+        return new OteZoneSnapshot(symbol, bullish, legOrigin, legExtreme,
+                originTime, extremeTime, newState, taggedAt);
+    }
+
+    public OteZoneSnapshot withTagTime(Instant t) {
+        return new OteZoneSnapshot(symbol, bullish, legOrigin, legExtreme,
+                originTime, extremeTime, OteState.ARMED,
+                taggedAt == null ? t : taggedAt);
+    }
+
+    /** JSON-friendly map for the dashboard chart overlay. */
+    public Map<String, Object> toApiMap() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("symbol", symbol);
+        m.put("direction", bullish ? "BULLISH" : "BEARISH");
+        m.put("state", state.name());
+        m.put("legOrigin", legOrigin);
+        m.put("legExtreme", legExtreme);
+        m.put("fib_0.5", fib(0.5));
+        m.put("fib_0.62", oteStart());
+        m.put("fib_0.705", oteSweet());
+        m.put("fib_0.786", fib(0.786));
+        m.put("fib_1.0", legOrigin);
+        m.put("originTime", originTime == null ? null : originTime.toString());
+        m.put("extremeTime", extremeTime == null ? null : extremeTime.toString());
+        m.put("taggedAt", taggedAt == null ? null : taggedAt.toString());
+        return m;
+    }
+}
+--------8<-------- END FILE --------
+
+--------8<-------- FILE: trading-engine/src/main/java/com/topstep/trading/chart/ChartSnapshot.java --------
+package com.topstep.trading.chart;
+
+import com.topstep.trading.domain.Candle;
+
+import java.time.Instant;
+import java.util.List;
+
+/**
+ * Read-only view of everything the bot "sees" for one instrument:
+ * the 30m candle series plus the live OTE zone. Served by the API so the
+ * dashboard can render the bot's internal chart next to the TopstepX chart
+ * and verify they match candle-for-candle.
+ *
+ * @param oneMinuteBarsIngested total 1m bars ever fed in (backfill + live) —
+ *                              a small number here means the backfill did not
+ *                              run and the bot is trading blind.
+ */
+public record ChartSnapshot(
+        String symbol,
+        List<Candle> candles30m,
+        OteZoneSnapshot activeOte,
+        long oneMinuteBarsIngested,
+        Instant lastCandleTime
+) {}
+--------8<-------- END FILE --------
+
+--------8<-------- FILE: trading-engine/src/main/java/com/topstep/trading/chart/ChartEngine.java --------
+package com.topstep.trading.chart;
+
+import com.topstep.trading.domain.Candle;
+import com.topstep.trading.strategy.BarAggregationManager;
+import com.topstep.trading.strategy.BarAggregationManager.Timeframe;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * ChartEngine — the bot's "chart in memory".
+ *
+ * <p>This is the component that makes the algorithm see what a human sees on
+ * the TopstepX 30m chart: a full candle series per instrument, the current
+ * significant swing leg, and the OTE (Optimal Trade Entry) fib zone drawn on
+ * that leg (0.62 / 0.705 / 0.786), exactly like the retracement tool in the
+ * screenshot.
+ *
+ * <h2>How it works</h2>
+ * <ol>
+ *   <li>Every 1m candle (backfilled history first, then live) flows into
+ *       {@link #onCandle(Candle)}.</li>
+ *   <li>An internal {@link BarAggregationManager} rebuilds clock-aligned
+ *       15m and 30m candles from the 1m stream.</li>
+ *   <li>On every completed 30m bar, fractal swing points are recomputed and
+ *       the most recent significant leg is identified.</li>
+ *   <li>The OTE zone for that leg is computed and kept live: state moves
+ *       FORMING → ARMED (price tagged the 0.62–0.79 band) → REACTED (price
+ *       rejected back out of the band toward the origin) → INVALIDATED
+ *       (price closed beyond the leg origin / 1.0 level).</li>
+ * </ol>
+ *
+ * <p>Thread-safety: all public methods are safe to call from the market-data
+ * thread and the API thread concurrently (per-symbol state is confined and
+ * snapshots are immutable copies).
+ */
+public final class ChartEngine {
+
+    /** Fib ratios of the canonical ICT OTE band. */
+    public static final double OTE_START = 0.62;
+    public static final double OTE_SWEET = 0.705;
+    public static final double OTE_END   = 0.79;
+
+    /** Bars on each side required to confirm a 30m fractal swing. */
+    private final int swingStrength;
+
+    /** Minimum leg size in ticks for a swing leg to be considered significant. */
+    private final int minLegTicks;
+
+    /** 30m bars an OTE zone stays valid before it expires without a tag. */
+    private final int zoneExpiryBars;
+
+    private final Map<String, SymbolChart> charts = new ConcurrentHashMap<>();
+    private final Map<String, Double> tickSizes = new ConcurrentHashMap<>();
+
+    public ChartEngine() {
+        this(2, 40, 32); // 2-bar fractals, >=10pt legs on MNQ (40 * 0.25), ~16h expiry
+    }
+
+    public ChartEngine(int swingStrength, int minLegTicks, int zoneExpiryBars) {
+        if (swingStrength < 1) throw new IllegalArgumentException("swingStrength >= 1");
+        if (minLegTicks < 1) throw new IllegalArgumentException("minLegTicks >= 1");
+        this.swingStrength = swingStrength;
+        this.minLegTicks = minLegTicks;
+        this.zoneExpiryBars = Math.max(1, zoneExpiryBars);
+    }
+
+    /** Register an instrument's tick size (required before its OTE math is meaningful). */
+    public void registerInstrument(String symbol, double tickSize) {
+        if (symbol == null || tickSize <= 0) return;
+        tickSizes.put(symbol, tickSize);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // INGEST
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Feed a 1m candle (historical backfill or live — same path, which is what
+     * guarantees the in-memory chart matches the broker chart).
+     */
+    public void onCandle(Candle candle) {
+        if (candle == null || candle.getSymbol() == null) return;
+        SymbolChart chart = charts.computeIfAbsent(
+                candle.getSymbol(), s -> new SymbolChart(s));
+        synchronized (chart) {
+            chart.ingest(candle);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // QUERY API (strategy + dashboard)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /** Completed 30m candles, oldest → newest (immutable copy). */
+    public List<Candle> get30mCandles(String symbol, int lookback) {
+        SymbolChart chart = charts.get(symbol);
+        if (chart == null) return List.of();
+        synchronized (chart) {
+            List<Candle> all = chart.bars.getCandles(Timeframe.M30);
+            int from = Math.max(0, all.size() - Math.max(1, lookback));
+            return List.copyOf(all.subList(from, all.size()));
+        }
+    }
+
+    /** The live OTE zone for the symbol, if one exists and is not invalidated. */
+    public Optional<OteZoneSnapshot> getActiveOteZone(String symbol) {
+        SymbolChart chart = charts.get(symbol);
+        if (chart == null) return Optional.empty();
+        synchronized (chart) {
+            OteZoneSnapshot z = chart.activeZone;
+            if (z == null || z.state() == OteState.INVALIDATED || z.state() == OteState.EXPIRED) {
+                return Optional.empty();
+            }
+            return Optional.of(z);
+        }
+    }
+
+    /**
+     * PRIMARY STRATEGY GATE — true when the 30m chart shows what the
+     * screenshot shows: a significant leg whose 0.62–0.79 retracement has
+     * been tagged and rejected in the leg's direction.
+     *
+     * @param bullish true = leg is up, we want a long entry off the OTE
+     */
+    public boolean hasReactedOte(String symbol, boolean bullish) {
+        return getActiveOteZone(symbol)
+                .filter(z -> z.bullish() == bullish)
+                .filter(z -> z.state() == OteState.REACTED)
+                .isPresent();
+    }
+
+    /** Full snapshot for the dashboard: candles + zone + swing anchors. */
+    public ChartSnapshot snapshot(String symbol, int lookback30m) {
+        SymbolChart chart = charts.get(symbol);
+        if (chart == null) {
+            return new ChartSnapshot(symbol, List.of(), null, 0, null);
+        }
+        synchronized (chart) {
+            List<Candle> bars30 = get30mCandles(symbol, lookback30m);
+            return new ChartSnapshot(
+                    symbol,
+                    bars30,
+                    chart.activeZone,
+                    chart.oneMinuteCount,
+                    chart.lastCandleTime);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // INTERNAL — per-symbol chart state
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private final class SymbolChart {
+        final String symbol;
+        final BarAggregationManager bars;
+        OteZoneSnapshot activeZone;
+        long oneMinuteCount;
+        Instant lastCandleTime;
+        int barsSinceZoneCreated;
+
+        SymbolChart(String symbol) {
+            this.symbol = symbol;
+            // 2000 bars/timeframe: >5 weeks of 30m, ~1.4 days of 1m — enough
+            // for swing detection with bounded memory (~2MB/instrument).
+            this.bars = new BarAggregationManager(symbol, 2000);
+        }
+
+        void ingest(Candle c1m) {
+            oneMinuteCount++;
+            lastCandleTime = c1m.getTimestamp();
+            Map<Timeframe, Candle> completed = bars.processCandle(c1m);
+
+            // Update zone state on every 1m bar (tags/reactions happen intra-30m).
+            if (activeZone != null) {
+                activeZone = advanceZone(activeZone, c1m);
+            }
+
+            // Recompute swing structure only when a 30m bar completes.
+            Candle done30 = completed.get(Timeframe.M30);
+            if (done30 != null) {
+                if (activeZone != null
+                        && activeZone.state() == OteState.FORMING
+                        && ++barsSinceZoneCreated > zoneExpiryBars) {
+                    activeZone = activeZone.withState(OteState.EXPIRED);
+                }
+                rebuildZoneIfNeeded();
+            }
+        }
+
+        /** Find the latest significant 30m leg and (re)draw the OTE on it. */
+        void rebuildZoneIfNeeded() {
+            List<Candle> series = bars.getCandles(Timeframe.M30);
+            int n = series.size();
+            if (n < swingStrength * 2 + 3) return;
+
+            List<Swing> highs = fractals(series, true);
+            List<Swing> lows = fractals(series, false);
+            if (highs.isEmpty() || lows.isEmpty()) return;
+
+            Swing lastHigh = highs.get(highs.size() - 1);
+            Swing lastLow = lows.get(lows.size() - 1);
+            double tick = tickSizes.getOrDefault(symbol, 0.25);
+            double minLeg = minLegTicks * tick;
+
+            // Most recent leg = the later swing defines direction.
+            boolean bullishLeg = lastHigh.index > lastLow.index; // low → high = up leg
+            Swing origin = bullishLeg ? lastLow : lastHigh;
+            Swing extreme = bullishLeg ? lastHigh : lastLow;
+            double legSize = Math.abs(extreme.price - origin.price);
+            if (legSize < minLeg) return;
+
+            // Don't replace a still-live zone with the SAME leg.
+            if (activeZone != null
+                    && activeZone.state() != OteState.INVALIDATED
+                    && activeZone.state() != OteState.EXPIRED
+                    && activeZone.legOrigin() == origin.price
+                    && activeZone.legExtreme() == extreme.price) {
+                return;
+            }
+
+            activeZone = OteZoneSnapshot.forLeg(
+                    symbol, bullishLeg, origin.price, extreme.price,
+                    origin.time, extreme.time);
+            barsSinceZoneCreated = 0;
+        }
+
+        /** Progress FORMING → ARMED → REACTED → INVALIDATED on each 1m bar. */
+        OteZoneSnapshot advanceZone(OteZoneSnapshot z, Candle c) {
+            if (z.state() == OteState.INVALIDATED || z.state() == OteState.EXPIRED) return z;
+
+            // Invalidation: close beyond the leg origin (the 1.0 level).
+            boolean brokeOrigin = z.bullish()
+                    ? c.getClose() < z.legOrigin()
+                    : c.getClose() > z.legOrigin();
+            if (brokeOrigin) return z.withState(OteState.INVALIDATED);
+
+            // New extreme beyond the leg: leg extends; rebuild happens on
+            // the next completed 30m bar. Keep zone but do not arm on stale fibs.
+            boolean newExtreme = z.bullish()
+                    ? c.getHigh() > z.legExtreme()
+                    : c.getLow() < z.legExtreme();
+            if (newExtreme && z.state() == OteState.FORMING) return z;
+
+            if (z.state() == OteState.FORMING) {
+                // ARMED: price traded into the 0.62–0.79 band.
+                boolean tagged = z.bullish()
+                        ? c.getLow() <= z.fib(OTE_START)
+                        : c.getHigh() >= z.fib(OTE_START);
+                if (tagged) return z.withState(OteState.ARMED).withTagTime(c.getTimestamp());
+            } else if (z.state() == OteState.ARMED) {
+                // REACTED: a close back on the extreme-side of the 0.62 line
+                // after the tag = the rejection you see on the screenshot.
+                boolean rejected = z.bullish()
+                        ? c.getClose() > z.fib(OTE_START)
+                        : c.getClose() < z.fib(OTE_START);
+                if (rejected) return z.withState(OteState.REACTED);
+            }
+            return z;
+        }
+
+        /** Classic fractal swings on the 30m series. */
+        List<Swing> fractals(List<Candle> s, boolean highs) {
+            List<Swing> out = new ArrayList<>();
+            for (int i = swingStrength; i < s.size() - swingStrength; i++) {
+                double v = highs ? s.get(i).getHigh() : s.get(i).getLow();
+                boolean is = true;
+                for (int k = 1; k <= swingStrength && is; k++) {
+                    double left = highs ? s.get(i - k).getHigh() : s.get(i - k).getLow();
+                    double right = highs ? s.get(i + k).getHigh() : s.get(i + k).getLow();
+                    is = highs ? (v >= left && v > right) : (v <= left && v < right);
+                }
+                if (is) out.add(new Swing(i, v, s.get(i).getTimestamp()));
+            }
+            return Collections.unmodifiableList(out);
+        }
+    }
+
+    private record Swing(int index, double price, Instant time) {}
+}
+--------8<-------- END FILE --------
+
+  2. Build: cd trading-engine && ./gradlew clean build. If (and only if) the
+     compiler reports an API drift vs. F8/F9, adapt minimally and record the
+     exact adaptation + reason in Appendix A-05.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-05):
+  [ ] All four files exist byte-for-byte as embedded (or with documented,
+      compiler-forced minimal adaptations only).
+  [ ] Package compiles inside the trading-engine module (build output tail).
+  [ ] No existing class was modified by this agent (git diff --stat shown —
+      only additions under com/topstep/trading/chart/).
+  [ ] ./gradlew clean build -> BUILD SUCCESSFUL (output tail pasted).
+
+COMMIT MESSAGE:
+  agent-05-v1: ChartEngine package — in-memory 30m chart with OTE lifecycle
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-05, commit, push to main,
+  verify remote, then RETURN TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 06 — WIRE CHARTENGINE INTO LIVEENGINERUNNER + ENGINEFACADE
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: HIGH          ESTIMATED EFFORT: 45–60 minutes
+
+CONTEXT:
+  Owns: LiveEngineRunner.java, SimEngineRunner.java (if it has its own candle
+  dispatch), EngineFacade.java.
+  The ChartEngine must see EVERY 1m candle — backfilled and live, in every
+  mode — and must be reachable by the API layer through EngineFacade, the
+  same singleton the other controllers already read from.
+
+TASKS:
+  1. In LiveEngineRunner: add a final field
+       private final com.topstep.trading.chart.ChartEngine chartEngine =
+               new com.topstep.trading.chart.ChartEngine();
+     In the constructor, register the traded instruments with their tick
+     sizes (source them from the existing tick-size map/spec — do NOT invent
+     values):  MNQ 0.25, MES 0.25, MGC 0.10 (plus any other symbol the
+     runner subscribes).
+  2. In LiveEngineRunner.onMarketData(Candle candle): as the FIRST statement
+     of the processing try-block, call chartEngine.onCandle(candle). This
+     guarantees the chart sees the backfill replay too.
+  3. If SimEngineRunner has a parallel candle dispatch path, mirror steps 1–2
+     there so SIM mode has the same chart brain (Agent 11 depends on this).
+  4. In EngineFacade: expose the engine's ChartEngine with a getter
+     (public ChartEngine getChartEngine()) following the same pattern the
+     facade uses for account state / trades. Ensure it is non-null in LIVE
+     and SIM modes; in BACKTEST mode it may return a ChartEngine fed by the
+     backtest loop or an empty engine — document which.
+  5. OPTIONAL BUT DO IT — observability first, gating later: in
+     StdvOteRunnerStrategy (or the runner's dispatch), where the OTE / M7
+     logic already logs, ADD A LOG-ONLY line comparing the new signal:
+       boolean screenshotPattern = chartEngine.hasReactedOte(symbol, biasBullish);
+     Log it side by side with the existing gate result. DO NOT change any
+     gating behavior in this document — the owner will review a week of SIM
+     logs and decide when to switch the gate over. State this explicitly in
+     the code comment.
+  6. Build both modules.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-06):
+  [ ] chartEngine field constructed in LiveEngineRunner; instruments
+      registered with tick sizes sourced from the existing spec (file:line).
+  [ ] chartEngine.onCandle(candle) is the first processing statement in
+      onMarketData (diff shown).
+  [ ] SIM path mirrored (or documented why SIM shares the same dispatch).
+  [ ] EngineFacade.getChartEngine() present and reachable (file:line).
+  [ ] Log-only comparison line present in the runner; NO gating change
+      (diff shown proving gates untouched).
+  [ ] Both modules: ./gradlew clean build -> BUILD SUCCESSFUL (tails pasted).
+
+COMMIT MESSAGE:
+  agent-06-v1: wire ChartEngine into runners and expose via EngineFacade
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-06, commit, push to main,
+  verify remote, then RETURN TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 07 — API: GET /api/chart/{symbol}  (SEE WHAT THE BOT SEES)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: HIGH          ESTIMATED EFFORT: 45–60 minutes
+
+CONTEXT:
+  Owns: NEW file api-backend/src/main/java/com/topstep/api/controller/ChartStateController.java
+  This endpoint is how the owner verifies — visually, in the dashboard or
+  even just a browser — that the bot's internal 30m chart matches the
+  TopstepX chart candle-for-candle, and whether an OTE zone is live. The
+  "warm" flag is the operational tripwire: warm=false means the backfill
+  did not run and the bot is blind (the exact two-days-no-trades condition).
+
+TASKS:
+  1. Create the controller with EXACTLY this content, then adapt ONLY the
+     constructor wiring to match how the other controllers in this module
+     obtain the EngineFacade (record the adaptation in Appendix A-07):
+
+--------8<-------- FILE: api-backend/src/main/java/com/topstep/api/controller/ChartStateController.java --------
+package com.topstep.api.controller;
+
+import com.topstep.trading.chart.ChartEngine;
+import com.topstep.trading.chart.ChartSnapshot;
+import com.topstep.trading.domain.Candle;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Exposes the bot's internal chart so you can verify — visually, in the
+ * dashboard — that what the algorithm sees matches the TopstepX chart.
+ *
+ * GET /api/chart/{symbol}?lookback=100
+ *   → { candles30m: [...], ote: {...fib levels + state...}, warm: true/false }
+ *
+ * If "warm" is false or barsIngested is tiny, the backfill did not run and
+ * the bot is effectively blind — the exact condition that caused the
+ * two-days-no-trades behaviour.
+ */
+@RestController
+@RequestMapping("/api/chart")
+public class ChartStateController {
+
+    private final ChartEngine chartEngine;
+
+    // Wire this from the EngineFacade singleton the other controllers use.
+    public ChartStateController(ChartEngine chartEngine) {
+        this.chartEngine = chartEngine;
+    }
+
+    @GetMapping("/{symbol}")
+    public ResponseEntity<Map<String, Object>> chart(
+            @PathVariable String symbol,
+            @RequestParam(defaultValue = "100") int lookback) {
+
+        int safeLookback = Math.min(Math.max(lookback, 1), 2000);
+        ChartSnapshot snap = chartEngine.snapshot(symbol.toUpperCase(), safeLookback);
+
+        List<Map<String, Object>> candles = new ArrayList<>(snap.candles30m().size());
+        for (Candle c : snap.candles30m()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("t", c.getTimestamp().toString());
+            m.put("o", c.getOpen());
+            m.put("h", c.getHigh());
+            m.put("l", c.getLow());
+            m.put("c", c.getClose());
+            m.put("v", c.getVolume());
+            candles.add(m);
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("symbol", snap.symbol());
+        body.put("timeframe", "30m");
+        body.put("candles30m", candles);
+        body.put("ote", snap.activeOte() == null ? null : snap.activeOte().toApiMap());
+        body.put("barsIngested1m", snap.oneMinuteBarsIngested());
+        body.put("lastCandleTime",
+                snap.lastCandleTime() == null ? null : snap.lastCandleTime().toString());
+        // "Warm" = enough history for HTF bias + PDH/PDL + a real 30m leg.
+        body.put("warm", snap.oneMinuteBarsIngested() >= 1500);
+
+        return ResponseEntity.ok(body);
+    }
+}
+--------8<-------- END FILE --------
+
+  2. Wiring: the constructor takes a ChartEngine. Follow the existing
+     controllers' pattern — if they pull from a static/singleton
+     EngineFacade, do the same here (e.g. a @Bean method or direct
+     EngineFacade.getInstance().getChartEngine() in a config class). If the
+     api-backend module does not already depend on trading-engine, add the
+     Gradle project dependency the same way the other controllers' imports
+     require it (check first — StatusController/SetupController likely
+     already import engine classes).
+  3. Error handling: unknown symbol returns 200 with empty candles and
+     warm=false (already the ChartEngine snapshot behavior) — verify;
+     lookback is clamped server-side (already in the code) — verify.
+  4. Confirm CORS config covers the new route (existing CorsConfig).
+  5. Build api-backend; then boot it (SIM mode or however StatusController
+     is normally exercised) and curl the endpoint:
+       curl http://localhost:8080/api/chart/MNQ?lookback=50
+     Paste the JSON shape into Appendix A-07 (empty candles are fine at this
+     stage if the engine is not running — the shape is what is verified here;
+     Agent 11 verifies warm data).
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-07):
+  [ ] Controller file created as embedded, wiring adapted to the module's
+      real EngineFacade pattern (file:line + explanation).
+  [ ] Gradle dependency verified or added (build.gradle diff if changed).
+  [ ] CORS verified for /api/chart/** (file:line).
+  [ ] ./gradlew clean build -> BUILD SUCCESSFUL (output tail).
+  [ ] curl response pasted showing the JSON contract:
+      { symbol, timeframe, candles30m[], ote, barsIngested1m,
+        lastCandleTime, warm }.
+
+COMMIT MESSAGE:
+  agent-07-v1: /api/chart endpoint exposing internal 30m chart + OTE overlay
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-07, commit, push to main,
+  verify remote, then RETURN TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 08 — GATE TELEMETRY: state + lastGateFailed EVERY 15M BAR
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: HIGH          ESTIMATED EFFORT: 30–45 minutes
+
+CONTEXT:
+  Owns: StdvOteRunnerStrategy.java (log line), SetupController (verify).
+  SetupContext already carries `state` and `lastGateFailed` — the exact
+  answer to "why is it not trading" — but nothing prints it periodically.
+  After this agent, a stalled engine names its blocking gate out loud every
+  15 minutes, and the owner can also read it at /api/setup.
+
+TASKS:
+  1. In StdvOteRunnerStrategy, at the point where a completed 15m bar is
+     detected (the existing completedHtf.containsKey(Timeframe.M15) branch),
+     add ONE log line:
+       SetupContext ctx = core.getSetupContext();
+       System.out.println("[GATES " + symbol + "] state=" + ctx.state
+               + " bias=" + ctx.htfBias
+               + " lastGateFailed=" + ctx.lastGateFailed
+               + " kzActive=" + killzoneActive);
+     (Use the module's logger instead of System.out if the class already
+     uses one — match the file's existing convention.)
+  2. Extend the line (same statement) with the ChartEngine OTE state IF
+     Agent 06's engine reference is reachable here; if it is not cleanly
+     reachable, log OTE state from LiveEngineRunner's own 15m tick instead —
+     do NOT introduce awkward coupling just for a log line. Record the
+     choice and reason in Appendix A-08.
+  3. Verify SetupController exposes SetupContext (state + lastGateFailed) —
+     if any of the two fields is missing from the API response, add it.
+  4. Build trading-engine and api-backend.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-08):
+  [ ] One [GATES <symbol>] line logged per completed 15m bar (file:line).
+  [ ] Line includes state, bias, lastGateFailed at minimum (code shown).
+  [ ] OTE state included, or documented alternative placement with reason.
+  [ ] /api/setup returns state and lastGateFailed (response or code shown).
+  [ ] Both builds green (output tails pasted).
+
+COMMIT MESSAGE:
+  agent-08-v1: per-15m gate telemetry — state, bias, lastGateFailed, OTE
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-08, commit, push to main,
+  verify remote, then RETURN TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 09 — CONFIG CORRECTIONS + DOCUMENTATION UPDATES
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: MEDIUM          ESTIMATED EFFORT: 30–45 minutes
+
+CONTEXT:
+  Owns: README.md, docs/, and run-guide text files at the repo root.
+  Two operational truths must be written down where the owner will see
+  them, and one config trap must be defused.
+
+TASKS:
+  1. SCALP FLOOR DEADLOCK NOTE (honest assessment, do not silently change
+     behavior): document in the run guide that IF scalpMode.enabled=true,
+     the default scalp.minRaidScore=6 combined with the MNQ/MES fallback
+     raid score of 5 rejects every sweep whenever the raid pipeline has no
+     tracked level. After the backfill this mostly self-heals (PDH/PDL
+     exist), but until raid scoring is verified in logs, the recommended
+     launch flag is -Dscalp.minRaidScore=5. DO NOT change the default in
+     code — the conservative default is intentional; the fix is warmth +
+     an informed owner.
+  2. Add a "STARTUP & WARMTH" section to the run guide:
+       - what the backfill does, the backfill.days property,
+       - the [Backfill] log line to look for,
+       - GET /api/chart/<symbol> -> warm must be true and barsIngested1m
+         >= ~1500 before expecting trades,
+       - restarts now cost ~30 seconds of replay instead of hours of
+         blindness — restart freely.
+  3. Add a "READING THE GATES" section: the [GATES] log line, the /api/setup
+     endpoint, and a one-line meaning for each gate M1–M9 (from
+     MandatoryConfluenceValidator's own javadoc).
+  4. Add a "TOPSTEP AUTOMATION POLICY" note: before pointing the engine at a
+     FUNDED (non-eval) account, re-verify Topstep's current written policy
+     on automated trading; run SIM against the warm chart first.
+  5. Build nothing new — but run both Gradle builds once more to prove docs
+     changes didn't break anything (they shouldn't; prove it anyway).
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-09):
+  [ ] Scalp-floor note present with the exact recommended flag (file:line).
+  [ ] STARTUP & WARMTH section present (file:line).
+  [ ] READING THE GATES section present with M1–M9 one-liners (file:line).
+  [ ] Topstep automation policy note present (file:line).
+  [ ] Both builds green (output tails pasted).
+
+COMMIT MESSAGE:
+  agent-09-v1: run-guide updates — warmth, gates, scalp floor, policy note
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-09, commit, push to main,
+  verify remote, then RETURN TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 10 — UNIT TESTS FOR EVERY NEW COMPONENT
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: HIGH          ESTIMATED EFFORT: 90–120 minutes
+
+CONTEXT:
+  Owns: NEW tests under trading-engine/src/test/java/com/topstep/trading/chart/
+  The repo already has a strong JUnit 5 test culture (see the stdvote test
+  suite). The new package meets the same bar. Determinism is a stated
+  success criterion of this codebase: same candle sequence -> identical
+  outputs, always.
+
+TASKS:
+  1. ChartEngineOteLifecycleTest — reproduce the screenshot pattern with
+     synthetic 1m candles (mirror the offline smoke test):
+       a) feed a base/dip phase (forms the swing-low origin),
+       b) feed a strong up-leg,
+       c) feed confirmation chop below the high so the 30m fractal confirms,
+          assert an active zone exists in FORMING with correct fib prices
+          (0.62 / 0.705 / 0.786 computed from origin/extreme within 1 tick),
+       d) feed a linear retrace into the band -> assert state ARMED and
+          taggedAt is set,
+       e) feed a rejection back above the 0.62 -> assert state REACTED and
+          hasReactedOte(symbol, true) == true,
+       f) feed a close below the leg origin -> assert INVALIDATED and
+          getActiveOteZone(...) is empty.
+  2. ChartEngineInvalidationAndExpiryTest —
+       a) a zone that is never tagged EXPIRES after zoneExpiryBars completed
+          30m bars;
+       b) a new extreme beyond the leg does not falsely ARM a stale zone;
+       c) bearish mirror: down-leg, retrace UP into the band, rejection
+          DOWN -> REACTED with bullish() == false.
+  3. ChartEngineDeterminismTest — feed the exact same candle list into two
+     fresh engines; assert identical zone states, fib prices, and 30m candle
+     counts after every candle (loop assertion, not just final state).
+  4. HistoricalBackfillTest — with a fake fetchRange function:
+       a) chunks cover the requested span with no gaps or overlaps
+          (capture the (start,end) pairs and assert continuity);
+       b) out-of-order + duplicate candles across chunks are delivered
+          strictly ascending with duplicates dropped;
+       c) a chunk that throws is skipped and the rest still delivers;
+       d) markDelivered receives exactly the max delivered timestamp;
+       e) empty market-closed chunks are tolerated.
+  5. WarmupGuardTest (location per Agent 04's implementation) — a
+     StrategySignalEvent arriving while the last candle timestamp is >5min
+     old is suppressed (no order created); a fresh-candle signal passes.
+     If LiveEngineRunner is too heavy to unit-test directly, extract the
+     guard predicate into a small package-private helper and test THAT —
+     record the refactor in Appendix A-10.
+  6. Run: cd trading-engine && ./gradlew test, then ./gradlew clean build.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-10):
+  [ ] All five test classes exist with the scenarios above (file list).
+  [ ] Full lifecycle FORMING->ARMED->REACTED->INVALIDATED asserted with
+      exact fib-price assertions (test code excerpt).
+  [ ] Determinism asserted per-candle across two engine instances.
+  [ ] Backfill chunk continuity, de-dup, fault tolerance, and
+      markDelivered all asserted.
+  [ ] Warmup guard suppression asserted.
+  [ ] ./gradlew test — ALL tests pass, INCLUDING the pre-existing suite
+      (summary pasted: total run / failed = 0).
+  [ ] ./gradlew clean build -> BUILD SUCCESSFUL (output tail pasted).
+
+COMMIT MESSAGE:
+  agent-10-v1: unit tests — OTE lifecycle, determinism, backfill, warmup guard
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-10, commit, push to main,
+  verify remote, then RETURN TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 11 — SIM END-TO-END VERIFICATION  (WARM CHART PROVEN, NOT ASSUMED)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 60–90 minutes
+
+CONTEXT:
+  Owns: no new code (small fixups allowed). This agent PROVES the target end
+  state in SIM mode. "The code looks right" is never evidence — this agent
+  exists because of that rule. Live TopstepX API calls need credentials the
+  environment may not have: every check below has a SIM/mock path; anything
+  that strictly requires live credentials is marked ⛔ BLOCKED with the
+  exact owner action, never silently passed.
+
+TASKS:
+  1. Boot the stack in SIM mode exactly as the run guide describes
+     (api-backend bootRun bootstraps the engine; dashboard optional).
+  2. Drive the SIM/Mock feed so at least ~1,600 one-minute candles flow
+     through the runner (the mock feed or a replayed CSV both qualify). If
+     the MockConnector cannot replay that volume quickly, add a temporary
+     test-profile acceleration and record it in Appendix A-11.
+  3. PROOF 1 — chart warmth: curl /api/chart/MNQ (or the SIM symbol) and
+     paste the response showing warm=true, barsIngested1m >= 1500, a
+     non-empty candles30m array, and lastCandleTime advancing.
+  4. PROOF 2 — OTE overlay: engineer or replay a leg+retrace sequence in the
+     SIM feed and paste the /api/chart response showing a non-null "ote"
+     object with state ARMED or REACTED and all five fib prices.
+  5. PROOF 3 — gate telemetry: paste at least three consecutive
+     [GATES <symbol>] log lines showing state/bias/lastGateFailed changing
+     as the feed progresses.
+  6. PROOF 4 — warmup guard: restart the SIM engine mid-session and paste
+     the [Warmup]/suppression log line demonstrating replayed data produced
+     no order (or a written trace if the SIM feed emits no stale signal —
+     the guard's unit test from Agent 10 plus the restart log suffices).
+  7. PROOF 5 — no regression: /api/status, /api/positions, /api/setup all
+     still respond correctly (responses pasted).
+  8. LIVE-ONLY ITEM: verifying that the real TopstepX /History/retrieveBars
+     accepts limit=1000 for 6h windows requires live credentials. If
+     credentials are present in the environment, run ONE read-only backfill
+     against the demo/sim endpoint and paste the [Backfill] delivered-count
+     line. If not, mark this single item ⛔ BLOCKED: "Owner: run the engine
+     once with credentials and confirm the [Backfill] line reports ~1000+
+     bars per chunk-day; if the API caps lower, set -Dbackfill.days chunking
+     down via HistoricalBackfill.CHUNK to 2h." Everything else in this agent
+     must still be completed.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-11):
+  [ ] SIM boots green; engine + API up (startup log excerpt).
+  [ ] PROOF 1 pasted (warm=true JSON).
+  [ ] PROOF 2 pasted (non-null ote with fib prices + state).
+  [ ] PROOF 3 pasted (3+ [GATES] lines).
+  [ ] PROOF 4 pasted (suppression evidence or documented trace).
+  [ ] PROOF 5 pasted (three endpoint responses).
+  [ ] Live-API item either proven or ⛔ BLOCKED with the exact owner action.
+
+COMMIT MESSAGE:
+  agent-11-v1: SIM end-to-end proof — warm chart, OTE overlay, gate telemetry
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-11, commit, push to main,
+  verify remote, then RETURN TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 12 — FINAL VERIFICATION & CLOSE-OUT
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 45–60 minutes
+
+CONTEXT:
+  Owns: the whole document. This agent is the stopping condition. It does
+  not trust any earlier ✅ — it re-verifies the system as a whole.
+
+TASKS:
+  1. Re-run BOTH full builds from clean:
+       trading-engine: ./gradlew clean build   (includes all tests)
+       api-backend:    ./gradlew clean build
+  2. Re-read APPENDIX A top to bottom. Every agent block must be filled with
+     real evidence. Any empty or hand-waved block sends you BACK to that
+     agent via the GOLDEN LOOP — that agent is not actually complete.
+  3. Audit the ledger: every agent ✅ (or ⛔ with a precise owner action for
+     items that genuinely require the owner — Agent 11's live-API item is
+     the only expected candidate).
+  4. Grep-audit the safety invariants and record the outputs:
+       - no credentials or tokens in source or logs
+         (grep -ri "TOPSTEP_PASSWORD\|Bearer " on src/ — hits must be env
+          reads or header construction only);
+       - no gating change to M1–M9 / PropFirmRiskEngine
+         (git diff against the pre-Agent-01 baseline for those files shows
+          zero behavioral edits — telemetry/log lines only);
+       - warmup guard present in handleStrategySignal.
+  5. Write a FINAL SUMMARY into the LEDGER NOTES: agents completed, total
+     commits, test counts, remaining ⛔ items with owner actions, and the
+     one-line operational instruction: "check /api/chart/<symbol> for
+     warm=true before expecting trades."
+  6. Final commit and push. Confirm remote main contains every agent commit
+     (git log --oneline pasted).
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-12):
+  [ ] Both clean builds green, all tests pass (output tails pasted).
+  [ ] Appendix A complete for all 12 agents (self-audit statement + any
+      agents you had to bounce back to, with what was missing).
+  [ ] Ledger shows 12/12 ✅ (or documented ⛔ owner items only).
+  [ ] Safety grep-audit outputs pasted; zero violations.
+  [ ] FINAL SUMMARY written into LEDGER NOTES.
+  [ ] git log --oneline shows agent-01 through agent-12 commits on remote
+      main (pasted).
+
+COMMIT MESSAGE:
+  agent-12-v1: final verification — chart-in-memory system complete on main
+
+AFTER COMPLETION:
+  This is the ONLY place you may stop — and only if every criterion above
+  passed with evidence. If anything failed, the GOLDEN LOOP applies: return
+  to the failing agent, fix it, and come back here.
+
+================================================================================
+SECTION 5 — APPENDICES
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX A — PER-AGENT VERIFICATION LOG
+────────────────────────────────────────────────────────────────────────────────
+Claude Code fills ONE block per agent, at completion time, with REAL evidence.
+This appendix is what makes the document durable across sessions — if your
+context is lost, this is where the truth lives. Never leave a block empty for
+an agent marked ✅.
+
+··· APPENDIX A-01 — Agent 01: Pre-Flight Verification & Baseline Build ···
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-08
+  COMMIT HASH:       (recorded post-push in ledger notes; baseline HEAD before
+                      this commit = 572bd164623956fdab510e5c360f165fa6f3acf9)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - repo pulled, on Main, clean: "git pull origin Main -> Already up to
+      date." / "On branch Main ... nothing to commit, working tree clean".
+      DRIFT: default branch is "Main" (capital M), not "main". All push
+      commands in this document are executed as "git push origin Main".
+    - java -version: "openjdk version 21.0.10 2026-01-20 LTS (Temurin)".
+    - Gradle builds: DRIFT — gradlew lives at the REPO ROOT (multi-project
+      build; settings.gradle includes 'trading-engine' and 'api-backend').
+      ".\gradlew.bat clean build --no-daemon" from root built BOTH modules:
+      "BUILD SUCCESSFUL in 38s, 17 actionable tasks: 17 executed".
+      (Single root build replaces the per-module cd+build in the doc.)
+    - F1 confirmed: TopstepConnector.java:697-848 (window now-60min at
+      700-701, BAR_UNIT_MINUTE=2 at 35/711, unitNumber=1 at 712, limit=30 at
+      713, includePartialBar=false at 714, /History/retrieveBars at 704,
+      t/timestamp/time + o,h,l,c,v parsing at 775-804, sort asc at 812,
+      de-dup vs lastBarTimestamp at 791, listener.onCandle at 819). No
+      backfill anywhere in repo (glob/grep negative).
+    - F2 confirmed: startMarketDataPolling at TopstepConnector.java:944-962
+      (immediate fetchBars at 950, scheduled every POLL_INTERVAL_SECONDS=30
+      at 953-959, ScheduledFuture stored in symbolPollers at 962).
+    - F3 confirmed: HtfTrendAnalyzer.java:246-273 — makingHH/HL/LH/LL all
+      return false with < 2 recorded 15m swing highs/lows; swing lists built
+      from 15m structure at 84-85/137-155.
+    - F4 confirmed: StdvOteStrategy.java — recordHtfBias:226,
+      recordManipulationLeg:251, recordSweep:278, recordDisplacement:298,
+      recordMss:312, recordOteImpulse:324, tryEmit:357; stdvOte.enabled
+      flag documented at :43.
+    - F5 confirmed: LevelEngine.java:136-139 — PDH/PDL registered only at
+      observed day boundary from accumulated todayHigh/todayLow.
+    - F6 confirmed: StdvOteRunnerStrategy.java:840-844 — currentRaidScore
+      falls back to spec.raidMinQuality() (instrument base) when no active
+      raid; deadlock comment at 815-822.
+    - F7 confirmed: SetupContext.java:44 (state), :112 (lastGateFailed);
+      SetupController.java:183/209 exposes lastGateFailed via API.
+    - F8 confirmed: BarAggregationManager.java:36 (enum Timeframe), :73
+      (ctor (String,int)), :97 (Map<Timeframe,Candle> processCandle), :251
+      (List<Candle> getCandles).
+    - F9 confirmed: Candle.java:21-53 — constructor(symbol,Instant,o,h,l,c,
+      volume) plus getters exactly as stated (extra overloaded ctors at
+      26/42 are additive, no conflict).
+    - No package com.topstep.trading.chart exists (glob returned nothing).
+    - CHART_FIX_MASTER_PROMPT_V1.txt placed at repo root (this file).
+  ADAPTATIONS MADE (embedded code changed? anchors drifted?):
+    - Branch name: main -> Main (repo default). Build commands: run from
+      repo root via .\gradlew.bat (multi-project); per-module builds use
+      :trading-engine: / :api-backend: task prefixes where needed.
+  REGRESSIONS FOUND & FIXED:
+    - none (baseline was already green)
+  BLOCKED ITEMS (⛔ only):
+    - none
+
+··· APPENDIX A-02 — Agent 02: TopstepConnector: Extract fetchBarsRange(...) ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  COMMIT HASH:       (from git log --oneline -1 after the push)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - criterion 3:   (file:line / pasted output)
+    - (continue one line per criterion — every box in the agent)
+  ADAPTATIONS MADE (embedded code changed? anchors drifted?):
+    - (exact change + compiler/API reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup commit hash, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-03 — Agent 03: HistoricalBackfill: 3-Day Startup Replay ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  COMMIT HASH:       (from git log --oneline -1 after the push)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - criterion 3:   (file:line / pasted output)
+    - (continue one line per criterion — every box in the agent)
+  ADAPTATIONS MADE (embedded code changed? anchors drifted?):
+    - (exact change + compiler/API reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup commit hash, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-04 — Agent 04: LiveEngineRunner: Warmup Guard ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  COMMIT HASH:       (from git log --oneline -1 after the push)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - criterion 3:   (file:line / pasted output)
+    - (continue one line per criterion — every box in the agent)
+  ADAPTATIONS MADE (embedded code changed? anchors drifted?):
+    - (exact change + compiler/API reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup commit hash, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-05 — Agent 05: ChartEngine Package ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  COMMIT HASH:       (from git log --oneline -1 after the push)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - criterion 3:   (file:line / pasted output)
+    - (continue one line per criterion — every box in the agent)
+  ADAPTATIONS MADE (embedded code changed? anchors drifted?):
+    - (exact change + compiler/API reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup commit hash, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-06 — Agent 06: Wire ChartEngine into Runners + EngineFacade ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  COMMIT HASH:       (from git log --oneline -1 after the push)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - criterion 3:   (file:line / pasted output)
+    - (continue one line per criterion — every box in the agent)
+  ADAPTATIONS MADE (embedded code changed? anchors drifted?):
+    - (exact change + compiler/API reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup commit hash, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-07 — Agent 07: API: GET /api/chart/{symbol} ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  COMMIT HASH:       (from git log --oneline -1 after the push)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - criterion 3:   (file:line / pasted output)
+    - (continue one line per criterion — every box in the agent)
+  ADAPTATIONS MADE (embedded code changed? anchors drifted?):
+    - (exact change + compiler/API reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup commit hash, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-08 — Agent 08: Gate Telemetry ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  COMMIT HASH:       (from git log --oneline -1 after the push)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - criterion 3:   (file:line / pasted output)
+    - (continue one line per criterion — every box in the agent)
+  ADAPTATIONS MADE (embedded code changed? anchors drifted?):
+    - (exact change + compiler/API reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup commit hash, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-09 — Agent 09: Config Corrections + Documentation ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  COMMIT HASH:       (from git log --oneline -1 after the push)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - criterion 3:   (file:line / pasted output)
+    - (continue one line per criterion — every box in the agent)
+  ADAPTATIONS MADE (embedded code changed? anchors drifted?):
+    - (exact change + compiler/API reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup commit hash, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-10 — Agent 10: Unit Tests ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  COMMIT HASH:       (from git log --oneline -1 after the push)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - criterion 3:   (file:line / pasted output)
+    - (continue one line per criterion — every box in the agent)
+  ADAPTATIONS MADE (embedded code changed? anchors drifted?):
+    - (exact change + compiler/API reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup commit hash, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-11 — Agent 11: SIM End-to-End Verification ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  COMMIT HASH:       (from git log --oneline -1 after the push)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - criterion 3:   (file:line / pasted output)
+    - (continue one line per criterion — every box in the agent)
+  ADAPTATIONS MADE (embedded code changed? anchors drifted?):
+    - (exact change + compiler/API reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup commit hash, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-12 — Agent 12: Final Verification & Close-Out ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  COMMIT HASH:       (from git log --oneline -1 after the push)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - criterion 3:   (file:line / pasted output)
+    - (continue one line per criterion — every box in the agent)
+  ADAPTATIONS MADE (embedded code changed? anchors drifted?):
+    - (exact change + compiler/API reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup commit hash, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX B — ENGINEERING CONVENTIONS FOR THIS REPO
+────────────────────────────────────────────────────────────────────────────────
+
+  B1.  Java 21, Gradle wrapper. Always ./gradlew (or .\gradlew.bat), never a
+       system Gradle.
+  B2.  One agent = one commit with the exact specified message. Fixups are
+       "agent-NN-v1-fixup: <what>". Never squash agents together.
+  B3.  Match each file's existing logging convention: TopstepConnector uses
+       an SLF4J-style logger; parts of the strategy layer use System.out.
+       New code in a file follows THAT file's convention.
+  B4.  New public types get javadoc explaining WHY they exist, not just what
+       they do — mirror the existing StdvOteStrategy documentation style.
+  B5.  Concurrency: market-data thread vs API thread. Shared state is either
+       confined + synchronized (ChartEngine's per-symbol pattern), a
+       ConcurrentHashMap, or an immutable snapshot. Never a bare HashMap
+       across threads.
+  B6.  Determinism is a feature: same candle sequence -> identical outputs.
+       No wall-clock reads inside candle-driven logic except where the
+       existing code already does (zone expiry uses BAR COUNTS, not time).
+  B7.  Time zones: session/killzone logic is America/New_York; candle
+       timestamps are Instant (UTC). Never mix the two silently.
+  B8.  Risk code (M1–M9, PropFirmRiskEngine, RiskLimits, DLL/MLL, flatten
+       times) is READ-ONLY for this document. Telemetry may observe it;
+       nothing may weaken it.
+  B9.  Secrets only via environment variables (TOPSTEP_USERNAME,
+       TOPSTEP_PASSWORD). Never in source, never in logs, never in commits.
+  B10. Every async/API surface: loading, empty, and error states handled.
+       An endpoint that can be hit before the engine warms returns an honest
+       empty shape (warm=false), never a 500.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX C — ANTI-PATTERNS (IF YOU CATCH YOURSELF DOING THESE, STOP)
+────────────────────────────────────────────────────────────────────────────────
+
+  C1.  "The code looks right" as evidence. It is not. Build output, test
+       output, curl output, log lines, file:line — those are evidence.
+  C2.  Marking an agent ✅ with an empty Appendix A block. The block IS the
+       completion.
+  C3.  Rewriting the embedded, smoke-tested sources "to improve them."
+       Paste first, adapt only on compiler proof, record every adaptation.
+  C4.  Weakening a gate to make a trade happen. The two-day silence was a
+       WARMTH problem, not a strictness problem. Warmth is the fix.
+  C5.  Letting historical replay reach order placement. The warmup guard is
+       a safety control; it ships before any run that includes backfill.
+  C6.  Silent fallbacks. A failed backfill chunk logs; a blocked owner item
+       is ⛔ with an exact action; an unknown symbol returns warm=false.
+  C7.  Duplicated HTTP/parsing logic between fetchBars and fetchBarsRange.
+       One path, two callers.
+  C8.  Skipping the ledger update or the push "until later." Later never
+       comes for an agent that loses its context. Ledger, commit, push,
+       THEN next agent.
+  C9.  Touching credentials, account IDs, or live order endpoints anywhere
+       in this document's scope. Out of scope, full stop.
+  C10. Stopping between agents to ask whether to continue. The GOLDEN LOOP
+       already answered: continue until 12/12 ✅.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX D — GLOSSARY + CLI QUICK REFERENCE
+────────────────────────────────────────────────────────────────────────────────
+
+  GLOSSARY
+    OTE            Optimal Trade Entry — the 0.62–0.79 fib retracement band
+                   of a swing leg; 0.705 is the "sweet spot". Fib convention:
+                   0.0 at the leg EXTREME, 1.0 at the leg ORIGIN.
+    FORMING        Zone drawn, band not yet touched.
+    ARMED          Price traded into the band.
+    REACTED        Price rejected back out of the band toward the extreme —
+                   the screenshot pattern; the strategy-facing signal.
+    INVALIDATED    Price closed beyond the leg origin (the 1.0).
+    EXPIRED        Zone aged out (zoneExpiryBars completed 30m bars) untagged.
+    HTF bias       BULLISH/BEARISH/NEUTRAL from 15m/30m structure
+                   (HtfTrendAnalyzer); gate M2's input.
+    PDH / PDL      Previous Day High / Low — highest-significance raid levels.
+    Raid score     1–10 quality of a liquidity sweep (RaidQualityScorer);
+                   gate M4 compares it to the instrument minimum / scalp floor.
+    M1–M9          The sequential mandatory gates in
+                   MandatoryConfluenceValidator (instrument, bias, killzone,
+                   sweep+score, displacement+FVG, MSS, OTE geometry+RR,
+                   size, clean-diagnostics).
+    Warm           /api/chart reports warm=true when >= ~1500 one-minute bars
+                   have been ingested — the precondition for honest gating.
+
+  CLI QUICK REFERENCE
+    Build engine        cd trading-engine && ./gradlew clean build
+    Build API           cd api-backend && ./gradlew clean build
+    Run tests           cd trading-engine && ./gradlew test
+    One test class      ./gradlew test --tests "com.topstep.trading.chart.ChartEngineOteLifecycleTest"
+    Boot API/engine     cd api-backend && ./gradlew bootRun
+    Chart check         curl http://localhost:8080/api/chart/MNQ?lookback=50
+    Setup/gates check   curl http://localhost:8080/api/setup
+    Status check        curl http://localhost:8080/api/status
+    Backfill depth      -Dbackfill.days=3        (clamped 1..7)
+    Scalp floor         -Dscalp.minRaidScore=5   (recommended until raid
+                                                  scoring verified in logs)
+    Commit + push       git add -A && git commit -m "agent-NN-v1: ..." && git push origin main
+    Verify push         git log --oneline -1 && git status
+
+================================================================================
+SECTION 6 — CLOSING BANNER
+================================================================================
+
+  You have your orders. Return to the GOLDEN LOOP now:
+
+    STEP 1: open this document.
+    STEP 2: find the first agent that is not ✅ COMPLETE.
+    STEP 3: execute it fully. Evidence, ledger, Appendix A, commit, push.
+    STEP 4: return to STEP 1.
+
+  After every agent is done and fully working, return to this master
+  document and follow the next task. Repeat until every agent in the
+  PROGRESS LEDGER is ✅ COMPLETE and Agent 12 has passed with evidence.
+  You do NOT stop and wait between agents. The only acceptable stopping
+  condition is: ALL 12 agents complete AND the final verification passed.
+
+  The end state, one more time: a bot that boots, backfills 3 days in
+  seconds, holds the same 30m chart TopstepX shows, draws the OTE on the
+  real leg, names its blocking gate out loud every 15 minutes, can never
+  fire an order from replayed history — and is finally in a position to
+  trade for honest reasons.
+
+  DO NOT STOP UNTIL EVERY AGENT IS ✅.
+
+================================================================================
+                              END OF MASTER PROMPT
+================================================================================
