@@ -195,7 +195,7 @@ SECTION 2 — PROGRESS LEDGER
   Status markers:  ⬜ NOT STARTED   🔄 IN PROGRESS   ✅ COMPLETE   ⛔ BLOCKED
 
   [✅] Agent 01 — V1 Re-Verification Sweep (Q1/Q2/Q3) + Baseline Builds
-  [⬜] Agent 02 — SIM Warm Boot: Synthetic Backfill Through the Listener Path
+  [✅] Agent 02 — SIM Warm Boot: Synthetic Backfill Through the Listener Path
   [⬜] Agent 03 — Dashboard Bot Chart (Physical Candles + OTE Overlay + Warm Pill)
   [⬜] Agent 04 — Bias Stability: NEUTRAL-Flip Hysteresis (Config-Gated)
   [⬜] Agent 05 — Per-Instrument Chart Tuning + Leg Telemetry
@@ -208,6 +208,10 @@ SECTION 2 — PROGRESS LEDGER
               npm build 2.87s/0 TS errors), V-OK1..7 re-proven with exact
               lines, warmup+chart tests re-RUN green, V-GAP1..6 confirmed,
               Q2/Q3 sweeps clean. V2 doc committed via PR.
+  2026-07-09  Agent 02 ✅  SimWarmBoot delivers 4320 seeded synthetic 1m
+              bars/symbol through the listener before ticks; SIM warm=true
+              in ~15s of boot AND after stop->start (PROOF-4 closed); SIM
+              gets warmup layers 1+2; 440 tests green (5 new).
   ------------------------------------------------------------------
 
 ================================================================================
@@ -856,22 +860,68 @@ a block empty for an agent marked ✅.
     - none
 
 ··· APPENDIX A-02 — Agent 02: SIM Warm Boot ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-09
+  PR NUMBER:         (feat/agent-02-sim-warm-boot — number recorded in the
+                      ledger note after merge)
   COMMIT HASH:       (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - Generator inside the SIM boundary: NEW connector/SimWarmBoot.java —
+      pure + seeded + deterministic; honors backfill.days (clampDays [1,7],
+      default 3) and sim.backfill.seed (default 42); STRUCTURED day shape
+      (anchorOffset: accumulation → London push → 70% retrace into the OTE
+      band → multi-hour NY leg → 45% retrace → drift) with session-scaled
+      volatility; amplitude = 0.4% of base (>= 40-tick legs on all three
+      micros); final close anchored to base price. Only MockConnector
+      calls it — the LIVE path never touches it.
+    - Same delivery path + watermark: MockConnector.subscribeMarketData
+      replays oldest→newest via listener.onCandle BEFORE the tick
+      scheduler is registered; warmBootedSymbols guard (once per symbol
+      per connector); lastEmittedTs watermark set from the last replayed
+      bar; generateMockCandle DROPS any tick not strictly after the
+      watermark (never duplicate/backwards); currentPrices updated to the
+      last synthetic close (seamless continuation); virtualTime seeded
+      from the watermark so virtual-clock acceleration stays coherent.
+    - SIM boot proof (:8090 stack):
+        "[SimWarmBoot] MNQ: delivered 4320 SYNTHETIC 1m bars (3 days,
+         seed=42). Chart memory is warm." (MGC and MES identical)
+        "✓ SIM warmup complete — synthetic replay done, strategy signals
+         live"
+        /api/chart/MNQ -> warm=true, barsIngested1m=4324;
+        /api/chart/MGC -> warm=true, bars=4324 — ~15s after the start
+        call (3 x 4320 candles stream through the full strategy stack).
+    - Restart proof (V1 PROOF-4 CLOSED): stop -> STOPPED -> start ->
+      post-restart /api/chart/MNQ warm=true bars=4321.
+    - Warmup suppression: SimEngineRunner now mirrors LIVE layers 1+2
+      (warmupComplete set only after subscriptions+replay return;
+      WarmupGuard.createdDuringWarmup for async-dequeued replay-era
+      signals) at the top of handleStrategySignal with "[Warmup] SIM:
+      suppressing ..." lines; the shared predicate is covered by
+      WarmupGuardTest; no replay-era signal fired naturally in the proofs.
+    - Tests a–d: SimWarmBootTest (5 tests): element-wise determinism +
+      different-seed-differs; clock-aligned strictly-ascending 1m series
+      ending before the tick era + base anchor; 3-day replay warms a
+      ChartEngine >=1500 bars AND forms >=1 OTE zone; property
+      clamps/defaults; MockConnector history-then-ticks with every tick
+      strictly after the watermark. Full suite: 440 tests, 0 failures.
+    - QUICK_START "STARTUP & WARMTH" extended (SIM warm boot paragraph +
+      backfill.days / sim.backfill.seed / sim.warmBoot).
   Q1/Q2/Q3 ANSWERS (where the agent requires them):
-    - Q1: (evidence)   Q2: (sweep results)   Q3: (triggers found/filed)
+    - Q1: LIVE backfill untouched (SIM boundary only). Q2: no other
+      cold-boot surface (BACKTEST loads CSVs by design, per A-01).
+      Q3: the replay-signal trigger class is now closed in SIM too
+      (was LIVE-only).
   ADAPTATIONS MADE (anchors drifted? code adapted? why):
-    - (exact change + reason, or "none")
+    - SIM mirrors warmup layers 1+2 but deliberately NOT layer 3
+      (wall-clock staleness): virtual-clock acceleration stamps
+      non-wall-clock candle times, which would suppress every signal in
+      accelerated runs. Documented in the SimEngineRunner field javadoc.
+      Added -Dsim.warmBoot=false escape hatch for cold-path testing.
   REGRESSIONS FOUND & FIXED:
-    - (what broke, how fixed, fixup PR number, or "none")
+    - none in the repo. (Proof note: first attempt collided with the
+      owner's overnight bootRun holding :8080; re-ran cleanly on :8090.)
   BLOCKED ITEMS (⛔ only):
-    - (exact owner action required, or "none")
+    - none
 
 ··· APPENDIX A-03 — Agent 03: Dashboard Bot Chart + Warm Pill ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)

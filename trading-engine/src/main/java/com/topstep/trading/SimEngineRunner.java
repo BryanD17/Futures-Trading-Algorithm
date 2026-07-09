@@ -81,6 +81,19 @@ public class SimEngineRunner {
     private final AtomicBoolean paused = new AtomicBoolean(false);
     private final CountDownLatch shutdownLatch = new CountDownLatch(1);
 
+    // ── WARMUP GUARD (SIM mirror of LiveEngineRunner's layers 1+2) ──────
+    // The SIM warm boot replays days of synthetic history through the same
+    // candle path as live-sim ticks; a replay-era candle could satisfy every
+    // gate and emit a signal for a price from "yesterday". Layer 1: nothing
+    // trades until every subscription (and its synchronous warm boot) has
+    // returned. Layer 2: the EventBus is async, so signals CREATED during
+    // the warm boot are suppressed even when dequeued after it. Layer 3
+    // (wall-clock staleness) is deliberately NOT mirrored here: the mock's
+    // virtual-clock acceleration stamps non-wall-clock times, which would
+    // suppress every signal in accelerated SIM runs.
+    private volatile boolean warmupComplete = false;
+    private volatile java.time.Instant warmupCompletedAt = null;
+
     /**
      * Create a new SIM engine with default Topstep 50K configuration.
      * The RiskLimits profile is selected by ScalpConfig: legacy topstep50k()
@@ -196,6 +209,12 @@ public class SimEngineRunner {
                 connector.subscribeMarketData(DEFAULT_SYMBOL, this::onMarketData);
                 subscribedSymbols = DEFAULT_SYMBOL;
             }
+
+            // All subscriptions have returned — the synchronous SIM warm
+            // boot (synthetic backfill) is finished. Signals may now trade.
+            warmupCompletedAt = java.time.Instant.now();
+            warmupComplete = true;
+            System.out.println("✓ SIM warmup complete — synthetic replay done, strategy signals live");
 
             running.set(true);
 
@@ -328,6 +347,23 @@ public class SimEngineRunner {
      * Handle strategy signal event.
      */
     private void handleStrategySignal(StrategySignalEvent signal) {
+        // ── WARMUP GUARD layer 1 (SIM): nothing trades until every
+        // subscription (and its synchronous synthetic warm boot) returned.
+        if (!warmupComplete) {
+            System.out.println("[Warmup] SIM: suppressing signal during warm-boot replay: "
+                + signal.getSignalType() + " " + signal.getSymbol());
+            return;
+        }
+
+        // ── layer 2 (SIM): the EventBus is async — a signal CREATED during
+        // the warm boot can be dequeued after the flag flipped.
+        if (WarmupGuard.createdDuringWarmup(signal.getTimestamp(), warmupCompletedAt)) {
+            System.out.println("[Warmup] SIM: suppressing signal created during warm-boot replay: "
+                + signal.getSignalType() + " " + signal.getSymbol()
+                + " (created=" + signal.getTimestamp() + ")");
+            return;
+        }
+
         if (paused.get()) {
             System.out.println("\n⏸ Signal ignored (paused): " + signal.getReason());
             return;

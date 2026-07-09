@@ -176,6 +176,23 @@ to cost.
   replayed history can NEVER fire a real order (look for `[Warmup]
   Suppressing signal ...` lines during startup).
 
+**SIM warm boot (V2):** SIM now boots warm exactly like LIVE does — the
+MockConnector replays **N days of SYNTHETIC, seeded 1m history** through
+the same listener path before the first live-sim tick, so `/api/chart`
+reports `warm=true` within seconds of a SIM start (and after every SIM
+restart). The synthetic path is structured (session-scaled volatility,
+one multi-hour leg + retraces per day) so the ChartEngine forms real OTE
+zones during replay.
+
+- `-Dbackfill.days=N` — same depth + clamp `[1,7]` as LIVE (default 3).
+- `-Dsim.backfill.seed=42` — RNG seed; same seed = identical SIM history
+  (reproducible sessions). Default 42.
+- `-Dsim.warmBoot=false` — restore the old cold boot if you need it.
+- The log line: `[SimWarmBoot] MNQ: delivered 4320 SYNTHETIC 1m bars
+  (3 days, seed=42). Chart memory is warm.` followed by `✓ SIM warmup
+  complete`. SIM mirrors the LIVE warmup guard (layers 1+2), so no signal
+  created during the replay can ever place a SIM order.
+
 ## READING THE GATES (why is it not trading?)
 
 Every completed 15m bar, each instrument prints one line:
