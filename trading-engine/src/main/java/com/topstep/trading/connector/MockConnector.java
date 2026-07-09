@@ -34,6 +34,23 @@ public class MockConnector implements TradingConnector {
             Long.getLong("mock.virtualMinutes", 2000L);
     private final Map<String, Instant> virtualTime = new ConcurrentHashMap<>();
 
+    // ── SIM WARM BOOT (V2 Agent 02) ─────────────────────────────────────
+    // SIM boots WARM like LIVE does: N days of SYNTHETIC 1m history
+    // (SimWarmBoot, seeded + deterministic) replayed through the SAME
+    // listener path before the first live-sim tick. -Dsim.warmBoot=false
+    // restores the old cold boot (used by tests that need the cold path).
+    private static final boolean WARM_BOOT =
+            !"false".equalsIgnoreCase(System.getProperty("sim.warmBoot", "true"));
+    /** Symbols already warm-booted — a re-subscription must not replay twice. */
+    private final java.util.Set<String> warmBootedSymbols = ConcurrentHashMap.newKeySet();
+    /**
+     * Watermark of the last candle timestamp emitted per symbol (warm boot
+     * or tick). Live-sim ticks are dropped rather than ever emitting a
+     * duplicate or backwards timestamp — mirrors HistoricalBackfill's
+     * de-dup discipline.
+     */
+    private final Map<String, Instant> lastEmittedTs = new ConcurrentHashMap<>();
+
     private boolean connected;
     private final Map<String, MarketDataListener> marketDataListeners;
     private final Map<String, OrderListener> orderListeners;
@@ -94,6 +111,40 @@ public class MockConnector implements TradingConnector {
 
         marketDataListeners.put(symbol, listener);
         logger.info("Subscribed to market data for symbol: {}", symbol);
+
+        // ── SIM WARM BOOT: replay synthetic history through the SAME
+        // listener the ticks below use, oldest → newest, BEFORE the first
+        // live-sim tick. Runs once per symbol per connector instance.
+        if (WARM_BOOT && warmBootedSymbols.add(symbol)) {
+            int days = SimWarmBoot.configuredDays();
+            long seed = SimWarmBoot.configuredSeed();
+            java.util.List<Candle> history = SimWarmBoot.generate(
+                    symbol,
+                    currentPrices.getOrDefault(symbol, 5000.0),
+                    days, seed, Instant.now());
+            Instant watermark = null;
+            int delivered = 0;
+            for (Candle c : history) {
+                // Strict ascending replay (generator guarantees it; the
+                // check keeps the discipline explicit and future-proof).
+                if (watermark != null && !c.getTimestamp().isAfter(watermark)) {
+                    continue;
+                }
+                listener.onCandle(c);
+                watermark = c.getTimestamp();
+                delivered++;
+            }
+            if (watermark != null) {
+                lastEmittedTs.put(symbol, watermark);
+                // Ticks continue seamlessly from the last backfilled close.
+                currentPrices.put(symbol, history.get(history.size() - 1).getClose());
+                // Virtual-clock acceleration (if on) continues the SAME
+                // timeline instead of jumping backwards.
+                virtualTime.put(symbol, watermark);
+            }
+            logger.info("[SimWarmBoot] {}: delivered {} SYNTHETIC 1m bars ({} days, seed={}). Chart memory is warm.",
+                    symbol, delivered, days, seed);
+        }
 
         // Start generating mock candles (default: every 5 seconds; see the
         // test-profile acceleration properties at the top of the class)
@@ -188,6 +239,15 @@ public class MockConnector implements TradingConnector {
             } else {
                 ts = Instant.now();
             }
+
+            // Watermark: a live-sim tick must never emit a duplicate or
+            // backwards timestamp relative to the warm boot (or a prior
+            // tick). Drop the tick instead — the next one advances.
+            Instant watermark = lastEmittedTs.get(symbol);
+            if (watermark != null && !ts.isAfter(watermark)) {
+                return;
+            }
+            lastEmittedTs.put(symbol, ts);
 
             Candle candle = new Candle(
                     symbol,
