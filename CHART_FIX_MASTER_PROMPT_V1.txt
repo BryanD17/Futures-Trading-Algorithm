@@ -176,7 +176,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 05 — ChartEngine Package (Chart-In-Memory + 30m OTE)
   [✅] Agent 06 — Wire ChartEngine into LiveEngineRunner + EngineFacade
   [✅] Agent 07 — API: GET /api/chart/{symbol} (ChartStateController)
-  [⬜] Agent 08 — Gate Telemetry: state + lastGateFailed Every 15m Bar
+  [✅] Agent 08 — Gate Telemetry: state + lastGateFailed Every 15m Bar
   [⬜] Agent 09 — Config Corrections + Documentation Updates
   [⬜] Agent 10 — Unit Tests for Every New Component
   [⬜] Agent 11 — SIM End-to-End Verification (Warm Chart Proven)
@@ -210,6 +210,9 @@ SECTION 2 — PROGRESS LEDGER
   2026-07-08  Agent 07 ✅  /api/chart/{symbol} live; booted the API and
               curled it — 200 with the exact JSON contract (warm=false
               empty shape pre-engine). CORS covers /** already.
+  2026-07-08  Agent 08 ✅  [GATES] line per completed 15m bar (state, bias,
+              lastGateFailed, kzActive, chart30mOte); /api/setup already
+              exposes state + lastGateFailed. Both builds green.
   ------------------------------------------------------------------
 
 ================================================================================
@@ -1884,20 +1887,37 @@ an agent marked ✅.
     - none
 
 ··· APPENDIX A-08 — Agent 08: Gate Telemetry ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  COMMIT HASH:       (from git log --oneline -1 after the push)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-08
+  COMMIT HASH:       (agent-08-v1 commit — see git log)
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - criterion 3:   (file:line / pasted output)
-    - (continue one line per criterion — every box in the agent)
+    - One [GATES <symbol>] line per completed 15m bar: added in
+      StdvOteRunnerStrategy.onCandle step "6b. GATE TELEMETRY", gated on
+      completedHtf.containsKey(Timeframe.M15) (the exact branch the doc
+      named), placed AFTER the step-6 bias hook so the line reflects the
+      bias the just-closed bar produced. System.out used — matches this
+      file's existing logging convention (B3).
+    - Line includes state, bias, lastGateFailed, killzone:
+      "[GATES <sym>] state=<ctx.state> bias=<ctx.htfBias>
+       lastGateFailed=<ctx.lastGateFailed> kzActive=<killzoneActive>
+       chart30mOte=<STATE/BULL|BEAR or NONE>".
+    - OTE state included DIRECTLY: Agent 06's setter-injected chartEngine
+      reference is already available in this class (null-guarded; "NONE"
+      when unset or no active zone) — no new coupling introduced, so the
+      documented fallback placement was not needed.
+    - /api/setup returns both fields: SetupController.java:160 (state in
+      the DTO record) / :191 (ctx.state.name()), :183 (lastGateFailed) /
+      :209 (ctx.lastGateFailed) — present before this agent, no change.
+    - Builds: :trading-engine:build + :api-backend:build ->
+      "BUILD SUCCESSFUL in 34s, 15 actionable tasks" (tests green).
   ADAPTATIONS MADE (embedded code changed? anchors drifted?):
-    - (exact change + compiler/API reason, or "none")
+    - The doc's snippet suggested SetupContext ctx = core.getSetupContext()
+      at the M15 branch; the method already holds ctx at that point
+      (obtained at step 5), so the existing local is used.
   REGRESSIONS FOUND & FIXED:
-    - (what broke, how fixed, fixup commit hash, or "none")
+    - none
   BLOCKED ITEMS (⛔ only):
-    - (exact owner action required, or "none")
+    - none
 
 ··· APPENDIX A-09 — Agent 09: Config Corrections + Documentation ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)

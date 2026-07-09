@@ -475,6 +475,25 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             }
         }
 
+        // 6b. GATE TELEMETRY — one line per completed 15m bar so "why is it
+        // not trading" is answerable from the log in one glance (the same
+        // fields /api/setup serves). Placed after the bias hook so the line
+        // reflects the bias this bar just produced.
+        if (completedHtf.containsKey(Timeframe.M15)) {
+            String oteState = "NONE";
+            com.topstep.trading.chart.ChartEngine ce = chartEngine;
+            if (ce != null) {
+                oteState = ce.getActiveOteZone(symbol)
+                        .map(z -> z.state().name() + (z.bullish() ? "/BULL" : "/BEAR"))
+                        .orElse("NONE");
+            }
+            System.out.println("[GATES " + symbol + "] state=" + ctx.state
+                    + " bias=" + ctx.htfBias
+                    + " lastGateFailed=" + ctx.lastGateFailed
+                    + " kzActive=" + killzoneActive
+                    + " chart30mOte=" + oteState);
+        }
+
         // 7. SMT state for the context (informational, doesn't gate).
         ctx.smtState = hasSmt ? "DIVERGENT" : "NEUTRAL";
 
