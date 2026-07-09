@@ -195,6 +195,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private boolean primeKillzoneNow;
     /** Timestamp of the candle being processed (candle time, not wall clock). */
     private Instant lastCandleInstant;
+
+    /** V2 Agent 06: identity (taggedAt) of the last REACTED zone already
+     *  counted as chartReacted_machineSilent — one count per zone. */
+    private Instant lastChartOnlyZoneTag;
     /** Buffer-based sizer, wired in scalp mode when account state is available. */
     private final StdvOteSizer sizer = new StdvOteSizer();
     private final double sizerSafetyCushion;
@@ -509,17 +513,36 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // reflects the bias this bar just produced.
         if (completedHtf.containsKey(Timeframe.M15)) {
             String oteState = "NONE";
+            OteAgreementStats stats = OteAgreementStats.forSymbol(symbol);
             com.topstep.trading.chart.ChartEngine ce = chartEngine;
             if (ce != null) {
-                oteState = ce.getActiveOteZone(symbol)
+                java.util.Optional<com.topstep.trading.chart.OteZoneSnapshot> zone =
+                        ce.getActiveOteZone(symbol);
+                oteState = zone
                         .map(z -> z.state().name() + (z.bullish() ? "/BULL" : "/BEAR"))
                         .orElse("NONE");
+                // V2 Agent 06: chart REACTED while the machine is silent
+                // (no armed setup) — counted ONCE per zone (identity =
+                // taggedAt), sampled on the 15m tick. Counting only.
+                if (zone.isPresent()
+                        && zone.get().state() == com.topstep.trading.chart.OteState.REACTED
+                        && zone.get().taggedAt() != null
+                        && !zone.get().taggedAt().equals(lastChartOnlyZoneTag)
+                        && ctx.state != SetupState.OTE_ARMED
+                        && ctx.state != SetupState.IN_TRADE
+                        && ctx.state != SetupState.MANAGING) {
+                    lastChartOnlyZoneTag = zone.get().taggedAt();
+                    stats.recordChartReactedMachineSilent(candle.getTimestamp());
+                }
             }
+            // Append-only format: existing fields keep their names/order;
+            // the oteStats rollup is appended at the end (V2 Agent 06).
             System.out.println("[GATES " + symbol + "] state=" + ctx.state
                     + " bias=" + ctx.htfBias
                     + " lastGateFailed=" + ctx.lastGateFailed
                     + " kzActive=" + killzoneActive
-                    + " chart30mOte=" + oteState);
+                    + " chart30mOte=" + oteState
+                    + " " + stats.rollup());
         }
 
         // 7. SMT state for the context (informational, doesn't gate).
@@ -581,7 +604,21 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 core.setNearestOpposingLiquidity(
                         nearestOpposingLiquidity(candle.getClose()));
             }
+            // V2 Agent 06: capture the chart verdict BEFORE the emission
+            // attempt so the agreement count reflects what the 30m chart
+            // said at decision time. COUNTING ONLY — nothing gates on it.
+            boolean chartAgreedAtEmission = chartEngine != null
+                    && lastBias != MarketBias.NEUTRAL
+                    && chartEngine.hasReactedOte(symbol, lastBias == MarketBias.BULLISH);
             tryEmitOrder(context);
+            if (ctx.state == SetupState.IN_TRADE) {
+                OteAgreementStats stats = OteAgreementStats.forSymbol(symbol);
+                if (chartAgreedAtEmission) {
+                    stats.recordMachineEmittedChartAgreed(candle.getTimestamp());
+                } else {
+                    stats.recordMachineEmittedChartDisagreed(candle.getTimestamp());
+                }
+            }
         }
 
         // Remember the state for INVALIDATED-transition detection (SA4).

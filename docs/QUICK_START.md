@@ -247,6 +247,27 @@ invariant, tested:** entries NEVER fire while the live bias evaluation is
 NEUTRAL — grace preserves progress, not entry permission. If you ever
 see an entry during NEUTRAL, kill the engine and file it.
 
+### OTE AGREEMENT COUNTERS — the adoption playbook (V2)
+
+`/api/chart/{symbol}` now carries an `oteStats` object and the `[GATES]`
+line ends with `oteAgree=X oteDisagree=Y chartOnly=Z` (session-scoped,
+not persisted; counting only — NOTHING gates on these numbers):
+
+- `machineEmitted_chartAgreed` — the machine entered while the 30m chart
+  showed REACTED in the same direction.
+- `machineEmitted_chartDisagreed` — the machine entered without the
+  chart pattern.
+- `chartReacted_machineSilent` — the 30m chart found the screenshot
+  pattern while the machine had no armed setup (counted once per zone).
+
+Run several SIM/LIVE-observation sessions and read the counts:
+agreement dominating → gating on `hasReactedOte` would add little;
+`chartReacted_machineSilent` dominating while setups keep dying to
+invalidations → first fix upstream fragility (enable bias hysteresis per
+the section above), THEN revisit whether `hasReactedOte` should become a
+gate — that change is a separate, owner-approved plan with its own
+backtest and PR. Neither switch happens automatically.
+
 ### TUNING THE BOT CHART (V2 — per-instrument leg thresholds)
 
 The ChartEngine's leg-significance floor is now per-instrument (defaults
