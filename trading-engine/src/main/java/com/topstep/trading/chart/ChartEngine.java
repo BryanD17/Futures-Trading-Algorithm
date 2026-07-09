@@ -187,7 +187,7 @@ public final class ChartEngine {
     public ChartSnapshot snapshot(String symbol, int lookback30m) {
         SymbolChart chart = charts.get(symbol);
         if (chart == null) {
-            return new ChartSnapshot(symbol, List.of(), null, 0, null);
+            return new ChartSnapshot(symbol, List.of(), null, 0, null, null);
         }
         synchronized (chart) {
             List<Candle> bars30 = get30mCandles(symbol, lookback30m);
@@ -196,7 +196,11 @@ public final class ChartEngine {
                     bars30,
                     chart.activeZone,
                     chart.oneMinuteCount,
-                    chart.lastCandleTime);
+                    chart.lastCandleTime,
+                    // The forming 30m bar — display-only, so the Bot Chart's
+                    // right edge matches the broker chart. Swing/fractal
+                    // analysis never sees it (confirmed bars only).
+                    chart.bars.getInProgressCandle(Timeframe.M30));
         }
     }
 

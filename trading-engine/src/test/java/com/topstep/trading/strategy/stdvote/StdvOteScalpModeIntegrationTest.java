@@ -44,11 +44,15 @@ class StdvOteScalpModeIntegrationTest {
     @BeforeEach
     void enableScalpMode() {
         System.setProperty(ScalpConfig.ENABLED_PROPERTY, "true");
+        // Fixture encodes 1m entry anatomy — pin the detector timeframe
+        // (LIVE default is 5m, field fix 2026-07-09).
+        System.setProperty("stdvote.detectorTimeframe", "1");
     }
 
     @AfterEach
     void cleanup() {
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
+        System.clearProperty("stdvote.detectorTimeframe");
         StdvOteRegistry.unregister(StdvOteScalpFixture.SYMBOL);
     }
 

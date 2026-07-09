@@ -45,9 +45,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("StdvOteDeterminismTest (two fresh runs — identical output)")
 class StdvOteDeterminismTest {
 
+    @org.junit.jupiter.api.BeforeEach
+    void pinDetectorTimeframe() {
+        // The fixtures encode 1m entry anatomy (displacement/FVG/MSS built
+        // candle-by-candle at 1m) — pin the detector timeframe so this
+        // suite keeps testing the wiring. LIVE default is 5m (field fix
+        // 2026-07-09).
+        System.setProperty("stdvote.detectorTimeframe", "1");
+    }
+
     @AfterEach
     void cleanup() {
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
+        System.clearProperty("stdvote.detectorTimeframe");
         StdvOteRegistry.unregister(StdvOteGoldenFixture.SYMBOL);
     }
 

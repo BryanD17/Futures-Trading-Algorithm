@@ -45,7 +45,7 @@ public class ChartStateController {
         int safeLookback = Math.min(Math.max(lookback, 1), 2000);
         ChartSnapshot snap = engine.getChartEngine().snapshot(symbol.toUpperCase(), safeLookback);
 
-        List<Map<String, Object>> candles = new ArrayList<>(snap.candles30m().size());
+        List<Map<String, Object>> candles = new ArrayList<>(snap.candles30m().size() + 1);
         for (Candle c : snap.candles30m()) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("t", c.getTimestamp().toString());
@@ -54,6 +54,22 @@ public class ChartStateController {
             m.put("l", c.getLow());
             m.put("c", c.getClose());
             m.put("v", c.getVolume());
+            candles.add(m);
+        }
+        // The FORMING 30m bar (2026-07-09): appended so the chart's right
+        // edge matches the broker's live bar instead of lagging up to 30
+        // minutes. Marked partial; display-only (the engine's swing
+        // analysis only ever sees confirmed bars).
+        if (snap.partial30m() != null) {
+            Candle p = snap.partial30m();
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("t", p.getTimestamp().toString());
+            m.put("o", p.getOpen());
+            m.put("h", p.getHigh());
+            m.put("l", p.getLow());
+            m.put("c", p.getClose());
+            m.put("v", p.getVolume());
+            m.put("partial", true);
             candles.add(m);
         }
 

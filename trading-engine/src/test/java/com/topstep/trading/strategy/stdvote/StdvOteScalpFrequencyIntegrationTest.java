@@ -54,12 +54,16 @@ class StdvOteScalpFrequencyIntegrationTest {
         // to 1.0 so the assertions keep testing the base sizing math.
         // ScalpAllSessionsTest covers the boost.
         System.setProperty(ScalpConfig.KILLZONE_SIZE_BOOST_PROPERTY, "1.0");
+        // Fixture acts encode 1m entry anatomy — pin the detector timeframe
+        // (LIVE default is 5m, field fix 2026-07-09).
+        System.setProperty("stdvote.detectorTimeframe", "1");
     }
 
     @AfterEach
     void cleanup() {
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
         System.clearProperty(ScalpConfig.KILLZONE_SIZE_BOOST_PROPERTY);
+        System.clearProperty("stdvote.detectorTimeframe");
         System.clearProperty(ScalpConfig.MIN_RAID_SCORE_PROPERTY);
         System.clearProperty(ScalpConfig.REARM_COOLDOWN_BARS_PROPERTY);
         StdvOteRegistry.unregister(StdvOteScalpFrequencyFixture.SYMBOL);

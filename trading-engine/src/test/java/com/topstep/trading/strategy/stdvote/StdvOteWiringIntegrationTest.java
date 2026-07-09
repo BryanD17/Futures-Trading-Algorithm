@@ -60,10 +60,18 @@ class StdvOteWiringIntegrationTest {
     private static final Instant WARMUP_START = Instant.parse("2026-06-15T12:00:00Z");
     private static final Instant KILLZONE_OPEN = Instant.parse("2026-06-15T13:45:00Z");
 
+    @org.junit.jupiter.api.BeforeEach
+    void pinDetectorTimeframe() {
+        // The SA5 fixture encodes 1m entry anatomy — pin the detector
+        // timeframe (LIVE default is 5m, field fix 2026-07-09).
+        System.setProperty("stdvote.detectorTimeframe", "1");
+    }
+
     @AfterEach
     void cleanupRegistry() {
         StdvOteRegistry.unregister(SYMBOL);
         System.clearProperty(StdvOteRunnerStrategy.STOP_BUFFER_TICKS_PROPERTY);
+        System.clearProperty("stdvote.detectorTimeframe");
     }
 
     // ──────────────────────────────────────────────────────────────────────
