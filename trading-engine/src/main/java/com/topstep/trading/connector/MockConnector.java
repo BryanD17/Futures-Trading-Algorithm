@@ -16,6 +16,24 @@ import java.util.concurrent.*;
 public class MockConnector implements TradingConnector {
     private static final Logger logger = LoggerFactory.getLogger(MockConnector.class);
 
+    // ── TEST-PROFILE ACCELERATION (SIM verification, Agent 11) ──────────
+    // Defaults preserve the historical behavior exactly (one wall-clock
+    // stamped candle every 5s). For fast end-to-end SIM proof runs:
+    //   -Dmock.candleIntervalMs=25   emit a candle every 25ms
+    //   -Dmock.virtualClock=true     stamp candles on a virtual timeline
+    //                                advancing 1 MINUTE per candle so the
+    //                                15m/30m aggregators complete bars as
+    //                                if real 1m data streamed in
+    //   -Dmock.virtualMinutes=2000   how far in the past the virtual
+    //                                timeline starts (default 2000 min)
+    private static final long CANDLE_INTERVAL_MS =
+            Long.getLong("mock.candleIntervalMs", 5000L);
+    private static final boolean VIRTUAL_CLOCK =
+            Boolean.getBoolean("mock.virtualClock");
+    private static final long VIRTUAL_START_MINUTES =
+            Long.getLong("mock.virtualMinutes", 2000L);
+    private final Map<String, Instant> virtualTime = new ConcurrentHashMap<>();
+
     private boolean connected;
     private final Map<String, MarketDataListener> marketDataListeners;
     private final Map<String, OrderListener> orderListeners;
@@ -40,6 +58,10 @@ public class MockConnector implements TradingConnector {
         currentPrices.put("NQ", 17000.0);
         currentPrices.put("YM", 38000.0);
         currentPrices.put("RTY", 2000.0);
+        // Micros the STDV+OTE engine actually subscribes
+        currentPrices.put("MNQ", 20000.0);
+        currentPrices.put("MES", 5000.0);
+        currentPrices.put("MGC", 2400.0);
     }
 
     @Override
@@ -73,8 +95,10 @@ public class MockConnector implements TradingConnector {
         marketDataListeners.put(symbol, listener);
         logger.info("Subscribed to market data for symbol: {}", symbol);
 
-        // Start generating mock candles every 5 seconds
-        scheduler.scheduleAtFixedRate(() -> generateMockCandle(symbol), 0, 5, TimeUnit.SECONDS);
+        // Start generating mock candles (default: every 5 seconds; see the
+        // test-profile acceleration properties at the top of the class)
+        scheduler.scheduleAtFixedRate(() -> generateMockCandle(symbol),
+                0, CANDLE_INTERVAL_MS, TimeUnit.MILLISECONDS);
     }
 
     @Override
@@ -154,9 +178,20 @@ public class MockConnector implements TradingConnector {
             // Update current price
             currentPrices.put(symbol, close);
 
+            Instant ts;
+            if (VIRTUAL_CLOCK) {
+                // Virtual timeline: 1 minute per candle so HTF aggregation
+                // (15m/30m) completes bars under acceleration.
+                ts = virtualTime.merge(symbol,
+                        Instant.now().minus(java.time.Duration.ofMinutes(VIRTUAL_START_MINUTES)),
+                        (cur, seed) -> cur.plus(java.time.Duration.ofMinutes(1)));
+            } else {
+                ts = Instant.now();
+            }
+
             Candle candle = new Candle(
                     symbol,
-                    Instant.now(),
+                    ts,
                     open,
                     high,
                     low,
