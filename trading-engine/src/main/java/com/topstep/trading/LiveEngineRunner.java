@@ -119,6 +119,24 @@ public class LiveEngineRunner {
     // Track subscribed symbols for multi-instrument mode
     private final Set<String> subscribedSymbols = ConcurrentHashMap.newKeySet();
 
+    // ── WARMUP GUARD ────────────────────────────────────────────────────
+    // The startup backfill (HistoricalBackfill) replays days of history
+    // through the same candle path as live data. A historical candle inside
+    // a past killzone could satisfy every gate and emit a signal for a price
+    // from yesterday — that signal must NEVER become an order. Two layers:
+    //  1) warmupComplete: false until every initial subscription (and its
+    //     synchronous backfill) has returned in start().
+    //  2) lastCandleTs staleness: a signal whose symbol's most recent candle
+    //     is > 5 minutes behind wall-clock is replayed/stale data. This is
+    //     self-healing across reconnects and future replays.
+    // Because the EventBus dispatches asynchronously (queue + worker thread),
+    // a signal EMITTED during replay could be DEQUEUED after warmup ends —
+    // so signals created before warmupCompletedAt are also suppressed.
+    private final Map<String, Instant> lastCandleTs = new ConcurrentHashMap<>();
+    private volatile boolean warmupComplete = false;
+    private volatile Instant warmupCompletedAt = null;
+    private static final long STALE_SIGNAL_THRESHOLD_SECONDS = 5 * 60;
+
     // Killzone clock for stale order checking
     private final KillzoneClock killzoneClock = new KillzoneClock();
 
@@ -561,6 +579,13 @@ public class LiveEngineRunner {
                 System.out.println("✓ Subscribed to market data for " + SMT_SYMBOL + " (SMT)");
             }
 
+            // All initial subscriptions have returned — and the historical
+            // backfill runs synchronously inside startMarketDataPolling, so
+            // replay is finished. Real-time signals may now create orders.
+            warmupCompletedAt = Instant.now();
+            warmupComplete = true;
+            System.out.println("✓ Warmup complete — historical replay done, strategy signals live");
+
             // Schedule flatten-by-time check (every minute)
             scheduler.scheduleAtFixedRate(
                 this::checkFlattenByTime,
@@ -614,6 +639,10 @@ public class LiveEngineRunner {
         }
 
         try {
+            // Warmup guard: record the most recent candle timestamp per
+            // symbol BEFORE any strategy dispatch (staleness reference).
+            lastCandleTs.put(candle.getSymbol(), candle.getTimestamp());
+
             // Update context time
             strategyContext.setCurrentTime(candle.getTimestamp());
 
@@ -671,6 +700,36 @@ public class LiveEngineRunner {
      * Handle strategy signal event.
      */
     private void handleStrategySignal(StrategySignalEvent signal) {
+        // ── WARMUP GUARD layer 1: nothing trades until every initial
+        // subscription (and its synchronous historical backfill) returned.
+        if (!warmupComplete) {
+            System.out.println("[Warmup] Suppressing signal during startup warmup: "
+                + signal.getSignalType() + " " + signal.getSymbol());
+            return;
+        }
+
+        // The EventBus is async: a signal created during replay can be
+        // dequeued after the flag flipped. Suppress those too.
+        Instant completedAt = warmupCompletedAt;
+        if (completedAt != null && signal.getTimestamp().isBefore(completedAt)) {
+            System.out.println("[Warmup] Suppressing signal created during historical replay: "
+                + signal.getSignalType() + " " + signal.getSymbol()
+                + " (created=" + signal.getTimestamp() + ")");
+            return;
+        }
+
+        // ── WARMUP GUARD layer 2: staleness — if the most recent candle for
+        // this symbol is > 5 minutes behind wall-clock, the signal came from
+        // historical/replayed data and must not create an order.
+        Instant lastTs = lastCandleTs.get(signal.getSymbol());
+        if (lastTs == null
+                || lastTs.isBefore(Instant.now().minusSeconds(STALE_SIGNAL_THRESHOLD_SECONDS))) {
+            System.out.println("[Warmup] Suppressing signal from historical/stale data: "
+                + signal.getSignalType() + " " + signal.getSymbol()
+                + " (lastCandle=" + lastTs + ")");
+            return;
+        }
+
         if (paused.get() || killSwitchActive.get() || flatteningPositions.get()) {
             System.out.println("\n⏸ Signal ignored (paused/kill/flattening): " + signal.getReason());
             return;

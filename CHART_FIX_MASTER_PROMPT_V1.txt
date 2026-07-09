@@ -172,7 +172,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 01 — Pre-Flight Verification & Baseline Build
   [✅] Agent 02 — TopstepConnector: Extract fetchBarsRange(...)
   [✅] Agent 03 — HistoricalBackfill: 3-Day Startup Replay
-  [⬜] Agent 04 — LiveEngineRunner: Warmup Guard (No Ghost Orders)
+  [✅] Agent 04 — LiveEngineRunner: Warmup Guard (No Ghost Orders)
   [⬜] Agent 05 — ChartEngine Package (Chart-In-Memory + 30m OTE)
   [⬜] Agent 06 — Wire ChartEngine into LiveEngineRunner + EngineFacade
   [⬜] Agent 07 — API: GET /api/chart/{symbol} (ChartStateController)
@@ -195,6 +195,10 @@ SECTION 2 — PROGRESS LEDGER
   2026-07-08  Agent 03 ✅  HistoricalBackfill.java added byte-for-byte, wired
               into startMarketDataPolling before initial fetch, backfill.days
               clamped [1,7] default 3, per-symbol double-backfill guard,
+              build+tests green.
+  2026-07-08  Agent 04 ✅  three-layer warmup guard in handleStrategySignal
+              (warmupComplete flag, event-created-during-replay check for the
+              async EventBus, 5-min staleness), order-path trace complete,
               build+tests green.
   ------------------------------------------------------------------
 
@@ -1682,20 +1686,62 @@ an agent marked ✅.
     - none
 
 ··· APPENDIX A-04 — Agent 04: LiveEngineRunner: Warmup Guard ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  COMMIT HASH:       (from git log --oneline -1 after the push)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-08
+  COMMIT HASH:       (agent-04-v1 commit — see git log)
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - criterion 3:   (file:line / pasted output)
-    - (continue one line per criterion — every box in the agent)
+    - Staleness guard: LiveEngineRunner.java — lastCandleTs
+      (Map<String,Instant>, ConcurrentHashMap) updated as the FIRST
+      statement of onMarketData's try block, before executionEngine
+      .onNewCandle and all strategy dispatch; handleStrategySignal
+      suppresses when lastCandleTs.get(symbol) is null or older than
+      STALE_SIGNAL_THRESHOLD_SECONDS = 5*60 vs Instant.now().
+    - warmupComplete flag: volatile boolean, false until the subscription
+      if/else block in start() returns (backfills run synchronously inside
+      subscribeMarketData -> startMarketDataPolling), then set true just
+      before the schedulers are registered; checked FIRST in
+      handleStrategySignal.
+    - Suppression logs: "[Warmup] Suppressing signal during startup
+      warmup: <type> <symbol>", "[Warmup] Suppressing signal created
+      during historical replay: ... (created=...)", "[Warmup] Suppressing
+      signal from historical/stale data: ... (lastCandle=...)"; plus
+      "✓ Warmup complete — historical replay done, strategy signals live".
+    - ORDER-PATH TRACE (no other new-entry path from a historical candle):
+      grep of connector.submitOrder / submitStopOrder /
+      submitTakeProfitOrder across trading-engine main sources yields
+      EXACTLY 8 sites:
+        * LiveEngineRunner.java:870 — the ONLY LIVE entry submission,
+          inside handleStrategySignal (now triple-guarded).
+        * LiveEngineRunner.java:1527 — close order in the flatten path
+          (reduces/closes only; with no open position it is unreachable).
+        * BracketOrderManager.java:306/325/374/391 — protective stop/TP
+          legs created only when a bracket is created after an ENTRY FILL;
+          no bracket exists during replay (no orders were placed).
+        * BracketOrderManager.java:497/538 — breakeven stop replacement
+          (cancel+resubmit) for an EXISTING bracket only; the candle-driven
+          checkPriceBreakevenTrigger call in onMarketData is a no-op when
+          no bracket exists.
+      ExecutionEngine.onNewCandle manages fills/stops/targets of existing
+      orders and submits nothing to the connector (its submitOrder methods
+      are invoked only from the runner paths above; SimEngineRunner:318 /
+      BacktestRunner:195 / AbBacktestComparison:224 are SIM/backtest-only
+      paths using MockConnector, out of LIVE scope). Managing/closing
+      logic reacting to replayed prices with zero open positions is a
+      no-op — confirmed by the bracket-existence checks above.
+    - Build: :trading-engine:clean :trading-engine:build ->
+      "BUILD SUCCESSFUL in 23s, 9 actionable tasks" (tests green).
   ADAPTATIONS MADE (embedded code changed? anchors drifted?):
-    - (exact change + compiler/API reason, or "none")
+    - ADDED a third guard layer beyond the two specified: the EventBus is
+      ASYNCHRONOUS (queue + processing thread, EventBus.java:19-54), so a
+      signal emitted during replay can be dequeued after warmupComplete
+      flips true and after a fresh live candle updates lastCandleTs —
+      slipping past both specified layers. BaseEvent stamps creation time
+      (BaseEvent.java:16), so signals with getTimestamp() <
+      warmupCompletedAt are also suppressed. Strictly additive safety.
   REGRESSIONS FOUND & FIXED:
-    - (what broke, how fixed, fixup commit hash, or "none")
+    - none
   BLOCKED ITEMS (⛔ only):
-    - (exact owner action required, or "none")
+    - none
 
 ··· APPENDIX A-05 — Agent 05: ChartEngine Package ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)
