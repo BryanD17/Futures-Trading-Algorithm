@@ -199,7 +199,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 03 — Dashboard Bot Chart (Physical Candles + OTE Overlay + Warm Pill)
   [✅] Agent 04 — Bias Stability: NEUTRAL-Flip Hysteresis (Config-Gated)
   [✅] Agent 05 — Per-Instrument Chart Tuning + Leg Telemetry
-  [⬜] Agent 06 — OTE Agreement Counter (Data Path to Gate Adoption)
+  [✅] Agent 06 — OTE Agreement Counter (Data Path to Gate Adoption)
   [⬜] Agent 07 — FINAL VERIFICATION & CLOSE-OUT
 
   LEDGER NOTES (append one dated line per completion):
@@ -225,6 +225,10 @@ SECTION 2 — PROGRESS LEDGER
               et al., defaults preserved — pre-existing chart tests pass
               UNCHANGED), [CHART CFG] startup lines + deduped ACCEPTED/
               REJECTED leg telemetry proven on SIM; 449 tests green.
+  2026-07-09  Agent 06 ✅  OteAgreementStats (bounded ring 10, session-
+              scoped) wired: /api/chart oteStats (SIM showed chartOnly=20,
+              ring capped at 10 events) + [GATES] rollup; a natural [BIAS]
+              counterfactual fired in the same run. 453 tests green.
   ------------------------------------------------------------------
 
 ================================================================================
@@ -1142,22 +1146,62 @@ a block empty for an agent marked ✅.
     - none
 
 ··· APPENDIX A-06 — Agent 06: OTE Agreement Counter ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-09
+  PR NUMBER:         (feat/agent-06-ote-stats — number recorded post-merge)
   COMMIT HASH:       (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - Counter class: NEW stdvote/OteAgreementStats.java — thread-safe
+      (AtomicLong counts + monitor-guarded rings), bounded (RING_CAP=10),
+      JVM-static per-symbol registry (forSymbol). Javadoc states
+      explicitly: session-scoped, NOT durable, and COUNTS ONLY — nothing
+      gates on it (it deliberately survives in-app restarts so a day of
+      observation isn't erased).
+    - Buckets increment correctly: OteAgreementStatsTest (4 tests,
+      passing) — independent bucket increments + rollup string; ring
+      bounded at cap while the COUNT keeps rising (30 events -> ring 10,
+      count 30, most-recent retained); exact api-map contract shape;
+      per-symbol registry isolation.
+    - /api/chart carries oteStats — curl from the warm SIM stack:
+        "oteStats":{"machineEmitted_chartAgreed":0,
+          "machineEmitted_chartDisagreed":0,
+          "chartReacted_machineSilent":20,
+          "lastEvents":{"agreed":[],"disagreed":[],
+            "chartOnly":["2026-07-07T20:00:00Z",... 10 entries]}}
+      — chartOnly=20 with the ring correctly capped at 10 timestamps.
+    - [GATES] rollup (append-only; existing fields unchanged):
+        [GATES MGC] state=INVALIDATED bias=BEARISH lastGateFailed=HTF
+        bias became NEUTRAL kzActive=true chart30mOte=FORMING/BEAR
+        oteAgree=0 oteDisagree=0 chartOnly=9
+      (The same run also produced a NATURAL "[BIAS] NEUTRAL flip
+      invalidated setup (hysteresis OFF ...)" counterfactual — the
+      2026-07-09 failure pattern reproduced in SIM, now with the
+      evidence stream the owner needs.)
+    - No gating change: the increments live AFTER tryEmitOrder (verdict
+      captured before, counted only when state reached IN_TRADE) and in
+      the [GATES] telemetry block; emission logic, validators, and
+      PropFirmRiskEngine untouched (Agent 07's diff audit re-proves).
+    - Wiring: machineEmitted_* counted at the emission site in
+      StdvOteRunnerStrategy (chart verdict captured BEFORE tryEmitOrder);
+      chartReacted_machineSilent sampled on the 15m tick, ONCE per zone
+      (identity = taggedAt) while the machine is not armed/in-trade.
+      ChartStateController adds body.put("oteStats", ...toApiMap()).
+    - QUICK_START "OTE AGREEMENT COUNTERS — the adoption playbook" added.
+    - Full suite green: 453 tests, 0 failures (4 new).
   Q1/Q2/Q3 ANSWERS (where the agent requires them):
-    - Q1: (evidence)   Q2: (sweep results)   Q3: (triggers found/filed)
+    - Q1: log-only comparison unchanged and still fires. Q2: no other
+      unaggregated telemetry stream feeds an owner decision. Q3:
+      double-counting was the trigger class — zone-identity dedup
+      (taggedAt) prevents per-15m-bar recounting of one zone.
   ADAPTATIONS MADE (anchors drifted? code adapted? why):
-    - (exact change + reason, or "none")
+    - Stats registry is JVM-static rather than facade-registered: the
+      controller reads OteAgreementStats.forSymbol(symbol) directly —
+      fewer moving parts than plumbing through EngineFacade, same
+      read-only surface. Documented in the class javadoc.
   REGRESSIONS FOUND & FIXED:
-    - (what broke, how fixed, fixup PR number, or "none")
+    - none (453/453 green)
   BLOCKED ITEMS (⛔ only):
-    - (exact owner action required, or "none")
+    - none
 
 ··· APPENDIX A-07 — Agent 07: Final Verification & Close-Out ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)

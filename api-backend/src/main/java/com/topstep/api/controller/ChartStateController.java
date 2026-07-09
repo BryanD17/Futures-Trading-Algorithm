@@ -68,6 +68,11 @@ public class ChartStateController {
         // "Warm" = enough history for HTF bias + PDH/PDL + a real 30m leg.
         body.put("warm", snap.oneMinuteBarsIngested() >= 1500);
 
+        // V2 Agent 06: session-scoped machine-vs-chart30m agreement
+        // counters (read-only evidence stream — nothing gates on these).
+        body.put("oteStats", com.topstep.trading.strategy.stdvote
+                .OteAgreementStats.forSymbol(snap.symbol()).toApiMap());
+
         return ResponseEntity.ok(body);
     }
 }
