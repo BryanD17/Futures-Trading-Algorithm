@@ -1,0 +1,1559 @@
+================================================================================
+================================================================================
+
+   ██████╗██╗  ██╗ █████╗ ██████╗ ████████╗    ███████╗██╗██╗  ██╗
+  ██╔════╝██║  ██║██╔══██╗██╔══██╗╚══██╔══╝    ██╔════╝██║╚██╗██╔╝
+  ██║     ███████║███████║██████╔╝   ██║       █████╗  ██║ ╚███╔╝
+  ██║     ██╔══██║██╔══██║██╔══██╗   ██║       ██╔══╝  ██║ ██╔██╗
+  ╚██████╗██║  ██║██║  ██║██║  ██║   ██║       ██║     ██║██╔╝ ██╗
+   ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝       ╚═╝     ╚═╝╚═╝  ╚═╝
+
+      VERIFY V1 • CLOSE THE GAPS • BOT CHART • BIAS HYSTERESIS • SIM WARM BOOT
+                 MASTER VERIFICATION + ENHANCEMENT PROMPT — V2
+
+================================================================================
+================================================================================
+
+DOCUMENT NAME:    CHART_FIX_MASTER_PROMPT_V2.txt
+VERSION:          V2 (verification + enhancement)
+REPOSITORY:       https://github.com/BryanD17/Futures-Trading-Algorithm.git
+DEFAULT BRANCH:   Main   (CAPITAL M — confirmed in the V1 ledger; every PR in
+                  this document targets --base Main. Never assume "main".)
+PREDECESSOR:      CHART_FIX_MASTER_PROMPT_V1.txt (at the repo root, all 12 of
+                  its agents ✅ COMPLETE with a filled Appendix A). Keep V1 in
+                  the repo untouched — it is the historical record. THIS
+                  document's ledger is the only active one.
+TOTAL AGENTS:     7
+EXECUTED BY:      Claude Code, autonomously, agent by agent, via the
+                  GOLDEN LOOP below.
+
+CURRENT APP STATE (verified by an independent code audit on 2026-07-09):
+  V1's core is genuinely implemented and evidence-backed: historical
+  backfill, ChartEngine chart-in-memory, warmup guards (three layers),
+  /api/chart endpoint, [GATES] telemetry, tests, docs. HOWEVER:
+    1. V1 was executed from an older revision of the plan — the DASHBOARD
+       BOT CHART (physical chart view) and the BIAS HYSTERESIS fix were
+       added to the plan later and are ABSENT from this codebase.
+    2. The bias fragility is NOT theoretical: on 2026-07-09 the owner's
+       LIVE session passed gates M1–M4 (bias BULLISH, killzone OPEN, SMT
+       DIVERGENT, sweep + raid score ✓) and was then destroyed by
+       "INVALIDATED — HTF bias became NEUTRAL" before M5 — with real money
+       at risk. That failure mode is still live in this build.
+    3. V1's own PROOF 4 exposed a fidelity gap: SIM boots COLD
+       (warm=false) because MockConnector has no backfill — SIM never
+       rehearses the warm-start path LIVE depends on.
+    4. Cold/warm chart state is invisible in the dashboard UI.
+    5. ChartEngine uses one global minLegTicks=40 for MNQ, MES, and MGC —
+       instruments with very different tick values.
+    6. The log-only OTE comparison exists but nothing aggregates it, so
+       there is no data path toward ever adopting the 30m OTE gate.
+
+TARGET END STATE:
+  1. Every V1 claim re-verified at HEAD with the Q1/Q2/Q3 standard.
+  2. SIM boots WARM (synthetic 3-day backfill through the same listener
+     path), so SIM rehearses exactly what LIVE does at startup.
+  3. The dashboard has a real, physical BOT CHART tab: candlesticks from
+     the bot's own memory with OTE fib lines and state badge, plus a
+     warm/cold indicator visible on the Setup panel.
+  4. NEUTRAL-flip hysteresis implemented, config-gated, DEFAULT OFF, with
+     a counterfactual log and a hard never-enter-while-NEUTRAL invariant.
+  5. Per-instrument chart tuning via properties + leg-detection telemetry.
+  6. An OTE agreement counter surfaces machine-vs-chart30m data so the
+     owner can decide gate adoption from evidence.
+  7. Everything reaches Main through one reviewed, squash-merged PR per
+     agent. All tests green. V2 ledger 7/7 ✅.
+
+================================================================================
+
+================================================================================
+SECTION 1 — THE EXECUTION PROTOCOL  (READ THIS FIRST, EVERY SESSION)
+================================================================================
+
+You are Claude Code. This document is your single source of truth. Execute it
+agent by agent, in order, until every agent is COMPLETE. Do not ask for
+permission between agents. Do not stop halfway. Do not skip.
+
+────────────────────────────────────────────────────────────────────────────────
+THE GOLDEN LOOP
+────────────────────────────────────────────────────────────────────────────────
+
+  STEP 1: Open this document (CHART_FIX_MASTER_PROMPT_V2.txt at the repo root).
+  STEP 2: Read the PROGRESS LEDGER (Section 2). Find the FIRST agent whose
+          status is not ✅ COMPLETE.
+  STEP 3: Execute EVERY task in that agent, in order, end to end.
+  STEP 4: Run the agent's ACCEPTANCE CRITERIA. Every checkbox needs REAL
+          EVIDENCE (file:line, command output, build/test output, curl
+          responses, screenshots/DOM description). "The code looks right"
+          is NEVER evidence.
+  STEP 5: Update the PROGRESS LEDGER for this agent and fill its block in
+          APPENDIX A (Verification Log).
+  STEP 6: Branch, commit with the agent's exact COMMIT MESSAGE, push, open
+          the PR against Main, squash-merge it (workflow below). Confirm the
+          PR shows MERGED and remote Main is updated.
+  STEP 7: RETURN TO STEP 1. Immediately. You do NOT stop and wait.
+
+THE ONLY ACCEPTABLE STOPPING CONDITION:
+  ALL 7 agents ✅ COMPLETE in the PROGRESS LEDGER, AND Agent 07 (Final
+  Verification) passed every criterion with evidence.
+
+RESUME BEHAVIOR:
+  If interrupted, compacted, or restarted: re-open this document, re-read
+  the PROGRESS LEDGER and APPENDIX A, resume at STEP 2 with the first
+  incomplete agent. The ledger IS your memory. Trust the ledger, not your
+  recollection.
+
+────────────────────────────────────────────────────────────────────────────────
+THE Q1/Q2/Q3 VERIFICATION STANDARD (applies inside EVERY agent)
+────────────────────────────────────────────────────────────────────────────────
+
+  This is a verification-and-enhancement document. V1's ledger says 12/12 ✅
+  — you do not TRUST that, you PROVE it where it matters, and you extend it.
+  For every fix you touch or depend on, answer three questions with evidence:
+
+    Q1 — Does the already-applied fix HOLD at current HEAD and not
+         re-trigger? (run it / test it — do not read it and nod)
+    Q2 — Is there ANY OTHER INSTANCE of the same issue elsewhere?
+         (sweep the codebase, not just the file V1 touched)
+    Q3 — Is there ANY OTHER TRIGGER of the same failure class here?
+         (find it, fix it or file it as a task in this document)
+
+  No agent is ✅ until its Q1/Q2/Q3 items are each answered with evidence
+  in Appendix A.
+
+────────────────────────────────────────────────────────────────────────────────
+CRITICAL RULES (NON-NEGOTIABLE)
+────────────────────────────────────────────────────────────────────────────────
+
+  1. NEVER skip or reorder agents. Dependencies are sequential.
+  2. NEVER mark a criterion complete without concrete evidence in Appendix A.
+  3. NEVER ship mock/placeholder data in the live path. Test fixtures live
+     in src/test; SIM's synthetic warm-boot data lives behind the SIM mode
+     boundary only (Agent 02) and is clearly labeled synthetic.
+  4. ALWAYS run the full Gradle build for touched modules before ✅:
+       ./gradlew clean build      (.\gradlew.bat on Windows PowerShell)
+     For dashboard work: npm run build with ZERO TypeScript errors.
+  5. ALWAYS finish every agent with the PR workflow: branch, commit, push,
+     PR against Main, squash-merge. One agent = one PR. Fixups found later
+     get their own small PR ("agent-NN-v2-fixup: <what>"). NEVER push
+     directly to Main.
+  6. Owner-only blockers are honest ⛔ with the EXACT owner action, never
+     silent passes. Complete every non-blocked part of the agent and move on.
+  7. NEVER weaken existing risk gates (M1–M9 semantics, PropFirmRiskEngine,
+     DLL/MLL, flatten times). Agent 04's hysteresis changes WHEN an
+     in-flight setup is discarded — it must NEVER change what is required
+     to ENTER a trade. That invariant is tested, not assumed.
+  8. Real data only. Every new async/UI surface needs loading, empty, and
+     error states. No blank white boxes.
+  9. V1's document and its Appendix A are read-only history. All new
+     evidence goes in THIS document's Appendix A.
+
+────────────────────────────────────────────────────────────────────────────────
+GIT WORKFLOW — PR PER AGENT AGAINST Main (run after EVERY agent)
+────────────────────────────────────────────────────────────────────────────────
+
+  The default branch is Main (capital M). Confirmed in V1's ledger. Every
+  command below says Main on purpose.
+
+  git checkout Main && git pull origin Main
+  git checkout -b <type>/agent-NN-<short-name>     # e.g. feat/agent-04-hysteresis
+  git add -A
+  git commit -m "<the agent's specified COMMIT MESSAGE>"
+  git push -u origin <type>/agent-NN-<short-name>
+  gh pr create --base Main --head <type>/agent-NN-<short-name> \
+      --title "<the agent's COMMIT MESSAGE>" \
+      --body "<what changed + why, 3-6 lines, referencing the agent number>"
+  gh pr merge --squash --delete-branch
+  git checkout Main && git pull origin Main
+
+  Branch-type prefixes: chore/ for Agents 01 and 07, feat/ for Agents
+  02-06 (Agent 06 may use feat/ or chore/ at your judgment).
+
+  After merging, verify and record in Appendix A:
+    gh pr view --json number,state,mergedAt    (state MERGED)
+    git log --oneline -1                       (squash commit on Main)
+    git status                                 (clean tree, on Main)
+
+  If gh is missing or unauthenticated: install / gh auth login; if auth
+  needs the owner's credentials, mark the agent ⛔ BLOCKED with that exact
+  action. Direct pushes to Main are forbidden in this document.
+
+────────────────────────────────────────────────────────────────────────────────
+BUILD + TEST WORKFLOW
+────────────────────────────────────────────────────────────────────────────────
+
+  Engine:      cd trading-engine && ./gradlew clean build
+  API:         cd api-backend && ./gradlew clean build
+  Root multi-project (works per V1 ledger): ./gradlew clean build from root
+  Engine tests only: ./gradlew test
+  Dashboard:   cd dashboard-frontend && npm install && npm run build
+  Requirements: Java 21 (confirmed present in V1), Node 18+.
+
+================================================================================
+SECTION 2 — PROGRESS LEDGER
+================================================================================
+
+  Status markers:  ⬜ NOT STARTED   🔄 IN PROGRESS   ✅ COMPLETE   ⛔ BLOCKED
+
+  [✅] Agent 01 — V1 Re-Verification Sweep (Q1/Q2/Q3) + Baseline Builds
+  [⬜] Agent 02 — SIM Warm Boot: Synthetic Backfill Through the Listener Path
+  [⬜] Agent 03 — Dashboard Bot Chart (Physical Candles + OTE Overlay + Warm Pill)
+  [⬜] Agent 04 — Bias Stability: NEUTRAL-Flip Hysteresis (Config-Gated)
+  [⬜] Agent 05 — Per-Instrument Chart Tuning + Leg Telemetry
+  [⬜] Agent 06 — OTE Agreement Counter (Data Path to Gate Adoption)
+  [⬜] Agent 07 — FINAL VERIFICATION & CLOSE-OUT
+
+  LEDGER NOTES (append one dated line per completion):
+  ------------------------------------------------------------------
+  2026-07-09  Agent 01 ✅  three baselines green (gradle 35s/17 tasks,
+              npm build 2.87s/0 TS errors), V-OK1..7 re-proven with exact
+              lines, warmup+chart tests re-RUN green, V-GAP1..6 confirmed,
+              Q2/Q3 sweeps clean. V2 doc committed via PR.
+  ------------------------------------------------------------------
+
+================================================================================
+SECTION 3 — PRE-FLIGHT FINDINGS (INDEPENDENT AUDIT OF HEAD, 2026-07-09)
+================================================================================
+
+Verified by direct inspection of the current codebase (post-V1). Agent 01
+re-confirms each anchor; if anything drifted, adapt anchors, not the plan.
+
+  V-OK1.  fetchBarsRange exists (TopstepConnector ~line 785), limit=1000,
+          returns candles, never delivers; fetchBars is a thin 60-min
+          wrapper delegating to it (~line 719). One HTTP path, two callers.
+  V-OK2.  HistoricalBackfill.java is byte-identical to the V1 spec; wired
+          in startMarketDataPolling (~line 986) behind a per-symbol
+          backfilledSymbols guard; backfill.days clamped [1,7] default 3.
+  V-OK3.  Warmup guard has THREE layers in LiveEngineRunner (warmupComplete
+          ~line 136/614, event-created-during-replay via warmupCompletedAt,
+          5-min lastCandleTs staleness ~line 738); WarmupGuardTest exists.
+  V-OK4.  Chart package (ChartEngine/OteState/OteZoneSnapshot/ChartSnapshot)
+          byte-identical to the smoke-tested originals.
+  V-OK5.  Wiring complete: LIVE (~line 144, 417, 673), SIM
+          (SimEngineRunner ~77, 130-138, facade at 186), multi-instrument
+          candle tap (setCandleTap at LiveEngineRunner ~426, fans out via
+          StdvOteMultiInstrumentEngine.setChartEngine ~210), EngineFacade
+          getChartEngine never-null (~line 131).
+  V-OK6.  ChartStateController live; [GATES] telemetry at
+          StdvOteRunnerStrategy ~516 including chart30mOte; log-only
+          hasReactedOte comparison at ~572. QUICK_START has STARTUP &
+          WARMTH, READING THE GATES, scalp floor, and AUTOMATION POLICY
+          sections. Five test classes for the new components.
+  V-OK7.  LIVE restart safety: EngineFacade.startLive() constructs a NEW
+          LiveEngineRunner (~line 188) which constructs a NEW
+          TopstepConnector (~line 515), so backfilledSymbols resets and
+          LIVE re-backfills on every in-app restart.
+
+  V-GAP1. SIM BOOTS COLD. MockConnector contains zero backfill logic; V1's
+          own Appendix A-11 PROOF 4 recorded warm=false /
+          barsIngested1m=321 after a SIM restart. SIM therefore never
+          rehearses the warm-start path that LIVE depends on, and OTE
+          behavior in SIM only emerges after ~a day of synthetic candles.
+  V-GAP2. NO DASHBOARD CHART. Nothing in dashboard-frontend consumes
+          /api/chart; there is no Bot Chart component, and no UI surface
+          shows warm/cold state. The owner cannot see what the bot sees.
+  V-GAP3. NO BIAS HYSTERESIS. grep for "hysteresis|neutralGrace" returns
+          nothing. FIELD EVIDENCE (2026-07-09, owner's LIVE dashboard): a
+          session passed M1–M4 (bias BULLISH, killzone OPEN, SMT DIVERGENT,
+          sweep + raid score ✓) then died with "INVALIDATED — HTF bias
+          became NEUTRAL" before M5, "No OTE zone built yet", stale STDV
+          ladder. The state machine still treats NEUTRAL (uncertainty)
+          identically to OPPOSITE (contradiction).
+  V-GAP4. GLOBAL LEG THRESHOLD. ChartEngine's default constructor applies
+          swingStrength=2, minLegTicks=40, zoneExpiryBars=32 to every
+          instrument. 40 ticks = 10.0 pts on MNQ, 10.0 pts on MES, 4.0 pts
+          on MGC — materially different leg sizes; no per-instrument
+          tuning, and no telemetry showing what legs are being detected.
+  V-GAP5. NO ADOPTION DATA. The machine-vs-chart30m OTE comparison is
+          logged per-emission but never aggregated, so there is no evidence
+          stream for deciding whether/when to gate entries on the 30m OTE.
+  V-GAP6. V1 used direct pushes; this document switches to PR-per-agent
+          against Main (capital M — V1's ledger explicitly flagged the
+          branch name).
+
+================================================================================
+
+================================================================================
+SECTION 4 — THE AGENTS
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 01 — V1 RE-VERIFICATION SWEEP (Q1/Q2/Q3) + BASELINE BUILDS
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 60–90 minutes
+
+CONTEXT:
+  Owns truth, changes nothing functional. V1's ledger says 12/12 ✅ — this
+  agent proves the load-bearing claims still hold at HEAD, confirms every
+  V-OK and V-GAP finding in Section 3, and establishes green baselines so
+  every later agent starts from a known-good state.
+
+TASKS:
+  1. git clone https://github.com/BryanD17/Futures-Trading-Algorithm.git
+     (or pull). Confirm you are on Main (capital M), clean tree.
+  2. Baseline builds, outputs recorded:
+       trading-engine: ./gradlew clean build   (all tests must pass)
+       api-backend:    ./gradlew clean build
+       dashboard-frontend: npm install && npm run build
+     If any baseline is red, fix with the smallest possible change in a
+     "chore/agent-01-baseline" PR first, and note it in Appendix A-01.
+  3. Q1 sweep (does each V1 fix hold?) — re-confirm every V-OK1..V-OK7
+     anchor with file:line at HEAD. For V-OK3 specifically, RUN the
+     WarmupGuardTest and the four chart tests and paste the results.
+  4. Q2 sweep (other instances of the same issues?):
+       - grep the whole engine for any OTHER code path that fetches bars or
+         constructs candles WITHOUT flowing through the listener/tap path
+         (candidates: backtest CSV loader, SimulationController) — list
+         each and state whether ChartEngine coverage matters there;
+       - confirm no second copy of chart-package classes or backfill logic
+         exists anywhere (duplicate-class sweep).
+  5. Q3 sweep (other triggers of the same failure classes?):
+       - restart semantics: prove in code that LIVE stop cancels the old
+         connector's pollers/threads (symbolPollers cancellation +
+         disconnect path) so an in-app restart cannot leave a zombie poller
+         feeding a dead runner — file:line trace;
+       - confirm EngineFacade.setChartEngine on restart replaces the old
+         reference so /api/chart always reflects the CURRENT engine.
+  6. Confirm the V-GAPs are real at HEAD (each with the grep/file evidence
+     from Section 3 re-run by you).
+  7. Place THIS document at the repo root as CHART_FIX_MASTER_PROMPT_V2.txt
+     (keep V1's file untouched) and include it in this agent's PR.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-01):
+  [ ] On Main, clean tree (git status pasted).
+  [ ] Three baseline builds green (output tails pasted).
+  [ ] V-OK1..V-OK7 re-confirmed with file:line at HEAD; chart + warmup
+      tests RUN with results pasted (Q1).
+  [ ] Q2 sweep results listed (candle paths outside the tap; duplicate
+      sweep clean).
+  [ ] Q3 restart-semantics trace pasted (poller cancellation + facade
+      replacement, file:line).
+  [ ] V-GAP1..V-GAP6 confirmed at HEAD.
+  [ ] V2 document committed at repo root via this agent's PR.
+
+COMMIT MESSAGE:
+  agent-01-v2: re-verification sweep — V1 claims proven at HEAD, gaps confirmed
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-01, branch, commit, PR against
+  Main, squash-merge, verify remote Main updated, then RETURN TO GOLDEN LOOP
+  STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 02 — SIM WARM BOOT: SYNTHETIC BACKFILL THROUGH THE LISTENER PATH
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 60–90 minutes
+
+CONTEXT:
+  Owns: MockConnector.java (or SimEngineRunner's feed bootstrap), tests, docs.
+  V-GAP1: SIM boots cold, so the ONLY place the warm-start path gets
+  rehearsed is LIVE — with real money. That is backwards. After this agent,
+  SIM starts exactly like LIVE does: ~3 days of 1m candles replayed through
+  the SAME listener path before live-sim ticks begin, warm=true within
+  seconds of boot, deterministic and clearly synthetic.
+
+TASKS:
+  1. Implement a synthetic historical generator inside the SIM boundary
+     (MockConnector or a SimWarmBoot helper it calls):
+       - honors -Dbackfill.days (same clamp [1,7], default 3) and a fixed
+         seed -Dsim.backfill.seed (default 42) for reproducibility;
+       - generates clock-aligned 1m candles per subscribed symbol ending at
+         "now", with realistic structure: session-scaled volatility, at
+         least one multi-hour leg per day, and retraces — so the ChartEngine
+         detects real swing legs and OTE zones during SIM (a pure random
+         walk is NOT acceptable; assert in the test that at least one OTE
+         zone forms from a 3-day generation);
+       - prices anchored to the mock's existing base price per symbol so
+         live-sim ticks continue seamlessly from the last backfilled close.
+  2. Replay the generated candles through the SAME delivery path the mock's
+     live-sim ticks use (listener/tap), oldest -> newest, BEFORE the first
+     live-sim candle, and mark the delivered watermark so no duplicate or
+     backwards timestamps are ever emitted (mirror HistoricalBackfill's
+     sort/de-dup discipline).
+  3. Restart correctness: a SIM stop -> start creates a fresh runner +
+     ChartEngine (existing behavior) — ensure the warm boot runs again so
+     post-restart /api/chart shows warm=true (this closes V1's PROOF 4
+     cold-restart observation).
+  4. Warmup-guard compatibility: replayed synthetic candles are historical;
+     verify the three warmup layers suppress any signal during SIM replay
+     exactly as in LIVE (log line pasted or unit-tested).
+  5. Tests:
+       a) generator determinism: same seed + days -> identical candle
+          series (hash or element-wise);
+       b) delivery: strictly ascending timestamps, zero duplicates, live-sim
+          ticks continue after the watermark;
+       c) warmth: after warm boot of 3 days, a ChartEngine fed the same
+          stream reports >= 1500 bars and at least one OTE zone existed at
+          some point during the replay;
+       d) clamp + seed properties honored.
+  6. Docs: extend QUICK_START "STARTUP & WARMTH" with the SIM warm-boot
+     behavior and the two properties.
+  7. Build engine module; run full test suite.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-02):
+  [ ] Synthetic generator implemented inside SIM boundary, seed + days
+      properties honored (file:line).
+  [ ] Replay uses the SAME path as live-sim ticks, ascending, de-duped,
+      watermarked (file:line + code shown).
+  [ ] Boot a SIM session and paste /api/chart/<symbol>: warm=true,
+      barsIngested1m >= 1500 within seconds of start.
+  [ ] Stop -> start SIM and paste post-restart /api/chart: warm=true
+      (PROOF-4 regression closed).
+  [ ] Warmup suppression during SIM replay evidenced (log or test).
+  [ ] Tests a–d present and passing; full suite green (summary pasted).
+  [ ] QUICK_START updated (file:line).
+
+COMMIT MESSAGE:
+  agent-02-v2: SIM warm boot — deterministic synthetic backfill via listener path
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-02, branch, commit, PR against
+  Main, squash-merge, verify remote Main updated, then RETURN TO GOLDEN LOOP
+  STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 03 — DASHBOARD BOT CHART (PHYSICAL CANDLES + OTE OVERLAY + WARM PILL)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: HIGH          ESTIMATED EFFORT: 90–120 minutes
+
+CONTEXT:
+  Owns: dashboard-frontend/ (React + TypeScript, Vite).
+  V-GAP2. Agent 07 of V1 exposed the bot's internal chart as JSON; nothing
+  renders it. This agent makes it PHYSICAL: a candlestick chart in the
+  dashboard showing the bot's own 30m candles with the OTE fib band drawn on
+  top — so the owner can put the dashboard next to TopstepX and verify, with
+  his eyes, that the bot sees the same chart and the same OTE. Role clarity:
+  the ALGORITHM trades off the in-memory ChartEngine (it does not read
+  pixels); this view is the human window into that memory. Additionally,
+  warm/cold state becomes visible in the UI so a blind engine can never
+  again hide behind a green "RUNNING" banner.
+
+TASKS:
+  1. npm install lightweight-charts   (TradingView's open-source candlestick
+     library). If a dependency cannot be added for some repo-specific
+     reason, fall back to a custom SVG renderer — but prefer the library.
+     Record the choice in Appendix A-03.
+  2. src/services/chartApi.ts: typed fetcher for
+     GET /api/chart/{symbol}?lookback=N returning the exact V1 contract:
+     { symbol, timeframe, candles30m[], ote, barsIngested1m, lastCandleTime,
+       warm }. Follow the existing api.ts wrapper style. Interfaces live in
+     src/types/ — no `any` for the contract.
+  3. src/components/BotChart.tsx (+ css):
+       - candlestick series from candles30m, colors matching the app's
+         existing palette;
+       - when ote is non-null: labeled horizontal price lines at fib_0.62,
+         fib_0.705, fib_0.786, fib_1.0 and a state badge (FORMING / ARMED /
+         REACTED / INVALIDATED / EXPIRED) styled like the existing status
+         pills — REACTED visually loudest;
+       - symbol selector (MNQ / MES / MGC) + lookback selector (50/100/200);
+       - poll every 15s; pause when document.visibilityState is hidden;
+       - REQUIRED STATES: loading skeleton; friendly empty state; an
+         unmissable COLD banner when warm=false ("Bot chart is COLD —
+         backfill has not run; the engine cannot see enough history to
+         trade"); error state with retry. No blank white boxes.
+  4. Mount as a "Bot Chart" tab in App.tsx alongside Overview / Setup /
+     Positions / Trades / Risk / Journal / Simulator / Economics, following
+     the existing navigation pattern exactly.
+  5. WARM PILL on the Setup panel: add a small warm/cold indicator to
+     SetupPanel.tsx sourced from the same endpoint (green "CHART WARM
+     (N bars)" / red "CHART COLD") next to the HTF/Killzone/SMT pills, so
+     the single screen the owner already watches carries the tripwire.
+  6. Verify end to end against the SIM stack from Agent 02 (which now boots
+     warm): live candles render, OTE lines appear when the synthetic data
+     forms a zone, warm pill green; then stop the engine and confirm the
+     COLD banner path renders.
+  7. npm run build with zero TypeScript errors.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-03):
+  [ ] chartApi.ts typed to the contract; interfaces in src/types (files).
+  [ ] BotChart renders real candlesticks from /api/chart against the warm
+      SIM stack (screenshot or precise DOM/terminal description).
+  [ ] OTE fib lines + state badge render for a non-null ote (evidence).
+  [ ] COLD banner, loading, empty, error states implemented (code for each
+      branch shown) and the COLD path demonstrated once.
+  [ ] Polling pauses on hidden tab (code shown).
+  [ ] "Bot Chart" tab reachable in the main nav (file:line).
+  [ ] Warm pill on SetupPanel (file:line + evidence).
+  [ ] npm run build -> success, zero TS errors (output tail pasted).
+
+COMMIT MESSAGE:
+  agent-03-v2: dashboard Bot Chart — physical candles + OTE overlay + warm pill
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-03, branch, commit, PR against
+  Main, squash-merge, verify remote Main updated, then RETURN TO GOLDEN LOOP
+  STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 04 — BIAS STABILITY: NEUTRAL-FLIP HYSTERESIS (CONFIG-GATED, DEFAULT OFF)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 60–90 minutes
+
+CONTEXT:
+  Owns: StdvOteStrategy.java (invalidation path only), config, tests, docs.
+  V-GAP3 + FIELD EVIDENCE (2026-07-09, owner's LIVE dashboard): gates
+  M1 ✓ M2 ✓ M3 ✓ M4 ✓ (bias BULLISH, killzone OPEN, SMT DIVERGENT, sweep +
+  raid score confirmed) — then "INVALIDATED — HTF bias became NEUTRAL"
+  while waiting at M5 for displacement + FVG. On choppy sessions the 15m
+  structure oscillates in and out of NEUTRAL, so setups are repeatedly
+  built and shredded halfway; "No OTE zone built yet" is the visible
+  symptom, because the machine never survives to M6/M7 where the OTE is
+  constructed.
+
+  THE PRINCIPLE: NEUTRAL is UNCERTAINTY; OPPOSITE bias is CONTRADICTION.
+  Today the code treats them identically. After this agent:
+    - OPPOSITE bias flip -> invalidate the in-flight setup IMMEDIATELY
+      (unchanged — a contradicted setup must die);
+    - NEUTRAL flip       -> the in-flight setup survives a bounded grace
+      period; invalidated only if bias is still NEUTRAL after N consecutive
+      15m evaluations; instantly restored if bias returns to the ORIGINAL
+      direction within the window.
+  HARD SAFETY INVARIANT (non-negotiable, tested): entry emission STILL
+  requires the CURRENT bias to be non-NEUTRAL and aligned. Grace preserves
+  in-flight PROGRESS; it never, under any circumstances, permits an ENTRY
+  while bias reads NEUTRAL. This agent does not weaken any entry condition
+  — it stops progress from being erased by noise.
+
+TASKS:
+  1. Configuration, read the same way the strategy reads existing flags:
+       bias.hysteresis.enabled   (boolean, DEFAULT false)
+       bias.neutralGraceBars     (int, DEFAULT 2, clamped [1,4])
+  2. In StdvOteStrategy, locate the invalidation path that fires on HTF
+     bias change for an in-flight setup (any state after BIAS SET and
+     before IN TRADE). Implement:
+       - new bias == OPPOSITE: invalidate immediately, existing reason text
+         (behavior unchanged);
+       - new bias == NEUTRAL, hysteresis DISABLED: invalidate exactly as
+         today, PLUS the counterfactual log:
+           "[BIAS] NEUTRAL flip invalidated setup (hysteresis OFF — grace
+            would have held it N more bar(s))"
+         so the owner can measure from live/SIM logs how often grace WOULD
+         have mattered before ever enabling it;
+       - new bias == NEUTRAL, hysteresis ENABLED: increment a consecutive-
+         neutral counter; log "[BIAS] NEUTRAL wobble (k/N grace) — setup
+         held"; invalidate with reason "HTF bias NEUTRAL beyond grace" only
+         when the counter exceeds bias.neutralGraceBars; reset the counter
+         (and log restoration) if bias returns to the setup's original
+         direction; OPPOSITE during grace still invalidates immediately.
+  3. Enforce and PROVE the safety invariant: show file:line where emission
+     requires current bias aligned and non-NEUTRAL, independent of grace
+     state. If emission relies solely on the earlier M2 check, ADD an
+     explicit current-bias re-check at emission time.
+  4. Unit tests (same package as existing stdvote tests):
+       a) ON: one NEUTRAL evaluation -> setup alive; bias returns BULLISH
+          -> counter reset, machine continues where it was;
+       b) ON: NEUTRAL for graceBars+1 evaluations -> invalidated with the
+          grace reason;
+       c) ON: OPPOSITE flip during grace -> invalidated immediately;
+       d) ON: bias NEUTRAL within grace at the exact moment all other
+          emission conditions are satisfied -> NO signal emitted
+          (the invariant test — MANDATORY);
+       e) OFF: behavior byte-identical to today except the counterfactual
+          log (invalidation still occurs on the first NEUTRAL evaluation);
+       f) determinism: same candle/bias sequence -> identical transitions
+          with hysteresis ON, run twice.
+  5. Q2/Q3 sweep for this failure class: list every OTHER invalidation
+     reason that can kill an in-flight setup (session end, expiry, new
+     extreme, etc.), and state for each — with a sentence of reasoning —
+     whether it represents contradiction (correct to kill) or noise
+     (candidate for future hysteresis; file as a note, do NOT change it).
+  6. QUICK_START "READING THE GATES": document the two flags, the
+     counterfactual line, and the adoption path — run 3–5 SIM sessions
+     with hysteresis OFF, count counterfactual lines, enable with
+     graceBars=2 only if NEUTRAL flips are demonstrably killing multi-gate
+     setups (like the 2026-07-09 session).
+  7. Build + full test suite.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-04):
+  [ ] Both properties exist, defaults false / 2, clamped (file:line).
+  [ ] OPPOSITE-flip path unchanged (diff shown).
+  [ ] OFF path: invalidates as today + counterfactual log (diff + example
+      line from a test run).
+  [ ] ON path: counter, hold/restore/expire + all three log lines
+      (file:line).
+  [ ] Safety invariant proven at emission time (file:line) and covered by
+      the MANDATORY test (d) — test name + result pasted.
+  [ ] Tests a–f passing; full suite green including pre-existing tests
+      (summary pasted).
+  [ ] Q2/Q3 invalidation-reason inventory written into Appendix A-04.
+  [ ] QUICK_START updated (file:line).
+
+COMMIT MESSAGE:
+  agent-04-v2: config-gated NEUTRAL-bias hysteresis for in-flight setups
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-04, branch, commit, PR against
+  Main, squash-merge, verify remote Main updated, then RETURN TO GOLDEN LOOP
+  STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 05 — PER-INSTRUMENT CHART TUNING + LEG TELEMETRY
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: MEDIUM          ESTIMATED EFFORT: 45–60 minutes
+
+CONTEXT:
+  Owns: ChartEngine.java (additive changes), runner registration, tests, docs.
+  V-GAP4: the default constructor applies swingStrength=2, minLegTicks=40,
+  zoneExpiryBars=32 globally. 40 ticks is 10.0 pts on MNQ and MES but only
+  4.0 pts on MGC — meaningfully different leg sizes across instruments, and
+  the owner currently has no telemetry showing which legs are detected or
+  rejected, so tuning is guesswork. This agent makes the thresholds
+  per-instrument and configurable, PRESERVES current defaults (no silent
+  behavior change), and adds the evidence stream to tune from.
+
+TASKS:
+  1. Extend ChartEngine additively (do not break the existing constructor
+     or the byte-identical tests from V1 — extend, don't rewrite):
+       - per-symbol overrides for minLegTicks (and optionally swingStrength,
+         zoneExpiryBars) settable at registerInstrument time or via a
+         configureInstrument(symbol, ...) method;
+       - system-property overrides, read at runner wiring time:
+           chart.minLegTicks.<SYMBOL>      (e.g. -Dchart.minLegTicks.MGC=80)
+           chart.swingStrength.<SYMBOL>    (optional)
+           chart.zoneExpiryBars.<SYMBOL>   (optional)
+         DEFAULTS = today's values (40 / 2 / 32) for every symbol, so with
+         no flags set, behavior is byte-identical to HEAD. Log the resolved
+         config per symbol at startup:
+           "[CHART CFG MGC] minLegTicks=40 swingStrength=2 expiryBars=32".
+  2. Leg telemetry inside rebuildZoneIfNeeded: when a candidate leg is
+     evaluated, log at most once per completed 30m bar:
+       accepted:  "[CHART MNQ] leg ACCEPTED origin=... extreme=... size=Nt
+                   -> OTE drawn (0.62=..., 0.705=...)"
+       rejected:  "[CHART MNQ] leg REJECTED size=Nt < minLegTicks=40"
+     Keep it one line per event — this is tuning telemetry, not spam; no
+     logging on bars where nothing changed.
+  3. Update the ChartEngine unit tests: existing tests must pass UNCHANGED
+     (proving default behavior preserved); add one test proving a
+     per-symbol override changes acceptance for that symbol only.
+  4. QUICK_START: a short "TUNING THE BOT CHART" subsection — the three
+     properties, the two log lines, and the method: watch a few sessions of
+     [CHART] lines per instrument, then set minLegTicks so obvious
+     structural legs are ACCEPTED and noise legs are REJECTED.
+  5. Build + full test suite.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-05):
+  [ ] Per-symbol config with property overrides; defaults preserved —
+      proven by the UNCHANGED pre-existing ChartEngine tests passing
+      (summary pasted).
+  [ ] Startup config log line per symbol (example pasted from a SIM boot).
+  [ ] ACCEPTED / REJECTED leg telemetry implemented, at most one line per
+      completed 30m bar (file:line + example lines from SIM).
+  [ ] New override test passing (name + result).
+  [ ] QUICK_START subsection added (file:line).
+  [ ] Full suite green (summary pasted).
+
+COMMIT MESSAGE:
+  agent-05-v2: per-instrument chart tuning + leg accept/reject telemetry
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-05, branch, commit, PR against
+  Main, squash-merge, verify remote Main updated, then RETURN TO GOLDEN LOOP
+  STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 06 — OTE AGREEMENT COUNTER (THE DATA PATH TO GATE ADOPTION)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: MEDIUM          ESTIMATED EFFORT: 45–60 minutes
+
+CONTEXT:
+  Owns: StdvOteRunnerStrategy (counter), EngineFacade/ChartStateController
+  (exposure), docs. V-GAP5: the log-only machine-vs-chart30m OTE comparison
+  (StdvOteRunnerStrategy ~572) fires per emission but nothing aggregates
+  it. The owner's standing question — "should entries be gated on the 30m
+  chart's REACTED OTE?" — can only be answered with counts, not anecdotes.
+  This agent counts. IT DOES NOT CHANGE GATING. The decision to switch
+  remains the owner's, made from this data after real sessions.
+
+TASKS:
+  1. Add a small, thread-safe per-symbol counter (in the runner or a tiny
+     OteAgreementStats class) that increments on every comparison event:
+       - machineEmitted_chartAgreed     (machine emitted; chart30m REACTED
+                                         same direction within its window)
+       - machineEmitted_chartDisagreed
+       - chartReacted_machineSilent     (chart30m hit REACTED but the state
+                                         machine had no armed setup within
+                                         N bars — sample on the 15m tick)
+     plus timestamps of the last few events per bucket (bounded ring of
+     ~10 — no unbounded growth).
+  2. Expose it read-only:
+       - extend the /api/chart/{symbol} response with an "oteStats" object
+         (counts + lastEvents), sourced via EngineFacade;
+       - include a one-line rollup in the [GATES] 15m telemetry:
+         "oteAgree=X oteDisagree=Y chartOnly=Z".
+  3. Persistence is NOT required (session-scoped counters are fine); state
+     that explicitly in the code javadoc so nobody mistakes it for a
+     durable metric.
+  4. Tests: counter increments for each bucket given synthetic sequences;
+     bounded ring never exceeds its cap; /api response shape includes
+     oteStats (controller-level or serialization test per existing test
+     conventions).
+  5. QUICK_START "READING THE GATES": add the adoption playbook — run
+     several SIM/LIVE-observation sessions, read oteStats; if
+     chartReacted_machineSilent dominates while the machine keeps dying to
+     invalidations, that is the evidence for (a) enabling Agent 04's
+     hysteresis and/or (b) a future, separate decision to gate on
+     hasReactedOte. Neither switch happens in this document.
+  6. Build engine + API modules; full test suite.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-06):
+  [ ] Counter class present, thread-safe, bounded (file:line).
+  [ ] All three buckets increment correctly under test (results pasted).
+  [ ] /api/chart response includes oteStats (curl from the SIM stack
+      pasted).
+  [ ] [GATES] line carries the rollup (example line pasted).
+  [ ] Explicit no-gating-change: diff proves emission/validators untouched.
+  [ ] QUICK_START adoption playbook added (file:line).
+  [ ] Full suite green (summary pasted).
+
+COMMIT MESSAGE:
+  agent-06-v2: OTE agreement counters exposed via /api/chart and [GATES]
+
+AFTER COMPLETION:
+  Update the PROGRESS LEDGER, fill APPENDIX A-06, branch, commit, PR against
+  Main, squash-merge, verify remote Main updated, then RETURN TO GOLDEN LOOP
+  STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 07 — FINAL VERIFICATION & CLOSE-OUT
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 60 minutes
+
+CONTEXT:
+  Owns the whole document. This agent is the stopping condition. It trusts
+  no earlier ✅ — it re-verifies the system as a whole, end to end, on the
+  warm SIM stack.
+
+TASKS:
+  1. Clean builds of all three modules from a fresh checkout of Main
+     (engine + API via ./gradlew clean build including ALL tests;
+     dashboard via npm ci && npm run build).
+  2. END-TO-END WARM RUN: boot SIM; within one session paste evidence of
+     the full chain working together:
+       - /api/chart warm=true within seconds of boot (Agent 02);
+       - Bot Chart tab rendering candles + (when formed) OTE lines, warm
+         pill green (Agent 03);
+       - [CHART CFG] and [CHART ... ACCEPTED/REJECTED] lines (Agent 05);
+       - [GATES] lines including the oteAgree rollup (Agent 06);
+       - a [BIAS] counterfactual line if any NEUTRAL flip occurred with
+         hysteresis OFF (Agent 04) — if none occurred naturally, cite the
+         unit test instead;
+       - stop -> start SIM: warm=true again post-restart.
+  3. Re-read APPENDIX A top to bottom; any empty or hand-waved block sends
+     you BACK to that agent via the GOLDEN LOOP.
+  4. Safety grep-audit, outputs recorded:
+       - no credentials/tokens in source or logs;
+       - M1–M9 / PropFirmRiskEngine semantics untouched across all V2 PRs
+         (git diff Main against the pre-Agent-01 commit for those files:
+         telemetry-only edits);
+       - bias.hysteresis.enabled defaults FALSE and the emission-time
+         non-NEUTRAL re-check exists (file:line);
+       - warmup guards intact in handleStrategySignal.
+  5. PR audit: gh pr list --state merged shows one merged PR per agent
+     (01–07), all base Main; paste the list.
+  6. FINAL SUMMARY into LEDGER NOTES: agents completed, PR numbers, test
+     counts, remaining ⛔ items with exact owner actions, and the operating
+     line: "Before LIVE: warm=true on /api/chart, Bot Chart matches
+     TopstepX, run 3–5 SIM sessions and read the [BIAS] counterfactual +
+     oteStats before enabling hysteresis or changing any gate."
+  7. Final PR for this document's ledger/appendix updates; squash-merge.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-07):
+  [ ] All three clean builds green from fresh checkout (tails pasted).
+  [ ] END-TO-END WARM RUN evidence pasted for every bullet in Task 2.
+  [ ] Appendix A complete for all 7 agents (self-audit statement + any
+      agents bounced back to, with what was missing).
+  [ ] Ledger 7/7 ✅ (or documented ⛔ owner items only).
+  [ ] Safety grep-audit outputs pasted; zero violations.
+  [ ] PR audit pasted: 7 merged PRs, all base Main.
+  [ ] FINAL SUMMARY written into LEDGER NOTES.
+
+COMMIT MESSAGE:
+  agent-07-v2: final verification — V2 complete, warm end-to-end proven on Main
+
+AFTER COMPLETION:
+  This is the ONLY place you may stop — and only if every criterion above
+  passed with evidence. If anything failed, the GOLDEN LOOP applies: return
+  to the failing agent, fix it, come back here.
+
+================================================================================
+SECTION 5 — APPENDICES
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX A — PER-AGENT VERIFICATION LOG
+────────────────────────────────────────────────────────────────────────────────
+Claude Code fills ONE block per agent, at completion time, with REAL evidence.
+This appendix is what makes the document durable across sessions. Never leave
+a block empty for an agent marked ✅.
+
+··· APPENDIX A-01 — Agent 01: V1 Re-Verification Sweep (Q1/Q2/Q3) + Baseline Builds ···
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-09
+  PR NUMBER:         (recorded in ledger note after merge — chore/agent-01)
+  COMMIT HASH:       (squash-merge commit on Main; pre-agent-01 baseline
+                      HEAD = b311f4d)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - On Main, clean tree: "On branch Main ... nothing to commit" before
+      work; branch created from b311f4d.
+    - Baselines green: root gradle clean build (engine+API, all tests) ->
+      "BUILD SUCCESSFUL in 35s, 17 actionable tasks: 17 executed";
+      dashboard npm install + npm run build -> "built in 2.87s", exit 0,
+      zero TS errors (chunk-size warning only).
+    - V-OK anchors re-confirmed at HEAD (exact lines):
+        V-OK1: fetchBars wrapper :714, fetchBarsRange :785, limit=1000
+               :799 (TopstepConnector.java).
+        V-OK2: backfilledSymbols :106, BACKFILL_DAYS clamp :112,
+               HistoricalBackfill.run wiring :991.
+        V-OK3: warmupComplete :136, warmupCompletedAt set :614,
+               createdDuringWarmup check :746, isStaleSignal :757
+               (LiveEngineRunner.java). Tests RE-RUN: WarmupGuardTest +
+               com.topstep.trading.chart.* -> BUILD SUCCESSFUL (15 tests,
+               0 failures; TEST_EXIT=0).
+        V-OK4: chart package present; duplicate sweep (below) proves the
+               only copies are the canonical ones.
+        V-OK5: chartEngine field :144, registerInstrument :417, tap
+               :426-432, facade registration :575, onMarketData ingest
+               :673 (LiveEngineRunner); facade setChartEngine :121,
+               getChartEngine :131 (EngineFacade).
+        V-OK6: [GATES] line :516, chart30m.hasReactedOte log :575
+               (StdvOteRunnerStrategy); ChartStateController present;
+               QUICK_START sections present.
+        V-OK7: EngineFacade.startLive constructs new LiveEngineRunner :188
+               -> new TopstepConnector per start -> backfilledSymbols
+               resets -> LIVE re-backfills on in-app restart.
+    - Q2 sweep: candle construction outside connector/chart/tests exists
+      ONLY in backtest code (HistoricalDataProvider — CSV loader;
+      SyntheticScalpSessionGenerator) and BarAggregationManager (internal
+      HTF aggregation, downstream OF the tap). Backtest runs in BACKTEST
+      mode where EngineFacade serves the documented empty ChartEngine —
+      chart coverage is not load-bearing there. Duplicate-class sweep:
+      exactly one ChartEngine.java and one HistoricalBackfill.java in the
+      repo.
+    - Q3 restart trace: LiveEngineRunner.stop() :1686 ->
+      connector.disconnect() :1735; TopstepConnector.disconnect shuts the
+      marketDataPoller scheduler :1026 (kills ALL scheduled polls — no
+      zombie poller can outlive a runner); per-symbol futures also
+      cancelled on unsubscribe :1087-1089. Facade: every runner start
+      calls setChartEngine(:121), replacing the old reference, so
+      /api/chart always serves the CURRENT engine.
+    - V-GAPs confirmed at HEAD: GAP1 grep "backfill" in MockConnector ->
+      0 hits; GAP2 grep "api/chart|BotChart|lightweight" in dashboard src
+      -> 0 hits; GAP3 grep "hysteresis|neutralGrace" in engine main -> 0
+      hits; GAP4 this(2, 40, 32) at ChartEngine.java:62 (global); GAP5
+      grep "oteStats|OteAgreement" -> 0 hits; GAP6 V1 used direct pushes
+      (V1 ledger); V2 switches to PR-per-agent.
+    - V2 document at repo root, committed via this agent's PR.
+  Q1/Q2/Q3 ANSWERS (where the agent requires them):
+    - Q1: fixes hold — anchors + re-run tests above. Q2: no duplicate
+      instances; non-tap candle paths are backtest-only (documented).
+      Q3: no zombie-poller trigger (scheduler shutdown on disconnect);
+      facade reference replaced per start.
+  ADAPTATIONS MADE (anchors drifted? code adapted? why):
+    - Line anchors only (Section 3's ~approximations replaced with exact
+      lines above). No code changes in this agent.
+  REGRESSIONS FOUND & FIXED:
+    - none (all baselines green on first run)
+  BLOCKED ITEMS (⛔ only):
+    - none
+
+··· APPENDIX A-02 — Agent 02: SIM Warm Boot ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  Q1/Q2/Q3 ANSWERS (where the agent requires them):
+    - Q1: (evidence)   Q2: (sweep results)   Q3: (triggers found/filed)
+  ADAPTATIONS MADE (anchors drifted? code adapted? why):
+    - (exact change + reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup PR number, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-03 — Agent 03: Dashboard Bot Chart + Warm Pill ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  Q1/Q2/Q3 ANSWERS (where the agent requires them):
+    - Q1: (evidence)   Q2: (sweep results)   Q3: (triggers found/filed)
+  ADAPTATIONS MADE (anchors drifted? code adapted? why):
+    - (exact change + reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup PR number, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-04 — Agent 04: Bias Stability (NEUTRAL-Flip Hysteresis) ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  Q1/Q2/Q3 ANSWERS (where the agent requires them):
+    - Q1: (evidence)   Q2: (sweep results)   Q3: (triggers found/filed)
+  ADAPTATIONS MADE (anchors drifted? code adapted? why):
+    - (exact change + reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup PR number, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-05 — Agent 05: Per-Instrument Chart Tuning + Leg Telemetry ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  Q1/Q2/Q3 ANSWERS (where the agent requires them):
+    - Q1: (evidence)   Q2: (sweep results)   Q3: (triggers found/filed)
+  ADAPTATIONS MADE (anchors drifted? code adapted? why):
+    - (exact change + reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup PR number, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-06 — Agent 06: OTE Agreement Counter ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  Q1/Q2/Q3 ANSWERS (where the agent requires them):
+    - Q1: (evidence)   Q2: (sweep results)   Q3: (triggers found/filed)
+  ADAPTATIONS MADE (anchors drifted? code adapted? why):
+    - (exact change + reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup PR number, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+··· APPENDIX A-07 — Agent 07: Final Verification & Close-Out ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  Q1/Q2/Q3 ANSWERS (where the agent requires them):
+    - Q1: (evidence)   Q2: (sweep results)   Q3: (triggers found/filed)
+  ADAPTATIONS MADE (anchors drifted? code adapted? why):
+    - (exact change + reason, or "none")
+  REGRESSIONS FOUND & FIXED:
+    - (what broke, how fixed, fixup PR number, or "none")
+  BLOCKED ITEMS (⛔ only):
+    - (exact owner action required, or "none")
+
+  SPECIAL FIELD — APPENDIX A-04 ONLY (mandatory, verbatim):
+    SAFETY INVARIANT EVIDENCE:
+      - emission-time non-NEUTRAL re-check: (file:line)
+      - invariant unit test name + result:  (pasted)
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX B — ENGINEERING CONVENTIONS FOR THIS REPO
+────────────────────────────────────────────────────────────────────────────────
+
+  B1.  Java 21, Gradle wrapper (./gradlew or .\gradlew.bat), Node 18+ for
+       the dashboard. Root multi-project build works (V1 ledger).
+  B2.  One agent = one PR against Main (capital M), squash-merged, branch
+       deleted. Fixups are separate small PRs. No direct pushes to Main.
+  B3.  Match each file's existing logging convention (SLF4J in the
+       connector; System.out in parts of the strategy layer). New code in a
+       file follows THAT file's convention.
+  B4.  New public types get javadoc explaining WHY they exist. Session-
+       scoped/non-durable metrics say so in their javadoc (Agent 06).
+  B5.  Concurrency: market-data thread vs API thread. Confined +
+       synchronized (ChartEngine pattern), ConcurrentHashMap, or immutable
+       snapshots. Never a bare HashMap across threads. Bounded collections
+       for anything that grows per event.
+  B6.  Determinism is a feature: same candle sequence -> identical outputs.
+       Seeded randomness only, and only inside the SIM boundary (Agent 02).
+  B7.  Session/killzone logic is America/New_York; candle timestamps are
+       Instant (UTC). Never mix silently.
+  B8.  Risk code (M1–M9 semantics, PropFirmRiskEngine, RiskLimits, DLL/MLL,
+       flatten times) is READ-ONLY. Telemetry may observe; nothing weakens.
+       Agent 04 touches invalidation timing ONLY, guarded by a tested
+       invariant, default OFF.
+  B9.  Secrets only via environment variables. Never in source, logs, or
+       commits.
+  B10. Every async/UI surface: loading, empty, error, and (new) COLD states
+       handled. An endpoint hit before warmth returns an honest empty shape,
+       never a 500.
+  B11. Additive over invasive: V1's byte-identical, smoke-tested classes are
+       extended, not rewritten. Pre-existing tests passing UNCHANGED is the
+       proof that defaults were preserved (Agent 05).
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX C — ANTI-PATTERNS (IF YOU CATCH YOURSELF DOING THESE, STOP)
+────────────────────────────────────────────────────────────────────────────────
+
+  C1.  "The code looks right" as evidence. Build/test/curl/log output and
+       file:line are evidence. Nothing else.
+  C2.  Trusting V1's ✅ instead of re-proving the load-bearing claims
+       (that is Agent 01's entire job — and the Q1/Q2/Q3 standard's).
+  C3.  Marking an agent ✅ with an empty Appendix A block.
+  C4.  Weakening a gate to make a trade happen. The owner's two-day silence
+       was warmth; the 2026-07-09 kill was noise-fragility. Neither fix is
+       "loosen the entry rules."
+  C5.  Letting the hysteresis grace period leak into entry emission, or
+       enabling bias.hysteresis.enabled by default. Grace preserves
+       PROGRESS; entries require live, aligned, non-NEUTRAL bias. Always.
+  C6.  Shipping SIM's synthetic data anywhere near the LIVE path, or
+       generating it unseeded (irreproducible SIM runs are useless).
+  C7.  Silent fallbacks: failed chunks log; blocked items are ⛔ with an
+       exact action; unknown symbols return warm=false; a cold chart shows
+       a COLD banner, never a blank box.
+  C8.  Skipping the ledger update or the PR merge "until later." Ledger,
+       branch, commit, PR, squash-merge, THEN next agent.
+  C9.  Pushing to "main" — the branch is Main. V1's ledger flagged it;
+       getting this wrong wastes a whole cycle.
+  C10. Unbounded per-event growth (Agent 06's ring is bounded at ~10 for a
+       reason). Memory is a budget.
+  C11. Stopping between agents to ask whether to continue. The GOLDEN LOOP
+       already answered: continue until 7/7 ✅.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX D — GLOSSARY + CLI QUICK REFERENCE
+────────────────────────────────────────────────────────────────────────────────
+
+  GLOSSARY
+    OTE            Optimal Trade Entry — the 0.62–0.79 fib band of a swing
+                   leg; 0.705 is the sweet spot. Convention: 0.0 at the leg
+                   EXTREME, 1.0 at the leg ORIGIN.
+    FORMING/ARMED/REACTED/INVALIDATED/EXPIRED
+                   ChartEngine OTE zone lifecycle; REACTED = tagged the band
+                   then rejected toward the extreme (the screenshot pattern).
+    Warm / Cold    warm=true on /api/chart means >= ~1500 one-minute bars
+                   ingested — the precondition for honest gating. COLD means
+                   the engine is blind; the UI now shows it (Agent 03).
+    Hysteresis     Config-gated grace (Agent 04): an in-flight setup
+                   survives brief NEUTRAL wobbles; OPPOSITE bias kills it
+                   instantly; entries NEVER fire while NEUTRAL.
+    Counterfactual line
+                   The hysteresis-OFF log that counts how often grace WOULD
+                   have saved a setup — the evidence for enabling it.
+    oteStats       Session-scoped agreement counters between the state
+                   machine's emissions and the 30m chart's REACTED zones
+                   (Agent 06) — the evidence for any future gate adoption.
+    Q1/Q2/Q3       Does the fix hold? / Any other instance? / Any other
+                   trigger? — the verification standard for every agent.
+    PDH / PDL      Previous Day High / Low. M1–M9: the sequential mandatory
+                   gates in MandatoryConfluenceValidator.
+
+  CLI QUICK REFERENCE
+    Build engine        cd trading-engine && ./gradlew clean build
+    Build API           cd api-backend && ./gradlew clean build
+    Build dashboard     cd dashboard-frontend && npm install && npm run build
+    Run tests           cd trading-engine && ./gradlew test
+    Boot API/engine     cd api-backend && ./gradlew bootRun
+    Chart check         curl http://localhost:8080/api/chart/MNQ?lookback=50
+    Setup/gates check   curl http://localhost:8080/api/setup
+    Backfill depth      -Dbackfill.days=3            (clamped 1..7)
+    SIM warm-boot seed  -Dsim.backfill.seed=42
+    Chart tuning        -Dchart.minLegTicks.MGC=80   (per symbol)
+    Hysteresis (later)  -Dbias.hysteresis.enabled=true -Dbias.neutralGraceBars=2
+    PR per agent        git checkout -b feat/agent-NN-<name>
+                        git add -A && git commit -m "agent-NN-v2: ..."
+                        git push -u origin feat/agent-NN-<name>
+                        gh pr create --base Main --head feat/agent-NN-<name> --title "..." --body "..."
+                        gh pr merge --squash --delete-branch
+                        git checkout Main && git pull origin Main
+    Verify merge        gh pr view --json state,mergedAt && git log --oneline -1
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX E — THE INDEPENDENT AUDIT (2026-07-09): FULL EVIDENCE BASELINE
+────────────────────────────────────────────────────────────────────────────────
+This is the raw evidence behind Section 3, recorded so Agent 01 can diff
+against it instead of re-deriving it. Line numbers are approximate anchors at
+the audited commit; drift is expected and fine — semantics are what must hold.
+
+E1. TOPSTEPCONNECTOR (trading-engine/.../connector/TopstepConnector.java)
+    - ~line 711-719: fetchBars javadoc says "one path, two callers"; body
+      computes now-60min window and delegates:
+        java.util.List<Candle> parsedCandles =
+            fetchBarsRange(symbol, contractId, startTime, endTime);
+      then keeps the original sort / de-dup / deliver / lastBarTimestamp
+      logic. Live-poll behavior preserved.
+    - ~line 785: private List<Candle> fetchBarsRange(String, String,
+      Instant, Instant) — request map includes limit=1000 (~line 799),
+      unit=BAR_UNIT_MINUTE, unitNumber=1, includePartialBar=false. Returns
+      candles; never touches the listener; empty list on error/no-bars.
+    - ~line 106: backfilledSymbols = ConcurrentHashMap.newKeySet() —
+      per-symbol double-backfill guard.
+    - ~line 109-113: BACKFILL_DAYS = min(7, max(1,
+      Integer.getInteger("backfill.days", 3))).
+    - ~line 986-994: in startMarketDataPolling, BEFORE the initial fetch:
+        if (backfilledSymbols.add(symbol)) {
+            logger.info("Starting historical backfill for {} ({} days...)");
+            com.topstep.trading.chart.HistoricalBackfill.run(
+                symbol, BACKFILL_DAYS,
+                (start, end) -> fetchBarsRange(symbol, contractId, start, end),
+                <listener>::onCandle,
+                ts -> lastBarTimestamp.put(symbol, ts));
+        }
+
+E2. WARMUP GUARD (trading-engine/.../LiveEngineRunner.java)
+    - ~lines 127-137: documented three-layer design —
+        1) warmupComplete (volatile, false until every initial subscription
+           and its synchronous backfill returns),
+        2) event-created-during-replay: signals whose creation time predates
+           warmupCompletedAt are suppressed (protects against the async
+           EventBus delivering a replay-era signal after the flag flips —
+           an improvement V1's executor added beyond the original spec),
+        3) lastCandleTs staleness: per-symbol most-recent candle timestamp;
+           a signal whose symbol's candle is > 5 minutes old is suppressed.
+    - ~line 614-615: warmupCompletedAt = Instant.now(); warmupComplete=true
+      only after the subscription loop finishes.
+    - ~line 738: the guard runs at the top of handleStrategySignal.
+    - Test: trading-engine/src/test/java/com/topstep/trading/WarmupGuardTest.java
+
+E3. CHART PACKAGE (trading-engine/.../chart/)
+    - ChartEngine.java, OteState.java, OteZoneSnapshot.java,
+      ChartSnapshot.java, HistoricalBackfill.java — verified byte-identical
+      (diff -q) to the smoke-tested originals embedded in V1. No existing
+      class was modified to add them.
+    - Tests present: ChartEngineOteLifecycleTest,
+      ChartEngineInvalidationAndExpiryTest, ChartEngineDeterminismTest,
+      HistoricalBackfillTest.
+
+E4. WIRING (LiveEngineRunner / SimEngineRunner / multi-engine / facade)
+    - LiveEngineRunner ~144: chartEngine field constructed.
+    - ~414-419: registerInstrument for MNQ/MES/MGC with tick sizes sourced
+      from InstrumentCharacteristics.getProfile(s).getTickSize() — comment
+      explicitly says "never invented values".
+    - ~423-432: multi-instrument mode discovered to BYPASS onMarketData
+      (the stdv-ote multi engine subscribes its own dispatch), so a candle
+      tap was added:
+        stdvOteMultiEngine.setCandleTap(c -> {
+            lastCandleTs.put(c.getSymbol(), c.getTimestamp());
+            chartEngine.onCandle(c);
+        });
+        stdvOteMultiEngine.setChartEngine(chartEngine);
+      else-branch wires single-runner mode: sors.setChartEngine(chartEngine).
+      NOTE the tap also feeds lastCandleTs — meaning the warmup staleness
+      layer works in multi mode too. Agent 01 must re-confirm this tap is
+      the ONLY candle route in multi mode (Q2).
+    - ~575: EngineFacade.getInstance().setChartEngine(chartEngine).
+    - ~673-677: default mode: onMarketData first statements feed
+      chartEngine.onCandle(candle) and lastCandleTs.
+    - SimEngineRunner ~77-78, 130-138, 186: mirror wiring + facade
+      registration for SIM.
+    - StdvOteMultiInstrumentEngine ~210-212: setChartEngine fans out to
+      each per-symbol strategy (s.setChartEngine(engine)).
+    - EngineFacade ~131: getChartEngine() lazily creates an empty engine if
+      none registered — never null (BACKTEST/STOPPED return an empty chart,
+      which /api/chart reports as warm=false; honest empty shape).
+
+E5. RESTART SEMANTICS
+    - EngineFacade.startLive() ~188: liveRunner = new LiveEngineRunner().
+    - LiveEngineRunner ~515: return new TopstepConnector(credentials...).
+    - Consequence: a NEW connector per LIVE start => backfilledSymbols
+      resets => LIVE re-backfills after in-app restart. GOOD.
+    - SIM: SimEngineRunner constructs new MockConnector (~102); Mock has
+      NO backfill (grep "backfill" in MockConnector: zero hits) => SIM
+      restarts cold. V1's Appendix A-11 PROOF 4 recorded exactly this:
+      post-restart warm=false, barsIngested1m=321. => V-GAP1 / Agent 02.
+
+E6. TELEMETRY + API + DOCS
+    - StdvOteRunnerStrategy ~516: [GATES <sym>] line per completed 15m bar
+      with state, bias, lastGateFailed, kzActive, chart30mOte.
+    - ~572-575: log-only comparison —
+        boolean screenshotPattern = chartEngine.hasReactedOte(...);
+        ... + " | chart30m.hasReactedOte=" + screenshotPattern
+      No aggregation anywhere (grep for a counter: none) => V-GAP5.
+    - api-backend .../controller/ChartStateController.java: present; reads
+      EngineFacade.getInstance().getChartEngine(); javadoc notes the facade
+      always returns the CURRENT engine.
+    - docs/QUICK_START.md: "STARTUP & WARMTH" (~155), "READING THE GATES"
+      (~179), scalp floor note + recommended flag (~208-216), "TOPSTEP
+      AUTOMATION POLICY" (~246). docs/SCALP_MODE.md documents the strict
+      scalp.minRaidScore=6 binary floor semantics.
+
+E7. WHAT IS ABSENT (the gaps, with the negative-evidence greps)
+    - dashboard-frontend/src: components list contains NO BotChart; grep
+      for "api/chart|BotChart|lightweight" across src returns nothing
+      => V-GAP2.
+    - grep -rn "hysteresis|neutralGrace" across trading-engine/src/main:
+      zero hits => V-GAP3.
+    - ChartEngine default ctor: this(2, 40, 32) applied globally; no
+      per-symbol thresholds; no [CHART] leg telemetry => V-GAP4.
+    - V1's in-repo document is the 12-agent revision: its ledger and
+      protocol pre-date the PR workflow, the Bot Chart agent, and the
+      hysteresis agent => V-GAP6 and the reason this V2 exists.
+
+E8. FIELD EVIDENCE FROM THE OWNER'S LIVE SESSION (2026-07-09)
+    - Dashboard Setup panel: pills IDLE / BIAS SET / MANIP DONE / SWEEP
+      DONE / ... with INVALIDATED highlighted: "HTF bias became NEUTRAL".
+    - Context pills: HTF: BULLISH↑, Killzone: OPEN, SMT: DIVERGENT.
+    - Mandatory gates: M1 ✓ M2 ✓ M3 ✓ M4 ✓; M5 (Displacement + FVG) not
+      reached; "Last failed gate: HTF bias became NEUTRAL".
+    - OTE ZONE panel: "No OTE zone built yet."
+    - STDV ladder: exit rungs 29,770.50-30,019.50 with one rung flagged
+      UNINITIALIZED while spot traded ~29,622 — stale ladder from the
+      invalidated setup.
+    - Interpretation: perception fine (four gates passed); fragility is the
+      NEUTRAL-flip invalidation => Agent 04. The ladder staleness is
+      cosmetic downstream of the same invalidation.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX F — OWNER'S OPERATING RUNBOOK (POST-V2)
+────────────────────────────────────────────────────────────────────────────────
+Written for the human, not for Claude Code. Claude Code: append this to
+docs/QUICK_START.md (or link it) as part of Agent 07's close-out.
+
+F1. START OF DAY (SIM or LIVE)
+    1. Start the stack (api-backend bootRun; dashboard npm run dev).
+    2. Open the dashboard -> Setup tab. The WARM PILL must be green:
+       "CHART WARM (>=1500 bars)". If red/COLD:
+         - LIVE: check engine logs for "[Backfill]" lines; a missing line
+           means the backfill did not run — restart the engine; a failing
+           line names the chunk and error.
+         - SIM: should never be cold after Agent 02; if it is, the warm
+           boot regressed — file it.
+    3. Open the Bot Chart tab. Sanity-check against TopstepX on 30m: same
+       candles, same most-recent swing. If they diverge, the bot is
+       trading a different market than you are looking at — stop and
+       investigate before anything else.
+
+F2. READING THE TELEMETRY DURING A SESSION
+    - [GATES <sym>] every 15m: state, bias, lastGateFailed, kzActive,
+      chart30mOte, oteAgree/oteDisagree/chartOnly rollup. This line is the
+      single answer to "why is it not trading right now."
+    - [CHART <sym>] leg ACCEPTED/REJECTED: is the 30m brain seeing the
+      structure you see? Frequent REJECTED on legs you consider obvious =>
+      lower chart.minLegTicks.<sym>; zones drawn on noise => raise it.
+    - [BIAS] counterfactual (hysteresis OFF): every one of these lines is a
+      setup that died to a NEUTRAL wobble and WOULD have been held.
+
+F3. THE HYSTERESIS DECISION (make it from data, not frustration)
+    1. Run 3-5 SIM sessions (and/or LIVE-observation days) with
+       bias.hysteresis.enabled=false (default).
+    2. Count [BIAS] counterfactual lines vs total setups that reached
+       BIAS SET.
+    3. If NEUTRAL wobbles are killing a meaningful share of multi-gate
+       setups (like the 2026-07-09 session), enable:
+         -Dbias.hysteresis.enabled=true -Dbias.neutralGraceBars=2
+    4. Re-run the same observation. Setups surviving to M5+ should rise;
+       entries during NEUTRAL must remain ZERO (they are impossible by
+       invariant — if you ever see one, kill the engine and file it).
+
+F4. THE OTE-GATE DECISION (a later, separate decision)
+    - Read oteStats after several sessions:
+        machineEmitted_chartAgreed high  => machine and 30m chart agree;
+          gating adds little; leave as is.
+        chartReacted_machineSilent high  => the 30m chart keeps finding the
+          screenshot pattern while the machine dies upstream => first fix
+          upstream fragility (hysteresis), then REVISIT whether
+          hasReactedOte should become a gate. That change is NOT covered by
+          this document — it gets its own plan, backtest, and PR.
+
+F5. BEFORE GOING LIVE, EVERY TIME
+    [ ] warm=true on /api/chart for every traded symbol
+    [ ] Bot Chart matches TopstepX on 30m
+    [ ] [GATES] lines flowing; lastGateFailed is a market reason, not a
+        plumbing reason
+    [ ] Risk panel: DLL/MLL/flatten-by unchanged and correct for the
+        account
+    [ ] Topstep's CURRENT written automation policy re-checked for the
+        account type (eval vs funded)
+    [ ] Kill switch reachable and tested this week
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX G — RISK REGISTER FOR THIS DOCUMENT'S CHANGES
+────────────────────────────────────────────────────────────────────────────────
+
+  G-R1. SIM synthetic data leaks toward LIVE.
+        Mitigation: generator lives inside the SIM boundary (MockConnector/
+        SimWarmBoot); Agent 07 grep-audits; anti-pattern C6.
+  G-R2. Hysteresis accidentally enables entries during NEUTRAL.
+        Mitigation: emission-time non-NEUTRAL re-check (Agent 04 Task 3) +
+        MANDATORY invariant unit test (d) + default OFF + Agent 07 audit.
+  G-R3. Per-instrument tuning silently changes today's behavior.
+        Mitigation: defaults preserved by construction; the UNCHANGED
+        pre-existing ChartEngine tests are the proof (Agent 05).
+  G-R4. Dashboard chart mismatch misleads the owner (rendering bug shows
+        different candles than the engine holds).
+        Mitigation: BotChart renders the API payload verbatim (no client-
+        side aggregation); Agent 07's end-to-end run eyeballs SIM data
+        against the API JSON.
+  G-R5. Counter growth / memory creep from per-event stats.
+        Mitigation: bounded ring (~10) + counts only; anti-pattern C10.
+  G-R6. Branch-name confusion (main vs Main) wastes a cycle.
+        Mitigation: stated in the title block, the workflow, C9, and the
+        CLI reference. Every gh command in this document says Main.
+  G-R7. gh unavailable/unauthenticated in the execution environment.
+        Mitigation: explicit ⛔ path with exact owner action; direct pushes
+        remain forbidden.
+  G-R8. V1/V2 ledger confusion across sessions.
+        Mitigation: V1 document is read-only history (Critical Rule 9);
+        only V2's ledger is active; resume behavior reads V2 only.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX H — V1 → V2 TRACEABILITY MAP
+────────────────────────────────────────────────────────────────────────────────
+One row per V1 agent: what it delivered (audited), and which V2 agent
+verifies, extends, or supersedes it. Claude Code uses this to know exactly
+what is inherited vs owned; the owner uses it to see nothing was dropped.
+
+  V1-01 Pre-flight & baseline
+        Delivered: green baselines, F1-F9 confirmed, doc in repo, and the
+        Main-branch discovery.
+        V2: Agent 01 repeats the discipline at the new HEAD (Q1) and adds
+        the Q2/Q3 sweeps V1 never ran.
+
+  V1-02 fetchBarsRange extraction
+        Delivered: E1 — one HTTP path, two callers, limit=1000.
+        V2: Agent 01 re-confirms (V-OK1); no changes planned. Agent 02
+        deliberately does NOT reuse it (SIM must not call the live HTTP
+        path) — SIM generates synthetically inside its own boundary.
+
+  V1-03 Historical backfill
+        Delivered: E1 — byte-identical helper, wired, guarded, configurable.
+        V2: Agent 01 re-confirms (V-OK2). Agent 02 brings the SAME warm-
+        start concept to SIM. LIVE-side backfill itself is unchanged.
+
+  V1-04 Warmup guard
+        Delivered: E2 — three layers (one more than specced) + test.
+        V2: Agent 01 re-runs the test (Q1); Agent 02 proves the guard also
+        suppresses during SIM replay (same failure class, new surface — Q3).
+
+  V1-05 Chart package
+        Delivered: E3 — byte-identical, tested.
+        V2: Agent 05 EXTENDS additively (per-instrument config + leg
+        telemetry) with the pre-existing tests passing UNCHANGED as the
+        no-regression proof.
+
+  V1-06 Engine wiring + facade
+        Delivered: E4 — LIVE, SIM, multi-mode tap, facade never-null.
+        V2: Agent 01 re-confirms the tap is the ONLY multi-mode candle
+        route (Q2) and traces restart/poller semantics (Q3).
+
+  V1-07 /api/chart endpoint
+        Delivered: E6 — controller live, honest empty shape.
+        V2: Agent 03 finally gives it a consumer (Bot Chart tab + warm
+        pill). Agent 06 extends the response with oteStats.
+
+  V1-08 [GATES] telemetry
+        Delivered: E6 — 15m line incl. chart30mOte.
+        V2: Agent 06 appends the oteAgree/oteDisagree/chartOnly rollup to
+        the same line. Format is append-only: existing fields keep their
+        names and order so any log tooling keeps working.
+
+  V1-09 Docs
+        Delivered: E6 — QUICK_START sections + SCALP_MODE.
+        V2: Agents 02/04/05/06 each append their subsection; Agent 07
+        appends the Owner's Runbook (Appendix F).
+
+  V1-10 Unit tests
+        Delivered: E3 — five classes.
+        V2: every functional agent (02/04/05/06) adds its own tests; the
+        consolidated matrix is Appendix I.
+
+  V1-11 SIM end-to-end proofs
+        Delivered: filled A-11 incl. the live retrieveBars probe; PROOF 4
+        exposed the SIM cold restart.
+        V2: Agent 02 closes the PROOF-4 gap; Agent 07's end-to-end warm
+        run is the V2 equivalent, now with the dashboard in the loop.
+
+  V1-12 Final verification
+        Delivered: builds, ledger audit, safety greps.
+        V2: Agent 07 repeats with three additional invariants (hysteresis
+        default-off, emission re-check, PR audit on Main).
+
+  NEVER IMPLEMENTED (added to the plan after V1 executed):
+        Bot Chart (V1.2's Agent 12)      -> NOW V2 Agent 03.
+        Bias hysteresis (V1.2's Agent 13) -> NOW V2 Agent 04.
+        PR-per-agent workflow             -> NOW the V2 protocol itself.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX I — CONSOLIDATED TEST MATRIX (WHAT MUST BE GREEN AT AGENT 07)
+────────────────────────────────────────────────────────────────────────────────
+Every row must pass in Agent 07's fresh-checkout build. "Inherited" rows
+already exist; "NEW" rows are owned by the named V2 agent. If a row's class
+name differs in the repo, record the actual name in Appendix A and keep the
+scenario coverage identical.
+
+  INHERITED (V1)
+  - ChartEngineOteLifecycleTest ......... leg -> fibs -> ARMED -> REACTED ->
+                                          INVALIDATED, exact fib prices
+  - ChartEngineInvalidationAndExpiryTest  expiry untagged; no false ARM on
+                                          new extreme; bearish mirror
+  - ChartEngineDeterminismTest .......... two engines, same feed, identical
+                                          per-candle states
+  - HistoricalBackfillTest .............. chunk continuity; de-dup;
+                                          fault-tolerant chunks; watermark
+  - WarmupGuardTest ..................... stale signal suppressed; fresh
+                                          signal passes
+  - Entire pre-existing engine suite .... unchanged and green (the
+                                          regression floor for every agent)
+
+  NEW — Agent 02 (SIM warm boot)
+  - Generator determinism (seed+days -> identical series)
+  - Delivery ascending / de-duped / watermark handoff to live-sim ticks
+  - Warmth: 3-day generation -> >=1500 bars AND >=1 OTE zone formed
+  - Property clamps (backfill.days, sim.backfill.seed)
+
+  NEW — Agent 04 (hysteresis)
+  - (a) NEUTRAL wobble held + restore on bias return
+  - (b) NEUTRAL beyond grace -> invalidated with grace reason
+  - (c) OPPOSITE during grace -> immediate invalidation
+  - (d) MANDATORY INVARIANT: no emission while NEUTRAL within grace
+  - (e) OFF path byte-identical + counterfactual log
+  - (f) determinism with hysteresis ON
+
+  NEW — Agent 05 (chart tuning)
+  - Per-symbol override changes acceptance for that symbol ONLY
+  - All pre-existing ChartEngine tests pass UNCHANGED (default-preservation
+    proof)
+
+  NEW — Agent 06 (oteStats)
+  - Three buckets increment on synthetic sequences
+  - Ring bounded at cap
+  - /api/chart serialization includes oteStats
+
+  DASHBOARD (Agent 03) — no unit-test framework mandated; the bar is:
+  - npm run build zero TS errors
+  - the four UI states (loading / empty / error / COLD) demonstrably
+    reachable, evidenced in Appendix A-03
+
+  ENVIRONMENT NOTE: if the execution environment cannot run the SIM stack
+  or npm (headless constraints), each affected proof becomes ⛔ with the
+  exact command the owner should run locally — never a silent pass, never
+  a fabricated output.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX J — TROUBLESHOOTING: SYMPTOM -> LIKELY CAUSE -> FIRST ACTION
+────────────────────────────────────────────────────────────────────────────────
+For the owner and for Claude Code during Agents 02/03/07. Work top-down; each
+row's action is the cheapest decisive check, not the full repair.
+
+  SYMPTOM: /api/chart warm=false in LIVE, minutes after start.
+    CAUSE:  Backfill did not run or failed every chunk.
+    ACTION: grep engine log for "[Backfill]". Missing entirely -> the
+            symbol never entered startMarketDataPolling (subscription
+            failed upstream; check auth/contract resolution). Present with
+            "chunk ... failed" on every line -> API/window problem; try
+            -Dbackfill.days=1 to isolate, then inspect one failing chunk's
+            error text.
+
+  SYMPTOM: warm=true but Bot Chart shows candles that do not match TopstepX.
+    CAUSE:  Wrong contract month resolved, or clock/timezone drift in
+            aggregation (30m bars misaligned).
+    ACTION: compare the LAST closed 30m candle's timestamp + OHLC against
+            TopstepX with the chart set to UTC-5. Off by a fixed offset ->
+            timezone in the renderer; different prices entirely -> contract
+            resolution in the connector.
+
+  SYMPTOM: [GATES] shows bias=NEUTRAL for many hours in LIVE.
+    CAUSE:  Genuinely structureless 15m tape (normal, e.g. holiday chop) OR
+            the 15m aggregation is starved.
+    ACTION: check barsIngested1m is growing ~1/min on /api/chart. Growing ->
+            it is the market; flat -> the feed/tap stopped (restart engine;
+            if it recurs, trace the poller).
+
+  SYMPTOM: Setup dies repeatedly with "HTF bias became NEUTRAL" after
+           passing several gates (the 2026-07-09 pattern).
+    CAUSE:  NEUTRAL-wobble fragility (V-GAP3).
+    ACTION: count [BIAS] counterfactual lines across a few sessions; if
+            material, enable hysteresis per Appendix F3. Do NOT loosen any
+            gate instead.
+
+  SYMPTOM: chart30mOte stuck FORMING all day; [CHART] shows only REJECTED.
+    CAUSE:  minLegTicks too high for the instrument's current range.
+    ACTION: read the rejected sizes in the [CHART] lines; set
+            -Dchart.minLegTicks.<SYM> just below the obvious structural
+            legs you see on the Bot Chart; restart; re-observe.
+
+  SYMPTOM: OTE zones drawn on every little wiggle; ARMED constantly.
+    CAUSE:  minLegTicks too low (opposite tuning error).
+    ACTION: raise -Dchart.minLegTicks.<SYM>; verify with [CHART] ACCEPTED
+            lines that only structural legs pass.
+
+  SYMPTOM: oteStats chartReacted_machineSilent grows while the machine sits
+           in IDLE/BIAS SET.
+    CAUSE:  The 30m chart keeps finding the pattern but upstream gates
+            (bias/killzone/sweep freshness) never let a setup mature.
+    ACTION: this is the designed evidence stream — follow Appendix F4;
+            fix upstream fragility first; the OTE-gate question comes after.
+
+  SYMPTOM: Signal suppressed with a [Warmup] log during normal live hours.
+    CAUSE:  lastCandleTs stale (>5 min) for that symbol — the feed stalled,
+            and the guard did its job.
+    ACTION: treat as a FEED incident, not a guard bug: check poller logs
+            and connection state; the guard prevented an order off stale
+            prices, which is exactly what you want.
+
+  SYMPTOM: SIM boots cold after Agent 02 is merged.
+    CAUSE:  Warm-boot regression or the seed/days properties were
+            overridden to something degenerate.
+    ACTION: run the Agent 02 warmth unit test; if green, inspect the SIM
+            boot log for the warm-boot line and the property values it
+            resolved.
+
+  SYMPTOM: gh pr merge fails or hangs.
+    CAUSE:  auth, protected-branch settings, or a merge conflict with Main.
+    ACTION: gh auth status; git fetch origin Main && git rebase origin/Main
+            on the agent branch; if the block is repo settings only the
+            owner can change, mark ⛔ with that exact setting.
+
+  SYMPTOM: Dashboard tab renders a blank area instead of the chart.
+    CAUSE:  A UI state branch was missed (the exact thing rule 8 / B10
+            forbids) or the library failed to load.
+    ACTION: browser console first; then confirm all four states (loading /
+            empty / error / COLD) render something; a blank box is always a
+            bug, never "no data".
+
+  ESCALATION RULE: any symptom whose first action does not resolve it gets
+  written into the LEDGER NOTES with a date, the evidence gathered, and
+  either a fixup PR or a precise ⛔ owner action. Unexplained weirdness is
+  never left undocumented in a system that touches real money.
+
+================================================================================
+SECTION 6 — CLOSING BANNER
+================================================================================
+
+  You have your orders. Return to the GOLDEN LOOP now:
+
+    STEP 1: open this document.
+    STEP 2: find the first agent that is not ✅ COMPLETE.
+    STEP 3: execute it fully. Evidence, ledger, Appendix A, branch, commit,
+            PR against Main, squash-merge.
+    STEP 4: return to STEP 1.
+
+  After every agent is done and fully working, return to this master
+  document and follow the next task. Repeat until every agent in the
+  PROGRESS LEDGER is ✅ COMPLETE and Agent 07 has passed with evidence.
+  You do NOT stop and wait between agents. The only acceptable stopping
+  condition is: ALL 7 agents complete AND the final verification passed.
+
+  The end state, one more time: V1's warmth PROVEN at HEAD, SIM booting
+  warm like LIVE does, a physical Bot Chart the owner can hold up against
+  TopstepX, a NEUTRAL wobble that can no longer erase four gates of honest
+  progress (once the owner enables it — from evidence), per-instrument
+  chart tuning with telemetry, and agreement counters that turn "should we
+  gate on the 30m OTE?" from a debate into a data read.
+
+  DO NOT STOP UNTIL EVERY AGENT IS ✅.
+
+================================================================================
+                            END OF MASTER PROMPT V2
+================================================================================
