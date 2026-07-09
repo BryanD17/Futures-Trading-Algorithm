@@ -170,7 +170,7 @@ SECTION 2 — PROGRESS LEDGER
   Status markers:  ⬜ NOT STARTED   🔄 IN PROGRESS   ✅ COMPLETE   ⛔ BLOCKED
 
   [✅] Agent 01 — Pre-Flight Verification & Baseline Build
-  [⬜] Agent 02 — TopstepConnector: Extract fetchBarsRange(...)
+  [✅] Agent 02 — TopstepConnector: Extract fetchBarsRange(...)
   [⬜] Agent 03 — HistoricalBackfill: 3-Day Startup Replay
   [⬜] Agent 04 — LiveEngineRunner: Warmup Guard (No Ghost Orders)
   [⬜] Agent 05 — ChartEngine Package (Chart-In-Memory + 30m OTE)
@@ -189,6 +189,9 @@ SECTION 2 — PROGRESS LEDGER
               572bd16, no com.topstep.trading.chart package exists, Java 21.0.10.
               NOTE: default branch is "Main" (capital M) — all pushes go to
               origin Main, not origin main.
+  2026-07-08  Agent 02 ✅  fetchBarsRange extracted (one HTTP path, two
+              callers), fetchBars now a thin 60-min wrapper, build+tests
+              green in 19s.
   ------------------------------------------------------------------
 
 ================================================================================
@@ -1589,20 +1592,47 @@ an agent marked ✅.
     - none
 
 ··· APPENDIX A-02 — Agent 02: TopstepConnector: Extract fetchBarsRange(...) ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  COMMIT HASH:       (from git log --oneline -1 after the push)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-08
+  COMMIT HASH:       (see ledger note / git log — agent-02-v1 commit)
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - criterion 3:   (file:line / pasted output)
-    - (continue one line per criterion — every box in the agent)
+    - fetchBarsRange exists: TopstepConnector.java:772 —
+      "private java.util.List<Candle> fetchBarsRange(String symbol, String
+       contractId, java.time.Instant start, java.time.Instant end)".
+    - Returns candles, never delivers: method body builds parsedCandles and
+      returns it; contains NO listener.onCandle and NO lastBarTimestamp
+      access (those live only in the fetchBars wrapper at :701-770).
+    - Empty list, never null: parsedCandles initialized empty; returned on
+      HTTP error, API errorCode != 0, no-bars, and outer-exception paths.
+    - limit=1000 ONLY in fetchBarsRange (requestMap.put("limit", 1000));
+      the wrapper still requests a 60-minute window (endTime=now,
+      startTime=now-60min) — net polling behavior unchanged: same window,
+      same sort-asc, same skip <= lastBarTimestamp, same delivery + logs.
+      Diff: 1 file changed, 84 insertions(+), 65 deletions(-).
+    - fetchBars is now a wrapper (TopstepConnector.java:701): calls
+      fetchBarsRange, then sorts ascending, skips bars <= lastBarTimestamp
+      .get(symbol), delivers via listener.onCandle, updates lastBarTimestamp
+      to max delivered timestamp; "Received/CANDLE/Delivered/All bars"
+      log lines preserved verbatim.
+    - Listener reference for Agent 03: MarketDataListener obtained via
+      field  marketDataListeners  (Map<String,MarketDataListener>),
+      lookup  marketDataListeners.get(symbol)  — used in the wrapper and
+      available inside startMarketDataPolling.
+    - Build: .\gradlew.bat :trading-engine:clean :trading-engine:build ->
+      "BUILD SUCCESSFUL in 19s, 9 actionable tasks" (tests included, green).
   ADAPTATIONS MADE (embedded code changed? anchors drifted?):
-    - (exact change + compiler/API reason, or "none")
+    - Wrapper computes the window with java.time.Instant (endTime=Instant
+      .now(), startTime=endTime.minusSeconds(3600)) instead of the old
+      ZonedDateTime pair; request field values are identical ISO-8601
+      instants (Instant.toString() == ISO_INSTANT format).
+    - De-dup check moved from the JSON parse loop into the wrapper's
+      delivery loop (same predicate, same net delivery set) because parsing
+      now happens inside fetchBarsRange which must not know about
+      lastBarTimestamp.
   REGRESSIONS FOUND & FIXED:
-    - (what broke, how fixed, fixup commit hash, or "none")
+    - none
   BLOCKED ITEMS (⛔ only):
-    - (exact owner action required, or "none")
+    - none
 
 ··· APPENDIX A-03 — Agent 03: HistoricalBackfill: 3-Day Startup Replay ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)

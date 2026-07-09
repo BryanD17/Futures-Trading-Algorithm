@@ -692,25 +692,98 @@ public class TopstepConnector implements TradingConnector {
     }
 
     /**
-     * Fetch historical bars from TopstepX API.
+     * Fetch historical bars from TopstepX API — live-poll wrapper: last 60
+     * minutes up to now, delivered to the symbol's listener in chronological
+     * order with de-dup against lastBarTimestamp. The HTTP call and JSON
+     * parsing live in {@link #fetchBarsRange} (one path, two callers: this
+     * poller and the startup backfill).
      */
     private void fetchBars(String symbol, String contractId) {
         try {
-            // Calculate time range - use wider window for better diagnostics
-            ZonedDateTime endTime = ZonedDateTime.now(ZoneOffset.UTC);
-            ZonedDateTime startTime = endTime.minusMinutes(60);  // 60 minutes for robustness
+            Instant endTime = Instant.now();
+            Instant startTime = endTime.minusSeconds(60 * 60);  // 60 minutes for robustness
 
+            java.util.List<Candle> parsedCandles = fetchBarsRange(symbol, contractId, startTime, endTime);
+            if (parsedCandles.isEmpty()) {
+                return;
+            }
+
+            MarketDataListener listener = marketDataListeners.get(symbol);
+            if (listener == null) {
+                logger.warn("No listener registered for symbol: {}", symbol);
+                return;
+            }
+
+            Instant lastTimestamp = lastBarTimestamp.get(symbol);
+            int totalBarsReceived = parsedCandles.size();
+
+            logger.info("Received {} bars for {} (last processed: {})",
+                totalBarsReceived, symbol, lastTimestamp != null ? lastTimestamp : "none");
+
+            // Sort candles by timestamp ASCENDING (oldest first) for correct indicator processing
+            parsedCandles.sort((c1, c2) -> c1.getTimestamp().compareTo(c2.getTimestamp()));
+
+            // Deliver candles in chronological order
+            int newBarsCount = 0;
+            Instant maxTimestamp = lastTimestamp;
+
+            for (Candle candle : parsedCandles) {
+                // Skip bars we've already processed
+                if (lastTimestamp != null && !candle.getTimestamp().isAfter(lastTimestamp)) {
+                    continue;
+                }
+                listener.onCandle(candle);
+                newBarsCount++;
+                logger.info("CANDLE {} | {} | O:{} H:{} L:{} C:{} V:{}",
+                    symbol, candle.getTimestamp(), candle.getOpen(), candle.getHigh(),
+                    candle.getLow(), candle.getClose(), candle.getVolume());
+
+                // Track the maximum timestamp
+                if (maxTimestamp == null || candle.getTimestamp().isAfter(maxTimestamp)) {
+                    maxTimestamp = candle.getTimestamp();
+                }
+            }
+
+            // Update lastBarTimestamp to the max delivered timestamp
+            if (maxTimestamp != null && (lastTimestamp == null || maxTimestamp.isAfter(lastTimestamp))) {
+                lastBarTimestamp.put(symbol, maxTimestamp);
+            }
+
+            int skippedBarsCount = totalBarsReceived - newBarsCount;
+            if (newBarsCount > 0) {
+                logger.info("Delivered {} new candles for {} in chronological order (skipped {} already processed)",
+                    newBarsCount, symbol, skippedBarsCount);
+            } else if (skippedBarsCount > 0) {
+                logger.info("All {} bars for {} already processed (no new data)",
+                    skippedBarsCount, symbol);
+            }
+        } catch (Exception e) {
+            logger.error("Error fetching bars for {}: {}", symbol, e.getMessage());
+        }
+    }
+
+    /**
+     * Fetch 1m bars for an ARBITRARY [start, end) window and RETURN them.
+     * One HTTP + parsing path shared by the live poller ({@link #fetchBars})
+     * and the startup backfill. Never touches lastBarTimestamp and never
+     * delivers to a listener; returns an empty list (never null) on no-bars
+     * responses (market closed) and on HTTP/API error paths.
+     */
+    private java.util.List<Candle> fetchBarsRange(String symbol, String contractId,
+            java.time.Instant start, java.time.Instant end) {
+        java.util.List<Candle> parsedCandles = new java.util.ArrayList<>();
+        try {
             logger.debug("Fetching bars for {} using contract ID: {} (live={})", symbol, contractId, useLiveData);
             String barsUrl = apiUrl + "/History/retrieveBars";
 
             Map<String, Object> requestMap = new HashMap<>();
             requestMap.put("contractId", contractId);
             requestMap.put("live", useLiveData);  // Use auto-detected live flag
-            requestMap.put("startTime", startTime.format(DateTimeFormatter.ISO_INSTANT));
-            requestMap.put("endTime", endTime.format(DateTimeFormatter.ISO_INSTANT));
+            requestMap.put("startTime", start.toString());
+            requestMap.put("endTime", end.toString());
             requestMap.put("unit", BAR_UNIT_MINUTE);
             requestMap.put("unitNumber", 1);
-            requestMap.put("limit", 30);  // Request more bars
+            requestMap.put("limit", 1000);
             requestMap.put("includePartialBar", false);  // Exclude partial bars for cleaner data
 
             String requestBody = objectMapper.writeValueAsString(requestMap);
@@ -725,7 +798,7 @@ public class TopstepConnector implements TradingConnector {
                 if (!response.isSuccessful()) {
                     String body = response.body() != null ? response.body().string() : "No body";
                     logger.error("HTTP error fetching bars for {}: {} - {}", symbol, response.code(), body);
-                    return;
+                    return parsedCandles;
                 }
 
                 String responseBody = response.body().string();
@@ -745,7 +818,7 @@ public class TopstepConnector implements TradingConnector {
                         logger.error("ErrorCode 1 typically means: Invalid contract ID or account not authorized for this contract.");
                         logger.error("Try: 1) Verify contract ID exists 2) Check if account is SIM vs LIVE 3) Verify API permissions");
                     }
-                    return;
+                    return parsedCandles;
                 }
 
                 // Extract bars array
@@ -753,24 +826,8 @@ public class TopstepConnector implements TradingConnector {
                 if (bars == null || bars.isNull() || !bars.isArray() || bars.isEmpty()) {
                     // This is normal during market closed hours - log at debug level
                     logger.debug("No bars returned for {} (market may be closed)", symbol);
-                    return;
+                    return parsedCandles;
                 }
-
-                MarketDataListener listener = marketDataListeners.get(symbol);
-                if (listener == null) {
-                    logger.warn("No listener registered for symbol: {}", symbol);
-                    return;
-                }
-
-                Instant lastTimestamp = lastBarTimestamp.get(symbol);
-                int totalBarsReceived = bars.size();
-
-                logger.info("Received {} bars for {} (last processed: {})",
-                    totalBarsReceived, symbol, lastTimestamp != null ? lastTimestamp : "none");
-
-                // CRITICAL FIX: Parse all bars, sort by timestamp, then deliver in chronological order
-                // This prevents out-of-order candle delivery which can affect indicator calculations
-                java.util.List<Candle> parsedCandles = new java.util.ArrayList<>();
 
                 for (JsonNode bar : bars) {
                     try {
@@ -784,11 +841,6 @@ public class TopstepConnector implements TradingConnector {
                             timestamp = Instant.ofEpochMilli(bar.get("time").asLong());
                         } else {
                             logger.warn("No timestamp in bar for {}: {}", symbol, bar);
-                            continue;
-                        }
-
-                        // Skip bars we've already processed
-                        if (lastTimestamp != null && !timestamp.isAfter(lastTimestamp)) {
                             continue;
                         }
 
@@ -807,44 +859,11 @@ public class TopstepConnector implements TradingConnector {
                         logger.error("Error parsing bar for {}: {}", symbol, e.getMessage());
                     }
                 }
-
-                // Sort candles by timestamp ASCENDING (oldest first) for correct indicator processing
-                parsedCandles.sort((c1, c2) -> c1.getTimestamp().compareTo(c2.getTimestamp()));
-
-                // Deliver candles in chronological order
-                int newBarsCount = 0;
-                Instant maxTimestamp = lastTimestamp;
-
-                for (Candle candle : parsedCandles) {
-                    listener.onCandle(candle);
-                    newBarsCount++;
-                    logger.info("CANDLE {} | {} | O:{} H:{} L:{} C:{} V:{}",
-                        symbol, candle.getTimestamp(), candle.getOpen(), candle.getHigh(),
-                        candle.getLow(), candle.getClose(), candle.getVolume());
-
-                    // Track the maximum timestamp
-                    if (maxTimestamp == null || candle.getTimestamp().isAfter(maxTimestamp)) {
-                        maxTimestamp = candle.getTimestamp();
-                    }
-                }
-
-                // Update lastBarTimestamp to the max delivered timestamp
-                if (maxTimestamp != null && (lastTimestamp == null || maxTimestamp.isAfter(lastTimestamp))) {
-                    lastBarTimestamp.put(symbol, maxTimestamp);
-                }
-
-                int skippedBarsCount = totalBarsReceived - newBarsCount;
-                if (newBarsCount > 0) {
-                    logger.info("Delivered {} new candles for {} in chronological order (skipped {} already processed)",
-                        newBarsCount, symbol, skippedBarsCount);
-                } else if (skippedBarsCount > 0) {
-                    logger.info("All {} bars for {} already processed (no new data)",
-                        skippedBarsCount, symbol);
-                }
             }
         } catch (Exception e) {
             logger.error("Error fetching bars for {}: {}", symbol, e.getMessage());
         }
+        return parsedCandles;
     }
 
     private double getDoubleField(JsonNode node, String... fieldNames) {
