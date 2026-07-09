@@ -53,6 +53,12 @@ public class EngineFacade {
     private SimEngineRunner simRunner;
     private LiveEngineRunner liveRunner;
 
+    // Chart-in-memory: registered by LiveEngineRunner / SimEngineRunner at
+    // start. BACKTEST registers nothing, so the getter lazily returns an
+    // EMPTY engine — API consumers then see the honest empty shape
+    // (no candles, warm=false) instead of a null/500.
+    private com.topstep.trading.chart.ChartEngine chartEngine;
+
     // Convex Payoff Optimization Layer
     private AccountLifecycle accountLifecycle;
     private RiskProfile activeRiskProfile;
@@ -107,6 +113,26 @@ public class EngineFacade {
      */
     public void setLiveRunner(LiveEngineRunner liveRunner) {
         this.liveRunner = liveRunner;
+    }
+
+    /**
+     * Register the running engine's ChartEngine (called by the runners).
+     */
+    public synchronized void setChartEngine(com.topstep.trading.chart.ChartEngine chartEngine) {
+        this.chartEngine = chartEngine;
+    }
+
+    /**
+     * The engine's in-memory chart (30m candles + OTE overlay per symbol).
+     * Non-null in LIVE and SIM (registered by the runners at start). In
+     * BACKTEST/STOPPED modes nothing registers one, so an empty ChartEngine
+     * is lazily created and returned — never null.
+     */
+    public synchronized com.topstep.trading.chart.ChartEngine getChartEngine() {
+        if (chartEngine == null) {
+            chartEngine = new com.topstep.trading.chart.ChartEngine();
+        }
+        return chartEngine;
     }
 
     // ==================== Control Operations ====================
@@ -539,6 +565,7 @@ public class EngineFacade {
         riskEngine = null;
         simRunner = null;
         liveRunner = null;
+        chartEngine = null;
     }
 
     /**

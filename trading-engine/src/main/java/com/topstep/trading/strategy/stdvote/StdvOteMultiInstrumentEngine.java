@@ -86,6 +86,16 @@ public final class StdvOteMultiInstrumentEngine {
     private final Map<String, StdvOteRunnerStrategy> strategies = new ConcurrentHashMap<>();
     private final AtomicBoolean running = new AtomicBoolean(false);
 
+    /**
+     * Optional tap invoked with EVERY dispatched candle before routing.
+     * This engine subscribes symbols itself (connector → dispatchCandle), so
+     * the owning runner's onMarketData never sees these candles — the tap is
+     * how the runner keeps its ChartEngine and warmup staleness reference
+     * warm on the real candle path. Volatile: set once at wiring time,
+     * read on the market-data thread.
+     */
+    private volatile java.util.function.Consumer<Candle> candleTap;
+
     public StdvOteMultiInstrumentEngine(TradingConnector connector,
                                         EventBus eventBus,
                                         StrategyContext strategyContext) {
@@ -187,6 +197,22 @@ public final class StdvOteMultiInstrumentEngine {
         return strategies.get(activeSymbols.get(0));
     }
 
+    /** Install the per-candle tap (see {@link #candleTap}). */
+    public void setCandleTap(java.util.function.Consumer<Candle> tap) {
+        this.candleTap = tap;
+    }
+
+    /**
+     * Hand the runner's ChartEngine to every per-symbol strategy so they can
+     * log the 30m OTE screenshot-pattern signal next to the live gate path.
+     * Observability only — no gating reads this.
+     */
+    public void setChartEngine(com.topstep.trading.chart.ChartEngine engine) {
+        for (StdvOteRunnerStrategy s : strategies.values()) {
+            s.setChartEngine(engine);
+        }
+    }
+
     /**
      * Stop routing. Unsubscribes market data and shuts strategies down.
      * Open positions managed by the execution engine are NOT closed here.
@@ -235,6 +261,13 @@ public final class StdvOteMultiInstrumentEngine {
         if (candle == null) return;
         String symbol = candle.getSymbol();
         if (symbol == null) return;
+
+        // Runner tap first: chart-in-memory + warmup staleness tracking see
+        // every candle (backfill replay and live alike) before routing.
+        java.util.function.Consumer<Candle> tap = candleTap;
+        if (tap != null) {
+            tap.accept(candle);
+        }
 
         // Direct routing to the symbol's own strategy if it's active.
         StdvOteRunnerStrategy own = strategies.get(symbol);

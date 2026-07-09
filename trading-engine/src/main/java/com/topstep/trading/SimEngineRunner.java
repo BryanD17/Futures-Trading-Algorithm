@@ -71,6 +71,12 @@ public class SimEngineRunner {
 
     private final TradeJournalService journalService = new TradeJournalService();
 
+    // Chart-in-memory: SIM gets the same chart brain as LIVE so the
+    // /api/chart endpoint and the OTE observability logs work identically
+    // in both modes (Agent 11 SIM verification depends on this).
+    private final com.topstep.trading.chart.ChartEngine chartEngine =
+            new com.topstep.trading.chart.ChartEngine();
+
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
     private final CountDownLatch shutdownLatch = new CountDownLatch(1);
@@ -115,6 +121,21 @@ public class SimEngineRunner {
         } else {
             this.multiEngine = null;
             this.strategy = StdvOteFactory.build(DEFAULT_SYMBOL, "MES", eventBus);
+        }
+
+        // Chart-in-memory wiring (mirrors LiveEngineRunner): tick sizes from
+        // the instrument spec, candle tap on the multi-engine's dispatch
+        // (which subscribes symbols itself, bypassing this.onMarketData).
+        for (String s : new String[] {"MNQ", "MES", "MGC"}) {
+            chartEngine.registerInstrument(s,
+                    com.topstep.trading.strategy.InstrumentCharacteristics
+                            .getProfile(s).getTickSize());
+        }
+        if (multiEngine != null) {
+            multiEngine.setCandleTap(chartEngine::onCandle);
+            multiEngine.setChartEngine(chartEngine);
+        } else if (strategy instanceof com.topstep.trading.strategy.stdvote.StdvOteRunnerStrategy sors) {
+            sors.setChartEngine(chartEngine);
         }
 
         // Subscribe to strategy signals
@@ -162,6 +183,7 @@ public class SimEngineRunner {
                     riskEngine
             );
             EngineFacade.getInstance().setSimRunner(this);
+            EngineFacade.getInstance().setChartEngine(chartEngine);
 
             // Subscribe to market data. Multi-instrument mode owns its own
             // subscriptions for all active + SMT-only symbols; single-symbol
@@ -277,6 +299,11 @@ public class SimEngineRunner {
         }
 
         try {
+            // Chart-in-memory first: the internal 30m chart sees every
+            // candle this runner processes (single-instrument path; the
+            // multi-engine path feeds the chart via its candle tap).
+            chartEngine.onCandle(candle);
+
             // Update context time
             strategyContext.setCurrentTime(candle.getTimestamp());
 

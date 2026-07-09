@@ -137,6 +137,13 @@ public class LiveEngineRunner {
     private volatile Instant warmupCompletedAt = null;
     private static final long STALE_SIGNAL_THRESHOLD_SECONDS = 5 * 60;
 
+    // ── CHART-IN-MEMORY ─────────────────────────────────────────────────
+    // The bot's own 30m chart per instrument (candles + OTE overlay), fed
+    // by EVERY 1m candle — backfill replay first, then live, same path.
+    // Exposed to the API via EngineFacade.getChartEngine().
+    private final com.topstep.trading.chart.ChartEngine chartEngine =
+            new com.topstep.trading.chart.ChartEngine();
+
     // Killzone clock for stale order checking
     private final KillzoneClock killzoneClock = new KillzoneClock();
 
@@ -404,6 +411,27 @@ public class LiveEngineRunner {
             }
         }
 
+        // Chart-in-memory wiring: register tradeable instruments' tick sizes
+        // (sourced from InstrumentCharacteristics — never invented values).
+        for (String s : new String[] {"MNQ", "MES", "MGC"}) {
+            chartEngine.registerInstrument(s,
+                    InstrumentCharacteristics.getProfile(s).getTickSize());
+        }
+        // In STDV+OTE multi-instrument mode the engine subscribes symbols
+        // ITSELF (connector → dispatchCandle) — onMarketData never sees those
+        // candles. The candle tap is therefore the funnel that keeps the
+        // ChartEngine AND the warmup staleness reference (lastCandleTs) warm
+        // on the real candle path in that mode.
+        if (stdvOteMultiEngine != null) {
+            stdvOteMultiEngine.setCandleTap(c -> {
+                lastCandleTs.put(c.getSymbol(), c.getTimestamp());
+                chartEngine.onCandle(c);
+            });
+            stdvOteMultiEngine.setChartEngine(chartEngine);
+        } else if (strategy instanceof com.topstep.trading.strategy.stdvote.StdvOteRunnerStrategy sors) {
+            sors.setChartEngine(chartEngine);
+        }
+
         // === Convex Payoff Optimization: Initialize lifecycle-aware risk components ===
         this.lifecycle = AccountLifecycle.topstep50kEvaluation();
         this.riskProfile = RiskProfile.topstep50kEvaluation();
@@ -544,6 +572,7 @@ public class LiveEngineRunner {
                 riskEngine
             );
             EngineFacade.getInstance().setLiveRunner(this);
+            EngineFacade.getInstance().setChartEngine(chartEngine);
 
             // Start the appropriate engine mode. STDV+OTE multi-instrument
             // wins if enabled; otherwise legacy multi-instrument; otherwise
@@ -639,6 +668,10 @@ public class LiveEngineRunner {
         }
 
         try {
+            // Chart-in-memory FIRST: the internal 30m chart must see every
+            // candle this runner processes (backfill replay and live alike).
+            chartEngine.onCandle(candle);
+
             // Warmup guard: record the most recent candle timestamp per
             // symbol BEFORE any strategy dispatch (staleness reference).
             lastCandleTs.put(candle.getSymbol(), candle.getTimestamp());
@@ -1777,6 +1810,8 @@ public class LiveEngineRunner {
     public AccountLifecycle getLifecycle() { return lifecycle; }
     public PhaseAwareRiskCalculator getRiskCalculator() { return riskCalculator; }
     public RiskProfile getRiskProfile() { return riskProfile; }
+    /** The runner's in-memory chart (30m candles + OTE overlay per symbol). */
+    public com.topstep.trading.chart.ChartEngine getChartEngine() { return chartEngine; }
 
     // Getters for facade access
     public AccountState getAccountState() { return accountState; }

@@ -211,6 +211,20 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** Maximum bars allowed in OTE_ARMED before the setup invalidates. */
     private static final int MAX_BARS_IN_OTE = 8;
 
+    /**
+     * OBSERVABILITY ONLY (chart-in-memory rollout): the runner's ChartEngine,
+     * whose 30m OTE screenshot-pattern signal is logged NEXT TO the existing
+     * gate result so a week of SIM logs can be compared before any gating
+     * decision. Nothing in this class gates on it. May be null (tests,
+     * legacy wiring) — every use is null-guarded.
+     */
+    private volatile com.topstep.trading.chart.ChartEngine chartEngine;
+
+    /** Install the observability-only ChartEngine reference (may be null). */
+    public void setChartEngine(com.topstep.trading.chart.ChartEngine engine) {
+        this.chartEngine = engine;
+    }
+
     /** Manipulation-leg snap tolerance in ticks (projection-level snapping). */
     private static final int MANIP_SNAP_TOL_TICKS = 3;
 
@@ -505,6 +519,17 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // trade direction) is pre-computed here each candle so the core
         // stays detector-free.
         if (ctx.state == SetupState.OTE_ARMED) {
+            // LOG-ONLY comparison (chart-in-memory rollout): show the 30m
+            // ChartEngine's screenshot-pattern verdict side by side with the
+            // live M7/OTE gate path. DO NOT gate on this — the owner reviews
+            // a week of SIM logs and decides when to switch the gate over.
+            if (chartEngine != null && lastBias != MarketBias.NEUTRAL) {
+                boolean screenshotPattern = chartEngine.hasReactedOte(
+                        symbol, lastBias == MarketBias.BULLISH);
+                System.out.println("[" + symbol + "] OTE_ARMED (live gate path)"
+                        + " | chart30m.hasReactedOte=" + screenshotPattern
+                        + " | bias=" + lastBias);
+            }
             if (scalpMode) {
                 core.setNearestOpposingLiquidity(
                         nearestOpposingLiquidity(candle.getClose()));
