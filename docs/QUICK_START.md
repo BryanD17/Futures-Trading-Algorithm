@@ -139,6 +139,81 @@ The refactor leaves LIVE manual on purpose. Before you flip
    full state-machine lifecycle for at least one instrument, confirm
    flatten-by-time fires, confirm `stdvOte.size.max = 20` is respected.
 
+## STARTUP & WARMTH (chart-in-memory + historical backfill)
+
+On every start, `TopstepConnector.startMarketDataPolling` now replays
+**~3 days of 1-minute history per instrument** through the same listener
+path the live feed uses, BEFORE live polling begins. This warms HTF bias,
+LevelEngine PDH/PDL, the raid pipeline, and the in-memory 30m ChartEngine
+in ~30 seconds — instead of the 5–24 hours of blindness a cold start used
+to cost.
+
+- **Depth**: `-Dbackfill.days=N` (default `3`, clamped to `[1,7]`). The
+  chosen value is logged at startup.
+- **The log line to look for** (one per instrument):
+  `[Backfill] MNQ: delivered <N> historical 1m bars (3 days). Chart memory is warm.`
+- **The API tripwire**: `GET /api/chart/<symbol>` must report
+  `"warm": true` and `"barsIngested1m" >= ~1500` before you should expect
+  trades. `warm=false` means the backfill did not run and the bot is
+  trading blind — the exact condition behind the two-days-no-trades
+  incident.
+- **Restarts are cheap now**: a restart costs ~30 seconds of replay, not
+  hours of NEUTRAL bias. Restart freely.
+- A warmup guard in `LiveEngineRunner.handleStrategySignal` guarantees
+  replayed history can NEVER fire a real order (look for `[Warmup]
+  Suppressing signal ...` lines during startup).
+
+## READING THE GATES (why is it not trading?)
+
+Every completed 15m bar, each instrument prints one line:
+
+```
+[GATES MNQ] state=IDLE bias=NEUTRAL lastGateFailed=M2 kzActive=false chart30mOte=FORMING/BULL
+```
+
+The same fields are served by `GET /api/setup/{symbol}` (`state`,
+`lastGateFailed`), and the bot's internal 30m chart + OTE overlay by
+`GET /api/chart/{symbol}?lookback=100`.
+
+One-line meaning of each mandatory gate (from
+`MandatoryConfluenceValidator`):
+
+| Gate | Meaning |
+|------|---------|
+| M1 | Instrument is MNQ/MES/MGC. |
+| M2 | HTF bias is not NEUTRAL AND the trade direction matches it. |
+| M3 | Inside a killzone. |
+| M4 | Liquidity sweep present AND raid score >= instrument minimum. |
+| M5 | Displacement candle AND a FairValueGap present. |
+| M6 | Market Structure Shift / CHoCH confirmed. |
+| M7 | OTE zone built, PD-array edge inside the band, RR >= floor at the -2.0 target. |
+| M8 | Size request >= instrument minimum (5 micros). |
+| M9 | Clean diagnostics — no unresolved failure after the risk-engine pre-flight. |
+
+## SCALP FLOOR — known deadlock while the raid pipeline is starved
+
+If `scalpMode.enabled=true`, the default floor `scalp.minRaidScore=6`
+combined with the MNQ/MES fallback raid score of **5** rejects every
+sweep whenever the raid pipeline has no tracked level (the fallback score
+can never reach the floor — by design). After the backfill this mostly
+self-heals because PDH/PDL exist from minute one, but **until you have
+verified real raid scores in the logs**, the recommended launch flag is:
+
+```
+-Dscalp.minRaidScore=5
+```
+
+The conservative default in code is intentional and unchanged — the fix
+is warmth plus an informed owner, not a weaker floor.
+
+## TOPSTEP AUTOMATION POLICY
+
+Before pointing the engine at a **FUNDED** (non-eval) account, re-verify
+Topstep's current *written* policy on automated trading — policies change
+and enforcement is account-type-specific. Run SIM against the warm chart
+first, and verify `GET /api/chart/<symbol>` matches the TopstepX chart
+candle-for-candle before trusting any signal.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
