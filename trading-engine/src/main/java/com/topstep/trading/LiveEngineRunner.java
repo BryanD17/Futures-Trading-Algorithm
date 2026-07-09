@@ -743,8 +743,7 @@ public class LiveEngineRunner {
 
         // The EventBus is async: a signal created during replay can be
         // dequeued after the flag flipped. Suppress those too.
-        Instant completedAt = warmupCompletedAt;
-        if (completedAt != null && signal.getTimestamp().isBefore(completedAt)) {
+        if (WarmupGuard.createdDuringWarmup(signal.getTimestamp(), warmupCompletedAt)) {
             System.out.println("[Warmup] Suppressing signal created during historical replay: "
                 + signal.getSignalType() + " " + signal.getSymbol()
                 + " (created=" + signal.getTimestamp() + ")");
@@ -755,8 +754,7 @@ public class LiveEngineRunner {
         // this symbol is > 5 minutes behind wall-clock, the signal came from
         // historical/replayed data and must not create an order.
         Instant lastTs = lastCandleTs.get(signal.getSymbol());
-        if (lastTs == null
-                || lastTs.isBefore(Instant.now().minusSeconds(STALE_SIGNAL_THRESHOLD_SECONDS))) {
+        if (WarmupGuard.isStaleSignal(lastTs, Instant.now(), STALE_SIGNAL_THRESHOLD_SECONDS)) {
             System.out.println("[Warmup] Suppressing signal from historical/stale data: "
                 + signal.getSignalType() + " " + signal.getSymbol()
                 + " (lastCandle=" + lastTs + ")");
