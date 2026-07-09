@@ -49,6 +49,9 @@ public class DisplacementDetector {
     private Double priorSwingHigh;  // Swing point before displacement for MSS check
     private Double priorSwingLow;
 
+    /** Symbol tag for log attribution (may be empty for legacy callers). */
+    private final String logTag;
+
     public DisplacementDetector(int lookbackPeriod) {
         this(lookbackPeriod, 1.5, 0.65);
     }
@@ -61,9 +64,20 @@ public class DisplacementDetector {
      * @param minBodyRatio Min body/range ratio (default 0.65, use 0.70 for stricter)
      */
     public DisplacementDetector(int lookbackPeriod, double displacementMultiplier, double minBodyRatio) {
+        this(lookbackPeriod, displacementMultiplier, minBodyRatio, "");
+    }
+
+    /**
+     * Constructor with a symbol tag so multi-instrument logs are
+     * attributable (field lesson 2026-07-09: untagged [DISPLACEMENT] lines
+     * made a per-symbol diagnosis needlessly slow).
+     */
+    public DisplacementDetector(int lookbackPeriod, double displacementMultiplier,
+                                double minBodyRatio, String logTag) {
         this.lookbackPeriod = lookbackPeriod;
         this.displacementMultiplier = displacementMultiplier;
         this.minBodyRatio = minBodyRatio;
+        this.logTag = (logTag == null) ? "" : logTag;
         this.candles = new ArrayList<>();
     }
 
@@ -187,7 +201,8 @@ public class DisplacementDetector {
             candleCountAtLastDisplacement = totalCandleCount;
             lastDisplacementCreatedFvg = createdFvg;
 
-            System.out.println("[DISPLACEMENT] " + (bullish ? "BULLISH" : "BEARISH") +
+            System.out.println("[DISPLACEMENT" + (logTag.isEmpty() ? "" : " " + logTag) + "] "
+                    + (bullish ? "BULLISH" : "BEARISH") +
                     " displacement detected - Move: " + String.format("%.2f", totalMove) +
                     " points over " + consecutiveCount + " candles" +
                     " (bodyRatio=" + String.format("%.0f%%", bodyRatio * 100) +

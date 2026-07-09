@@ -268,6 +268,19 @@ the section above), THEN revisit whether `hasReactedOte` should become a
 gate — that change is a separate, owner-approved plan with its own
 backtest and PR. Neither switch happens automatically.
 
+### DETECTOR TIMEFRAME — the 5m entry anatomy (field fix 2026-07-09)
+
+Displacement, FVG, and MSS/CHoCH are now measured on **5-minute candles**
+by default (`-Dstdvote.detectorTimeframe=1|3|5|15`). On raw 1m, MNQ never
+registered the displacement a human sees on the 5m chart (five ordinary
+1m candles ≠ one strong 1m candle), so M5 never passed and every setup
+died at SWEEP_DONE. Structure, sweeps, and levels remain 1m. The gates
+themselves are unchanged — displacement+FVG (M5) and MSS (M6) are still
+mandatory, measured on the model's real timeframe. The `[DISPLACEMENT
+<sym>]` log line is now symbol-tagged. The Bot Chart also now includes
+the FORMING 30m bar (marked `"partial": true`) so its right edge matches
+the broker chart instead of lagging up to 30 minutes.
+
 ### TUNING THE BOT CHART (V2 — per-instrument leg thresholds)
 
 The ChartEngine's leg-significance floor is now per-instrument (defaults

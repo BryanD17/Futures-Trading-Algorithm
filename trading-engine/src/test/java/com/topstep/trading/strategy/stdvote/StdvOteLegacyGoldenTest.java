@@ -53,11 +53,15 @@ class StdvOteLegacyGoldenTest {
     void forceLegacyMode() {
         // Explicit OFF (also covers the absent-property default elsewhere).
         System.setProperty(ScalpConfig.ENABLED_PROPERTY, "false");
+        // Golden fixture encodes 1m entry anatomy — pin the detector
+        // timeframe (LIVE default is 5m, field fix 2026-07-09).
+        System.setProperty("stdvote.detectorTimeframe", "1");
     }
 
     @AfterEach
     void cleanup() {
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
+        System.clearProperty("stdvote.detectorTimeframe");
         StdvOteRegistry.unregister(StdvOteGoldenFixture.SYMBOL);
     }
 

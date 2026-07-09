@@ -231,6 +231,26 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** Bars-since-MSS window in which we still consider the impulse fresh. */
     private static final int MSS_FRESH_BARS = 30;
 
+    /**
+     * Timeframe on which the ENTRY ANATOMY (displacement, FVG, MSS/CHoCH)
+     * is measured — {@code -Dstdvote.detectorTimeframe} in minutes
+     * (1|3|5|15), DEFAULT 5. Field fix 2026-07-09: on raw 1m, MNQ never
+     * registers the displacement a human sees on the 5m chart. Structure,
+     * sweeps, and levels remain 1m regardless.
+     */
+    private final Timeframe detectorTimeframe = resolveDetectorTimeframe();
+
+    static Timeframe resolveDetectorTimeframe() {
+        int minutes = Integer.getInteger("stdvote.detectorTimeframe", 5);
+        switch (minutes) {
+            case 1:  return Timeframe.M1;
+            case 3:  return Timeframe.M3;
+            case 15: return Timeframe.M15;
+            case 5:
+            default: return Timeframe.M5;
+        }
+    }
+
     /** Maximum bars allowed in OTE_ARMED before the setup invalidates. */
     private static final int MAX_BARS_IN_OTE = 8;
 
@@ -309,8 +329,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.structureDetector = new IctStructureDetector(50);
         this.liquidityDetector = new LiquidityDetector(30);
         this.fvgDetector = new FvgDetector(20);
-        this.displacementDetector = new DisplacementDetector(20);
+        this.displacementDetector = new DisplacementDetector(20, 1.5, 0.65, symbol);
         this.mssDetector = new MarketStructureShiftDetector(50, 2);
+        System.out.println("[StdvOteRunnerStrategy] " + symbol
+                + " entry-anatomy detectors (displacement/FVG/MSS) on "
+                + detectorTimeframe.getLabel()
+                + " (stdvote.detectorTimeframe; structure/sweeps/levels stay 1m)");
         this.killzoneClock = new KillzoneClock();
         this.silverBulletClock = new SilverBulletClock();
         this.impulseAnalyzer = new ImpulseExtensionAnalyzer(symbol, 30);
@@ -417,28 +441,49 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         }
         lastPrimaryTimestamp = now;
 
-        // 1. Update every LTF detector.
+        // 1a. Aggregate FIRST so the entry-anatomy detectors below can be
+        // fed completed higher-timeframe candles (field fix 2026-07-09).
+        Map<Timeframe, Candle> completedHtf = barManager.processCandle(candle);
+
+        // 1b. Structure / liquidity / levels stay on raw 1m — sweeps and
+        // level touches ARE 1m events.
         structureDetector.update(candle);
         liquidityDetector.updatePrimary(candle);
-        fvgDetector.update(candle);
-        displacementDetector.update(candle);
-        MSS observedMss = mssDetector.update(candle);
-        if (observedMss != null) {
-            lastObservedMss = observedMss;
-            barsSinceMss = 0;
-        } else if (barsSinceMss < Integer.MAX_VALUE) {
-            barsSinceMss++;
-        }
         candleSeries.addCandle(candle);
         levelEngine.processCandle(candle);
         equalLevelDetector.ageAndCleanupLevels();
         impulseAnalyzer.update(candle);
         correlationTracker.update(candle);
 
-        // 2. HTF aggregation. The trend analyzer re-evaluates ONLY when a
-        // 15m/30m bar completes — the recordHtfBias hook must never be fed
-        // from 1m noise (it invalidates on bias flips).
-        Map<Timeframe, Candle> completedHtf = barManager.processCandle(candle);
+        // 1c. ENTRY ANATOMY — displacement, FVG, MSS/CHoCH — is evaluated
+        // on the DETECTOR TIMEFRAME (default 5m, -Dstdvote.detectorTimeframe
+        // = 1|3|5|15). FIELD FIX 2026-07-09: fed raw 1m candles, MNQ's
+        // displacement detector fired ZERO times across an entire LIVE
+        // session (a 5m-obvious displacement is five unremarkable 1m
+        // candles: no single 1m bar clears range >= 1.5x ATR(1m) with a 65%
+        // body) while MGC's thin 1m bars tripped it. The same granularity
+        // starved 1m FVGs (too small to overlap the OTE band at M7) and 1m
+        // MSS. The gates are UNCHANGED — displacement + FVG (M5) and MSS
+        // (M6) are still mandatory — they are now measured on the timeframe
+        // the model (and the owner's chart) actually uses.
+        Candle anatomyCandle = (detectorTimeframe == Timeframe.M1)
+                ? candle
+                : completedHtf.get(detectorTimeframe);
+        MSS observedMss = null;
+        if (anatomyCandle != null) {
+            fvgDetector.update(anatomyCandle);
+            displacementDetector.update(anatomyCandle);
+            observedMss = mssDetector.update(anatomyCandle);
+        }
+        if (observedMss != null) {
+            lastObservedMss = observedMss;
+            barsSinceMss = 0;
+        } else if (barsSinceMss < Integer.MAX_VALUE) {
+            barsSinceMss++; // freshness stays counted in 1m feed bars
+        }
+
+        // 2. HTF trend. The analyzer re-evaluates ONLY when a 15m/30m bar
+        // completes — the recordHtfBias hook must never be fed 1m noise.
         boolean htfBarClosed = completedHtf.containsKey(Timeframe.M15)
                 || completedHtf.containsKey(Timeframe.M30);
         if (htfBarClosed) {
