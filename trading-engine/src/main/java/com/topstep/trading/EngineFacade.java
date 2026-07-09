@@ -309,6 +309,10 @@ public class EngineFacade {
         currentMode = Mode.STOPPED;
         simRunner = null;
         liveRunner = null;
+        // Drop the stopped engine's chart so /api/chart serves the honest
+        // empty shape (warm=false) instead of a dead engine's stale memory
+        // — the dashboard's COLD banner depends on this being truthful.
+        chartEngine = null;
     }
 
     /**

@@ -318,3 +318,19 @@
   color: var(--muted);
 }
 .factors li { padding: 1px 0; }
+
+/* Chart warm/cold tripwire pill (V2 Agent 03) */
+.pill.chartwarm.warm {
+  background: rgba(81, 207, 102, 0.15);
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.pill.chartwarm.cold {
+  background: rgba(255, 107, 107, 0.18);
+  color: var(--bad);
+  border-color: var(--bad);
+  font-weight: 700;
+}
+.pill.chartwarm.unknown {
+  color: var(--muted);
+}
