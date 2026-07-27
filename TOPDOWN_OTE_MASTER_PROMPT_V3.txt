@@ -832,7 +832,7 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
 ··· APPENDIX A-07 — Agent 07: Measurement Sessions (SIM) ···
   STATUS:            ✅
   DATE COMPLETED:    2026-07-27
-  PR NUMBER:         #TBD-A07 (base Main)
+  PR NUMBER:         #136 (base Main)
   COMMIT HASH:       (squash on Main; git log records it)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - Warm SIM + ladder depth: the REAL api-backend boot jar was run three
