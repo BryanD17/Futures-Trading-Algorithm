@@ -238,7 +238,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 05 — Upgrade Range & Votes to Consume D1 (AUTO Range Resolution)
   [✅] Agent 06 — 30m OTE Verdict Pipeline: Persistent Stats + Config Confluence
   [✅] Agent 07 — Measurement Sessions: Counterfactual Evidence Run (SIM)
-  [⬜] Agent 08 — FINAL VERIFICATION & CLOSE-OUT
+  [✅] Agent 08 — FINAL VERIFICATION & CLOSE-OUT
 
   LEDGER NOTES (append one dated line per completion):
   ------------------------------------------------------------------
@@ -283,6 +283,37 @@ SECTION 2 — PROGRESS LEDGER
               captured; lifetime oteStats proven to survive two restarts;
               docs/reports/TOPDOWN_MEASUREMENT_01.md committed with the
               DO-NOT-FLIP-YET recommendation. No fixups required.
+  2026-07-27  Agent 08 complete — FINAL SUMMARY:
+              * Agents 01-08, PRs #130 #131 #132 #133 #134 #135 #136 +
+                this agent's PR, all base Main, all squash-merged. Test
+                counts at close: trading-engine 505, api-backend 6, 0
+                failures; dashboard vite build clean; fresh-checkout
+                builds green.
+              * The three switches and their PROVEN LOG defaults (booted
+                with zero -D flags): pd.gate.mode=LOG,
+                bias.vote.mode=LOG, ote30m.confluence=LOG; also
+                bias.v1.includeH4=false, bias.hysteresis.enabled=false.
+                Flip commands live in docs/reports/
+                TOPDOWN_MEASUREMENT_01.md and QUICK_START's OWNER'S
+                ROLLOUT RUNBOOK.
+              * 30m OTE promote/delete criteria (verbatim, from
+                QUICK_START): evaluate after >= 15 sessions of lifetime
+                data; PROMOTE to GATE if agreed/(agreed+disagreed) >=
+                0.70 AND >= 20 emissions; DELETE the comparison if
+                precision <= 0.45 with the same floor; IN BETWEEN stay
+                LOG and re-evaluate every 10 sessions. Session counter's
+                current value: 4 (synthetic SIM sessions).
+              * OPEN STRATEGY QUESTIONS (owner's, per T6 — recorded, not
+                fixed): (1) the 2022-model micro dealing range in
+                ImpulseLegTracker vs the doc's established-swing dealing
+                range; (2) the sweep-mandatory reversal-only entry model
+                (no trend-continuation OTE path); (3) the 1R scalp cap in
+                ScalpTargetCalculator, which discards OTE's geometric R:R
+                and makes win rate carry the system.
+              * THE OPERATING LINE: "Everything new is in LOG mode. Run
+                live-observation sessions, read
+                TOPDOWN_MEASUREMENT_01.md's tables against real tape, and
+                flip one switch at a time — never two in the same week."
   ------------------------------------------------------------------
 
 ================================================================================
@@ -881,8 +912,67 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
   BLOCKED ITEMS: none.
 
 ··· APPENDIX A-08 — Agent 08: Final Verification & Close-Out ···
-  STATUS:            ⬜
-  (to be filled at completion)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-27
+  PR NUMBER:         #137 (base Main)
+  COMMIT HASH:       (squash on Main; git log records it)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - Fresh checkout (git clone --branch Main into a clean directory),
+      three clean builds:
+        gradle (engine + api, ALL tests): "BUILD SUCCESSFUL in 12s,
+        17 actionable tasks: 15 executed, 2 up-to-date";
+        dashboard: npm ci (278 packages) + npm run build "✓ built in
+        1.75s", zero TS errors.
+    - DEFAULT-BEHAVIOR AUDIT: booted the fresh-checkout jar with ZERO new
+      system properties; resolved-config startup block pasted verbatim:
+        [PD MNQ] config: mode=LOG eqBandTicks=2 minRangeTicks=80 d1MinBars=10
+        [VOTE MNQ] config: mode=LOG eqBandTicks=2 v1.includeH4=false
+        [OTE30M MNQ] config: mode=LOG acceptArmed=false
+        (+ identical MGC lines). bias.hysteresis.enabled default false
+        (StdvOteStrategy:174). Code-level default grep: all three
+        install() calls read getProperty(..., "LOG"). Byte-identical
+        OFF/LEGACY proofs cited per switch: offModeNoInvocation (M2b),
+        legacyModeNoInvocation (vote), offModeNoInvocation (M7b),
+        nullEvaluatorUnchanged (validator), emptyD1IsPreAgent05 (R0).
+    - END-TO-END WARM RUN (single SIM boot, default flags, all six
+      artifacts):
+        1) [HTF-Backfill MNQ] seeded 444 H1 bars -> 115 H4, 19 D1
+           (30 days, 0 refused, SYNTHETIC); /api/chart?tf=1d count=22.
+        2) [PD] verdict with rangeSource: pd=PREMIUM(R1) on [GATES].
+        3) [VOTE MNQ] V1=BULL(weak-bullish) V2=ABSTAIN(no-dist-leg)
+           V3=BULL(below-open) V4=BULL(PDH-nearer,wk:PWH-untapped/
+           PWL-untapped) -> vote=BULLISH legacy=BULLISH AGREE=true.
+        4) [GATES MNQ] … pd=PREMIUM(R1) vote=BULLISH(3/0/1) agree=true
+           m7b=? … (pd= and vote= and the m7b token all on the line;
+           M2b/M7b rows render in SetupPanel via /api/setup pd/ote30m).
+        5) /api/chart oteStats lifetime block served
+           ({…chartOnly 63, sessionsCounted 4}).
+        6) RESTART: second boot logged "[OTE-VERDICT] MNQ: restored 4
+           session(s) of lifetime agreement data" and served the SAME
+           lifetime totals (chartOnly 63) — survival proven.
+    - Appendix A re-read top to bottom: A-01..A-07 all ✅ with concrete
+      evidence (file:line, test names, pasted outputs, PR numbers) — no
+      empty or hand-waved blocks; nothing bounced.
+    - Safety grep-audit: no credentials in the new code; M1–M9 semantics
+      untouched — git diff pre-V3(4848be1)..HEAD over validation/ shows
+      MandatoryConfluenceValidator +57/-0 (purely additive M2b/M7b
+      blocks) and risk/ shows ZERO files changed; isolation test
+      (seedingIsolation) present and passing; ABSTAIN-passes tests
+      present for M2b (2) and M7b (1), all passing.
+    - PR audit (gh pr list --state merged): #130..#136 — one per agent
+      01–07, every one base Main; this agent's PR completes the set of 8.
+    - FINAL SUMMARY written into LEDGER NOTES (above) incl. the three T6
+      open strategy questions and the operating line.
+  §H1 DECISIONS: n/a (aggregate audit only; per-agent decisions recorded
+    in A-01/A-03/A-05).
+  Q1/Q2/Q3 ANSWERS:
+    - Q1: fresh-checkout builds + E2E run at HEAD (above).
+    - Q2/Q3: covered by the per-agent sweeps; the close-out grep audit
+      found no new instances (validator additive-only, risk untouched,
+      single seams intact).
+  ADAPTATIONS MADE: none.
+  REGRESSIONS FOUND & FIXED: none.
+  BLOCKED ITEMS: none.
 
 ────────────────────────────────────────────────────────────────────────────────
 APPENDIX B–J
