@@ -182,7 +182,8 @@ public class SetupController {
             int sizeFilled,
             String lastGateFailed,
             Map<String, Object> pd,
-            Map<String, Object> vote) {
+            Map<String, Object> vote,
+            Map<String, Object> ote30m) {
 
         public static SetupSnapshotDto from(SetupContext ctx) {
             List<ProjectionDto> projs = new ArrayList<>();
@@ -210,7 +211,8 @@ public class SetupController {
                     ctx.sizeRequest, ctx.sizeFilled,
                     ctx.lastGateFailed,
                     pdBlockFor(ctx.symbol),
-                    voteBlockFor(ctx.symbol));
+                    voteBlockFor(ctx.symbol),
+                    ote30mBlockFor(ctx.symbol));
         }
 
         public static SetupSnapshotDto idle(String symbol) {
@@ -221,7 +223,16 @@ public class SetupController {
                     null, null, null, null, List.of(),
                     0.0, 0.0, 0.0, 0, 0, null,
                     pdBlockFor(symbol),
-                    voteBlockFor(symbol));
+                    voteBlockFor(symbol),
+                    ote30mBlockFor(symbol));
+        }
+
+        /** M7b 30m-OTE confluence telemetry (V3 Agent 06). Null on cold start. */
+        private static Map<String, Object> ote30mBlockFor(String symbol) {
+            return com.topstep.trading.strategy.stdvote.Ote30mConfluenceGate
+                    .get(symbol)
+                    .map(com.topstep.trading.strategy.stdvote.Ote30mConfluenceGate::toApiMap)
+                    .orElse(null);
         }
 
         /**

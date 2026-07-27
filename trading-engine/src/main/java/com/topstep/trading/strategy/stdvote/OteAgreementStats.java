@@ -38,7 +38,12 @@ public final class OteAgreementStats {
 
     /** The per-symbol stats instance (created on first use, JVM-scoped). */
     public static OteAgreementStats forSymbol(String symbol) {
-        return REGISTRY.computeIfAbsent(symbol, s -> new OteAgreementStats());
+        return REGISTRY.computeIfAbsent(symbol, OteAgreementStats::new);
+    }
+
+    /** Test hook: drop all per-symbol instances (fresh session counters). */
+    static void resetRegistryForTest() {
+        REGISTRY.clear();
     }
 
     private final AtomicLong machineEmittedChartAgreed = new AtomicLong();
@@ -49,7 +54,12 @@ public final class OteAgreementStats {
     private final Deque<Instant> disagreedEvents = new ArrayDeque<>(RING_CAP);
     private final Deque<Instant> chartOnlyEvents = new ArrayDeque<>(RING_CAP);
 
-    private OteAgreementStats() {}
+    /** Symbol key, so the persistence store can be queried (V3 Agent 06). */
+    private final String symbol;
+
+    private OteAgreementStats(String symbol) {
+        this.symbol = symbol;
+    }
 
     /** The machine emitted and the 30m chart showed REACTED same-direction. */
     public void recordMachineEmittedChartAgreed(Instant at) {
@@ -97,7 +107,13 @@ public final class OteAgreementStats {
                 + " chartOnly=" + chartOnly();
     }
 
-    /** JSON-friendly map for the /api/chart "oteStats" object. */
+    /**
+     * JSON-friendly map for the /api/chart "oteStats" object. The three
+     * top-level counters keep their V2 names and SESSION scope (append-only
+     * format); V3 Agent 06 ADDS explicit {@code session} and
+     * {@code lifetime} blocks — lifetime = every persisted PAST session
+     * (last checkpoint per session date) + this live session's counts.
+     */
     public Map<String, Object> toApiMap() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("machineEmitted_chartAgreed", agreed());
@@ -108,6 +124,23 @@ public final class OteAgreementStats {
         events.put("disagreed", copy(disagreedEvents));
         events.put("chartOnly", copy(chartOnlyEvents));
         m.put("lastEvents", events);
+
+        Map<String, Object> session = new LinkedHashMap<>();
+        session.put("machineEmitted_chartAgreed", agreed());
+        session.put("machineEmitted_chartDisagreed", disagreed());
+        session.put("chartReacted_machineSilent", chartOnly());
+        m.put("session", session);
+
+        java.time.LocalDate today = java.time.LocalDate.now(
+                java.time.ZoneId.of("America/New_York"));
+        OteAgreementStatsStore.Lifetime past =
+                OteAgreementStatsStore.lifetimeExcluding(symbol, today);
+        Map<String, Object> lifetime = new LinkedHashMap<>();
+        lifetime.put("machineEmitted_chartAgreed", past.agreed() + agreed());
+        lifetime.put("machineEmitted_chartDisagreed", past.disagreed() + disagreed());
+        lifetime.put("chartReacted_machineSilent", past.chartOnly() + chartOnly());
+        lifetime.put("sessionsCounted", past.sessions() + 1);
+        m.put("lifetime", lifetime);
         return m;
     }
 }

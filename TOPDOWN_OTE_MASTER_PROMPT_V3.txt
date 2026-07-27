@@ -236,7 +236,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 03 — 3-of-4 Bias Vote per STDV_OTE_MODEL.md §H1 (LOG->VOTE)
   [✅] Agent 04 — H4 + D1 Ladder with 18:00 ET Boundaries + Two-Tier HTF Backfill
   [✅] Agent 05 — Upgrade Range & Votes to Consume D1 (AUTO Range Resolution)
-  [⬜] Agent 06 — 30m OTE Verdict Pipeline: Persistent Stats + Config Confluence
+  [✅] Agent 06 — 30m OTE Verdict Pipeline: Persistent Stats + Config Confluence
   [⬜] Agent 07 — Measurement Sessions: Counterfactual Evidence Run (SIM)
   [⬜] Agent 08 — FINAL VERIFICATION & CLOSE-OUT
 
@@ -273,6 +273,11 @@ SECTION 2 — PROGRESS LEDGER
               dealing-range formula (§H2's dealing range is the intraday
               manipulation leg) -> V3 fallback definition used, noted in
               A-05. Suite 498+6 green; Agents 02/03 suites UNCHANGED.
+  2026-07-27  Agent 06 complete. OteAgreementStats persist via JSONL store
+              (30-min + session-end checkpoints, last-line-per-session
+              loader, boot reminder at 15 sessions); M7b confluence gate
+              (OFF|LOG|GATE, default LOG) between M7 and M8; promote/
+              delete criteria verbatim in QUICK_START. Suite 505+6 green.
   ------------------------------------------------------------------
 
 ================================================================================
@@ -755,8 +760,69 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
   BLOCKED ITEMS: none.
 
 ··· APPENDIX A-06 — Agent 06: 30m OTE Verdict Pipeline ···
-  STATUS:            ⬜
-  (to be filled at completion)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-27
+  PR NUMBER:         #135 (base Main)
+  COMMIT HASH:       (squash on Main; git log records it)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - Stats persist + restore: stdvote/OteAgreementStatsStore.java —
+      append-only JSONL at data/ote_agreement_stats.jsonl
+      (-Dote.stats.file override), one line per checkpoint with the doc's
+      exact fields {date, symbol, mode, machineEmitted_chartAgreed,
+      machineEmitted_chartDisagreed, chartReacted_machineSilent,
+      sessionsCounted}. STORAGE CHOICE (per the convention clause): the
+      trading-engine module has NO DB/migration tool — its persistence
+      convention is append-only files (trade journal precedent); the
+      api-backend JPA store was considered and rejected because the
+      counters are produced on the engine candle path, which must not
+      depend on the API module. Checkpoints: every completed 30m bar
+      (StdvOteRunnerStrategy step 6c) + onSessionEnd, keyed on the CME
+      SESSION date from candle time (TradingSessionCalendar — B6, no
+      wall clock on the decision path). Loader keeps the LAST line per
+      (symbol, session) — re-checkpointing can never double count.
+      Tests PASSED: persistenceRoundTrip (write → registry+cache wipe →
+      reload → totals match, API lifetime block correct),
+      checkpointOverwriteSafety (same-session lines collapse last-wins).
+    - /api/chart oteStats {session, lifetime}: OteAgreementStats.toApiMap
+      keeps the three V2 top-level fields (append-only format) and ADDS
+      "session" and "lifetime" (= persisted past sessions + live session);
+      served through the existing ChartStateController oteStats block —
+      curl evidence lands in Agent 07's measurement run.
+    - M7b: stdvote/Ote30mConfluenceGate.java, inserted in validateStdvOte
+      between M7 and M8; visible on all gate surfaces ([GATES] m7b= token,
+      /api/setup "ote30m" block, SetupPanel M7b row + types). DEFAULT LOG
+      (install() reads ote30m.confluence, invalid → LOG); GATE requires
+      REACTED (or ARMED with ote30m.acceptArmed=true, default false) in
+      the SIGNAL direction, evaluated at the same point as the V2
+      comparison. ABSTAIN tested: no chart wired AND no active zone both
+      pass + count (abstainOnNoZone). gateModeSemantics covers
+      REACTED-pass/wrong-direction-block/ARMED-vs-acceptArmed/FORMING.
+    - Promote/delete criteria VERBATIM in QUICK_START ("M7b — 30M OTE
+      VERDICT PIPELINE" section, blockquote) + boot reminder implemented
+      in the store loader; test bootReminderAtThreshold captures the
+      "[OTE-VERDICT] … sessions collected — evaluation due" line from a
+      15-session file.
+    - OFF byte-identical: offModeNoInvocation (zero evaluations); the V2
+      OteAgreementStatsTest suite runs unchanged.
+    - Full suite green: trading-engine 505/0 (7 new), api-backend 6/0,
+      dashboard build clean.
+  §H1 DECISIONS: n/a for this agent.
+  Q1/Q2/Q3 ANSWERS:
+    - Q1: full suite at HEAD (505+6/0).
+    - Q2: no second persistence path for these counters; the store is the
+      single writer/reader, and the [GATES] rollup still reads the same
+      session instance.
+    - Q3: persistence failure is try/caught and logged — the candle path
+      cannot be taken down by disk errors; a corrupt JSONL line is
+      skipped without poisoning the file (both by construction, loader
+      tested against hand-written lines).
+  ADAPTATIONS MADE:
+    - Ote30mConfluenceGate reads zones through a supplier seam
+      (setChartEngine wraps the real engine; tests fabricate snapshots)
+      because ChartEngine is final and driving a real zone to REACTED
+      would test the chart, not the gate.
+  REGRESSIONS FOUND & FIXED: none.
+  BLOCKED ITEMS: none.
 
 ··· APPENDIX A-07 — Agent 07: Measurement Sessions (SIM) ···
   STATUS:            ⬜

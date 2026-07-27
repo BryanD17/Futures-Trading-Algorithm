@@ -105,6 +105,17 @@ export interface SetupSnapshotDto {
   lastGateFailed: string | null;
   pd: PdGateDto | null;
   vote: BiasVoteDto | null;
+  ote30m: Ote30mGateDto | null;
+}
+
+// M7b 30m-OTE confluence gate telemetry (V3 Agent 06). Null on cold start.
+export interface Ote30mGateDto {
+  mode: 'OFF' | 'LOG' | 'GATE';
+  acceptArmed: boolean;
+  gatePassing: boolean;
+  wouldBlock: number;
+  blocked: number;
+  abstains: number;
 }
 
 // 3-of-4 bias vote telemetry (V3 Agent 03). Null on cold start.
@@ -162,7 +173,7 @@ export const INSTRUMENT_PRECISION: Record<TradeableSymbol, number> = {
 // "passed" state is derived from the snapshot — the gate names match the
 // validator's failure summary so a single string compare drives the UI.
 export interface GateDef {
-  id: 'M1' | 'M2' | 'M2b' | 'M3' | 'M4' | 'M5' | 'M6' | 'M7' | 'M8' | 'M9';
+  id: 'M1' | 'M2' | 'M2b' | 'M3' | 'M4' | 'M5' | 'M6' | 'M7' | 'M7b' | 'M8' | 'M9';
   label: string;
 }
 
@@ -175,6 +186,7 @@ export const MANDATORY_GATES: GateDef[] = [
   { id: 'M5', label: 'Displacement + FVG' },
   { id: 'M6', label: 'Market structure shift / CHoCH' },
   { id: 'M7', label: 'OTE entry + PD array + RR ≥ 2.0' },
+  { id: 'M7b', label: '30m OTE confluence' },
   { id: 'M8', label: 'Size in [5, 20] micros' },
   { id: 'M9', label: 'Risk guardrails clear' },
 ];

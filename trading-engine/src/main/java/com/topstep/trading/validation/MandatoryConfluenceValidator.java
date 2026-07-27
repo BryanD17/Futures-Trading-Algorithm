@@ -86,6 +86,18 @@ public class MandatoryConfluenceValidator {
         this.pdEvaluator = evaluator;
     }
 
+    /**
+     * M7b 30m-OTE confluence gate (V3 Agent 06). Null → not evaluated
+     * (pre-V3 behavior); the gate's own OFF mode is likewise a no-op.
+     */
+    private volatile com.topstep.trading.strategy.stdvote.Ote30mConfluenceGate ote30mGate;
+
+    /** Inject the M7b 30m-OTE confluence gate (null disables it). */
+    public void setOte30mConfluenceGate(
+            com.topstep.trading.strategy.stdvote.Ote30mConfluenceGate gate) {
+        this.ote30mGate = gate;
+    }
+
     public MandatoryConfluenceValidator(MultiTimeframeAnalyzer mtfAnalyzer,
                                         DisplacementDetector displacementDetector,
                                         ChartStateQueryAPI chartState) {
@@ -480,6 +492,20 @@ public class MandatoryConfluenceValidator {
                             + " > ceiling " + rrCeiling), "M7");
         }
         confirmations.add("M7: in-zone, PD-array, RR=" + ctx.rr);
+
+        // M7b — 30m OTE confluence (V3 Agent 06): the chart's zone for the
+        // signal direction must be REACTED (GATE mode only; LOG counts and
+        // passes; ABSTAIN on no-zone ALWAYS passes — Rollout Doctrine).
+        com.topstep.trading.strategy.stdvote.Ote30mConfluenceGate m7b = ote30mGate;
+        if (m7b != null) {
+            com.topstep.trading.strategy.stdvote.Ote30mConfluenceGate.Decision d =
+                    m7b.gateCheck(biasBullish);
+            if (!d.passed()) {
+                return ValidationResult.fail(
+                        java.util.List.of("M7b: " + d.reason()), "M7b");
+            }
+            confirmations.add("M7b: 30m OTE confluence — " + d.reason());
+        }
 
         // M8 — sized order at floor or above.
         if (ctx.sizeRequest < spec.minMicros()) {
