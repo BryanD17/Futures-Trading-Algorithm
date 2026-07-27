@@ -103,6 +103,22 @@ export interface SetupSnapshotDto {
   sizeRequest: number;
   sizeFilled: number;
   lastGateFailed: string | null;
+  pd: PdGateDto | null;
+}
+
+// M2b premium/discount gate telemetry (V3 Agent 02). Session-scoped
+// counters; null until the engine wires the evaluator (cold start).
+export interface PdGateDto {
+  mode: 'OFF' | 'LOG' | 'BLOCK';
+  eqBandTicks: number;
+  minRangeTicks: number;
+  gatePassing: boolean;
+  wouldBlockLong: number;
+  wouldBlockShort: number;
+  blockedLong: number;
+  blockedShort: number;
+  abstainsByReason: Record<string, number>;
+  verdictsByRangeSource: Record<string, number>;
 }
 
 export interface ActiveSetupListDto {
@@ -122,13 +138,14 @@ export const INSTRUMENT_PRECISION: Record<TradeableSymbol, number> = {
 // "passed" state is derived from the snapshot — the gate names match the
 // validator's failure summary so a single string compare drives the UI.
 export interface GateDef {
-  id: 'M1' | 'M2' | 'M3' | 'M4' | 'M5' | 'M6' | 'M7' | 'M8' | 'M9';
+  id: 'M1' | 'M2' | 'M2b' | 'M3' | 'M4' | 'M5' | 'M6' | 'M7' | 'M8' | 'M9';
   label: string;
 }
 
 export const MANDATORY_GATES: GateDef[] = [
   { id: 'M1', label: 'Instrument is MNQ / MES / MGC' },
   { id: 'M2', label: 'HTF bias aligned (not NEUTRAL)' },
+  { id: 'M2b', label: 'Premium/Discount (entry vs equilibrium)' },
   { id: 'M3', label: 'Killzone open' },
   { id: 'M4', label: 'Liquidity sweep + raid score' },
   { id: 'M5', label: 'Displacement + FVG' },

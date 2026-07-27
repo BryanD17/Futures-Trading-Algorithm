@@ -346,6 +346,16 @@ public class HtfTrendAnalyzer {
     }
 
     /**
+     * THE single equilibrium (midpoint) formula for premium/discount logic.
+     * {@code PremiumDiscountEvaluator} (M2b) delegates here so the codebase
+     * carries exactly one copy of the arithmetic (anti-pattern C7: two
+     * midpoint formulas can drift invisibly).
+     */
+    public static double equilibriumOf(double rangeHigh, double rangeLow) {
+        return rangeLow + (rangeHigh - rangeLow) * 0.5;
+    }
+
+    /**
      * Get the premium/discount zone.
      * Returns true if price is in discount (below 50% of HTF range) for bullish,
      * or in premium (above 50% of HTF range) for bearish.
@@ -359,7 +369,7 @@ public class HtfTrendAnalyzer {
         double range = swingHigh - swingLow;
         if (range <= 0) return true;
 
-        double equilibrium = swingLow + (range * 0.5);
+        double equilibrium = equilibriumOf(swingHigh, swingLow);
 
         if (bullish) {
             // For longs, price should be in discount (below equilibrium)

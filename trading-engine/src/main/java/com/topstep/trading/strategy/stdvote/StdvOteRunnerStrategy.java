@@ -205,6 +205,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** OTE entry math (same instance the core uses; pure). */
     private final OteEntryCalculator oteCalculator;
 
+    /** M2b premium/discount evaluator (V3 Agent 02); never null after ctor. */
+    private final PremiumDiscountEvaluator pdEvaluator;
+
     private static final ZoneId ET_ZONE = ZoneId.of("America/New_York");
 
     /**
@@ -361,6 +364,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // hardcoded floor); scalp → topstep50kScalp() carries [0.8, 1.5].
         this.activeRiskLimits = ScalpConfig.activeRiskLimits();
         validator.setActiveRiskLimits(activeRiskLimits);
+        // M2b premium/discount gate (V3 Agent 02): evaluator reads the
+        // governing range from THIS runner's LevelEngine at gate time;
+        // default mode is LOG (counts, never blocks).
+        this.pdEvaluator = PremiumDiscountEvaluator.install(
+                symbol, spec.tickSize(), levelEngine);
+        validator.setPremiumDiscountEvaluator(pdEvaluator);
         this.core = new StdvOteStrategy(symbol, projectionEngine, oteCalculator, validator,
                 eventBus, /* expiryBars */ 40L);
 
@@ -587,6 +596,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                     + " lastGateFailed=" + ctx.lastGateFailed
                     + " kzActive=" + killzoneActive
                     + " chart30mOte=" + oteState
+                    + " " + pdEvaluator.gatesToken(candle.getClose())
                     + " " + stats.rollup());
         }
 

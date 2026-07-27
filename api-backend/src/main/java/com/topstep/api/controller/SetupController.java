@@ -180,7 +180,8 @@ public class SetupController {
             double rr,
             int sizeRequest,
             int sizeFilled,
-            String lastGateFailed) {
+            String lastGateFailed,
+            Map<String, Object> pd) {
 
         public static SetupSnapshotDto from(SetupContext ctx) {
             List<ProjectionDto> projs = new ArrayList<>();
@@ -206,7 +207,8 @@ public class SetupController {
                     List.copyOf(ctx.confluenceFactors),
                     ctx.entry, ctx.stop, ctx.rr,
                     ctx.sizeRequest, ctx.sizeFilled,
-                    ctx.lastGateFailed);
+                    ctx.lastGateFailed,
+                    pdBlockFor(ctx.symbol));
         }
 
         public static SetupSnapshotDto idle(String symbol) {
@@ -215,7 +217,21 @@ public class SetupController {
                     0.0, 0.0, false, List.of(),
                     null, 0, false, null, false,
                     null, null, null, null, List.of(),
-                    0.0, 0.0, 0.0, 0, 0, null);
+                    0.0, 0.0, 0.0, 0, 0, null,
+                    pdBlockFor(symbol));
+        }
+
+        /**
+         * M2b premium/discount telemetry (V3 Agent 02): session-scoped
+         * counters + mode from the per-symbol evaluator registry. Null
+         * until the runner has wired the evaluator (cold start) — the
+         * panel renders the row as pending, never as an error.
+         */
+        private static Map<String, Object> pdBlockFor(String symbol) {
+            return com.topstep.trading.strategy.stdvote.PremiumDiscountEvaluator
+                    .get(symbol)
+                    .map(com.topstep.trading.strategy.stdvote.PremiumDiscountEvaluator::toApiMap)
+                    .orElse(null);
         }
     }
 }

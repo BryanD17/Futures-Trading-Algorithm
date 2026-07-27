@@ -232,7 +232,7 @@ SECTION 2 — PROGRESS LEDGER
   Status markers:  ⬜ NOT STARTED   🔄 IN PROGRESS   ✅ COMPLETE   ⛔ BLOCKED
 
   [✅] Agent 01 — Pre-Flight: Audit-Anchor Verification + V2 State + Baselines
-  [⬜] Agent 02 — Premium/Discount Gate (M2b) with LOG->BLOCK Rollout
+  [✅] Agent 02 — Premium/Discount Gate (M2b) with LOG->BLOCK Rollout
   [⬜] Agent 03 — 3-of-4 Bias Vote per STDV_OTE_MODEL.md §H1 (LOG->VOTE)
   [⬜] Agent 04 — H4 + D1 Ladder with 18:00 ET Boundaries + Two-Tier HTF Backfill
   [⬜] Agent 05 — Upgrade Range & Votes to Consume D1 (AUTO Range Resolution)
@@ -252,6 +252,10 @@ SECTION 2 — PROGRESS LEDGER
               doc's V3-vote clause. NOTE for Agent 04: LevelEngine keys the
               trading day at 17:00 ET; equivalent to the 18:00 session-open
               key in practice because no bars print 17:00–18:00 ET.
+  2026-07-26  Agent 02 complete. M2b premium/discount gate live in
+              validateStdvOte between M2 and M3, DEFAULT LOG. Full suite
+              472+6 tests green; new: PremiumDiscountEvaluatorTest (10),
+              StdvOteValidatorPdGateTest (6).
   ------------------------------------------------------------------
 
 ================================================================================
@@ -477,8 +481,62 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
   BLOCKED ITEMS: none.
 
 ··· APPENDIX A-02 — Agent 02: Premium/Discount Gate (M2b) ···
-  STATUS:            ⬜
-  (to be filled at completion)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-26
+  PR NUMBER:         #131 (base Main)
+  COMMIT HASH:       (squash on Main; git log records it)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - Evaluator: strategy/stdvote/PremiumDiscountEvaluator.java —
+      R1/R2/R3 resolution in classify() (:~230-270); EQUILIBRIUM band
+      (|price-eq| <= eqBandTicks*tick). Midpoint math REUSED, not forked:
+      classify() delegates to HtfTrendAnalyzer.equilibriumOf(hi, lo)
+      (new single-formula static at HtfTrendAnalyzer.java:349-357;
+      isInFavorableZone refactored to call it).
+    - M2b inserted between M2 and M3: MandatoryConfluenceValidator
+      .validateStdvOte (block after "M2: bias=" confirmation, before the
+      M3 killzone check). Visible on all four surfaces:
+        validator list — confirmation "M2b: Premium/Discount (entry vs
+          equilibrium)" + fail id "M2b";
+        [GATES] line — pd= token via pdEvaluator.gatesToken(close) in
+          StdvOteRunnerStrategy (15m telemetry block);
+        /api/setup — SetupSnapshotDto gains "pd" map (SetupController
+          .pdBlockFor via PremiumDiscountEvaluator.get registry);
+        SetupPanel — M2b row in MANDATORY_GATES (types/setup.ts) +
+          PD-gate stats line in ConfluenceChecklist (SetupPanel.tsx).
+    - Three modes per spec; DEFAULT LOG: install() reads
+      System.getProperty("pd.gate.mode", "LOG"); OFF returns before any
+      range resolution (evaluationCount() == 0 proven by test f).
+    - ABSTAIN-never-blocks: tests "abstainPassesInBlockMode" +
+      "abstainPassesThroughValidator" — both PASSED.
+    - Judged price is the proposed ENTRY: validator passes ctx.entry
+      (set by StdvOteStrategy.tryEmit BEFORE validateStdvOte runs) to
+      gateCheck; never the candle close.
+    - Tests a–g: PremiumDiscountEvaluatorTest (10 tests: LOG/BLOCK both
+      sides, EQ band both directions, R2 promotion + R3-thin ABSTAIN,
+      ABSTAIN-in-BLOCK, OFF no-invocation, determinism, gates-token,
+      mode parsing) + StdvOteValidatorPdGateTest (6 tests incl.
+      M2b-before-M3 ordering proof and null-evaluator pre-V3 identity).
+      Full suite: trading-engine 472 tests / 0 failures, api-backend
+      6 / 0, dashboard vite build clean (zero TS errors).
+    - QUICK_START: "M2b — PREMIUM/DISCOUNT GATE" section with the range
+      table, mode semantics, tuning keys, and the rollout playbook;
+      M2b row added to the gate meaning table.
+  §H1 DECISIONS: n/a for this agent (range resolution is this document's
+    R1/R2/R3 by design until Agent 05's R0).
+  Q1/Q2/Q3 ANSWERS:
+    - Q1: full suite + new tests green at HEAD (above).
+    - Q2: midpoint formula now exists in exactly ONE place
+      (equilibriumOf); grep confirms no other `* 0.5` equilibrium copies
+      in premium/discount logic.
+    - Q3: cold-start blocking (the silence-incident class) prevented by
+      construction — ABSTAIN paths tested in BLOCK mode; no other new
+      gate reads starved inputs.
+  ADAPTATIONS MADE:
+    - LevelEngine gained read-only getDevelopingDayHigh/Low() so R2 reads
+      state the engine already tracks instead of re-detecting (Q2 hygiene).
+    - Constructor made public (tests live in the validation package).
+  REGRESSIONS FOUND & FIXED: none.
+  BLOCKED ITEMS: none.
 
 ··· APPENDIX A-03 — Agent 03: 3-of-4 Bias Vote per §H1 ···
   STATUS:            ⬜
