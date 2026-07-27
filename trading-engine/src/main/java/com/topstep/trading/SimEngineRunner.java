@@ -349,12 +349,26 @@ public class SimEngineRunner {
     /**
      * Handle strategy signal event.
      */
+    /**
+     * SIM twin of LiveEngineRunner's release (2026-07-27 no-trade fix): a
+     * suppressed or vetoed signal must free the strategy's IN_TRADE /
+     * positionOpen latch, or the symbol never re-arms until restart. The
+     * synthetic PositionClosedEvent's only subscriber is the strategy runner.
+     */
+    private void releaseUnexecutedSignal(StrategySignalEvent signal, String why) {
+        System.out.println("[SignalRelease] SIM " + signal.getSymbol() + ": " + why
+                + " — releasing strategy latch (no order/position created)");
+        eventBus.publish(new com.topstep.trading.event.PositionClosedEvent(
+                signal.getSymbol(), 0.0, false, java.time.Instant.now()));
+    }
+
     private void handleStrategySignal(StrategySignalEvent signal) {
         // ── WARMUP GUARD layer 1 (SIM): nothing trades until every
         // subscription (and its synchronous synthetic warm boot) returned.
         if (!warmupComplete) {
             System.out.println("[Warmup] SIM: suppressing signal during warm-boot replay: "
                 + signal.getSignalType() + " " + signal.getSymbol());
+            releaseUnexecutedSignal(signal, "warmup suppression");
             return;
         }
 
@@ -364,11 +378,13 @@ public class SimEngineRunner {
             System.out.println("[Warmup] SIM: suppressing signal created during warm-boot replay: "
                 + signal.getSignalType() + " " + signal.getSymbol()
                 + " (created=" + signal.getTimestamp() + ")");
+            releaseUnexecutedSignal(signal, "created during warm-boot replay");
             return;
         }
 
         if (paused.get()) {
             System.out.println("\n⏸ Signal ignored (paused): " + signal.getReason());
+            releaseUnexecutedSignal(signal, "paused");
             return;
         }
 
@@ -393,6 +409,7 @@ public class SimEngineRunner {
         } else {
             System.out.println("\n❌ Signal DENIED: " + signal.getReason());
             System.out.println("  Reason: " + decision.getReason());
+            releaseUnexecutedSignal(signal, "risk engine deny");
         }
     }
 

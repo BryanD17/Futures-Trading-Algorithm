@@ -284,6 +284,20 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             intProperty("stdvOte.mssFreshBars", 30) * detectorTimeframe.getMinutes();
 
     /**
+     * Entry-fill timeout (2026-07-27 no-trade fix, scalp mode): feed bars
+     * IN_TRADE may sit with the position latch set but NO actual position
+     * before the runner declares the entry unexecuted (resting limit never
+     * filled / order callback lost) and releases the latch so the re-arm
+     * engine can hunt again. Default = 2x the OTE window — a limit that
+     * has not filled by then belongs to a stale thesis anyway. 0 disables.
+     */
+    private final int entryTimeoutBars =
+            intProperty("stdvOte.entryTimeoutBars", maxBarsInOte * 2);
+
+    /** Consecutive IN_TRADE feed bars observed with no position. */
+    private int entryPendingBars = 0;
+
+    /**
      * OBSERVABILITY ONLY (chart-in-memory rollout): the runner's ChartEngine,
      * whose 30m OTE screenshot-pattern signal is logged NEXT TO the existing
      * gate result so a week of SIM logs can be compared before any gating
@@ -468,6 +482,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     public SetupContext getSetupContext() {
         return core.getSetupContext();
     }
+
+    // Test hooks for the entry-fill timeout (2026-07-27 no-trade fix).
+    void latchForTest() { this.positionOpen = true; }
+    boolean isPositionOpenForTest() { return positionOpen; }
 
     /** Receive a candle from the SMT correlate (e.g. MES when the primary is MNQ). */
     public void onSmtCandle(Candle candle) {
@@ -819,6 +837,25 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                         + rearmCooldownBars + " bars");
             }
         }
+        // ── Entry-fill timeout (2026-07-27): emission happened but no
+        // position ever materialized (unfilled resting limit, vetoed order
+        // whose release event was lost, broken callback). Without this the
+        // positionOpen latch blocks re-arm until process restart.
+        if (ctx.state == SetupState.IN_TRADE && positionOpen && entryTimeoutBars > 0) {
+            boolean hasPosition = context != null && context.hasPosition(symbol);
+            if (hasPosition) {
+                entryPendingBars = 0;
+            } else if (++entryPendingBars > entryTimeoutBars) {
+                entryPendingBars = 0;
+                positionOpen = false;
+                System.out.println("[" + symbol + "] SCALP: entry not filled within "
+                        + entryTimeoutBars + " bars — releasing latch, setup invalidated");
+                core.invalidate("entry not filled within " + entryTimeoutBars + " bars");
+            }
+        } else {
+            entryPendingBars = 0;
+        }
+
         // An INVALIDATED setup with no pending cooldown starts one. FIELD
         // BUG FIX (2026-07-09 LIVE, 7.5h dead in NY AM): this used to
         // require a lastSeenState EDGE (!= INVALIDATED), but invalidations
