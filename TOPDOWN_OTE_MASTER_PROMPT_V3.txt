@@ -625,7 +625,7 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
 ··· APPENDIX A-04 — Agent 04: H4 + D1 Ladder + Two-Tier HTF Backfill ···
   STATUS:            ✅
   DATE COMPLETED:    2026-07-27
-  PR NUMBER:         #TBD-A04 (base Main)
+  PR NUMBER:         #133 (base Main)
   COMMIT HASH:       (squash on Main; git log records it)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - H4 + D1 in the enum (BarAggregationManager.Timeframe H4(240,"4h"),
