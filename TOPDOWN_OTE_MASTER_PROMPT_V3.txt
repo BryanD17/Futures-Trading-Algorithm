@@ -706,7 +706,7 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
 ··· APPENDIX A-05 — Agent 05: D1 Range (R0) + D1-Aware Votes ···
   STATUS:            ✅
   DATE COMPLETED:    2026-07-27
-  PR NUMBER:         #TBD-A05 (base Main)
+  PR NUMBER:         #134 (base Main)
   COMMIT HASH:       (squash on Main; git log records it)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - R0 implemented: PremiumDiscountEvaluator.d1DealingRange() — last
