@@ -181,7 +181,8 @@ public class SetupController {
             int sizeRequest,
             int sizeFilled,
             String lastGateFailed,
-            Map<String, Object> pd) {
+            Map<String, Object> pd,
+            Map<String, Object> vote) {
 
         public static SetupSnapshotDto from(SetupContext ctx) {
             List<ProjectionDto> projs = new ArrayList<>();
@@ -208,7 +209,8 @@ public class SetupController {
                     ctx.entry, ctx.stop, ctx.rr,
                     ctx.sizeRequest, ctx.sizeFilled,
                     ctx.lastGateFailed,
-                    pdBlockFor(ctx.symbol));
+                    pdBlockFor(ctx.symbol),
+                    voteBlockFor(ctx.symbol));
         }
 
         public static SetupSnapshotDto idle(String symbol) {
@@ -218,7 +220,19 @@ public class SetupController {
                     null, 0, false, null, false,
                     null, null, null, null, List.of(),
                     0.0, 0.0, 0.0, 0, 0, null,
-                    pdBlockFor(symbol));
+                    pdBlockFor(symbol),
+                    voteBlockFor(symbol));
+        }
+
+        /**
+         * 3-of-4 bias-vote telemetry (V3 Agent 03): four votes + agreement
+         * counters from the per-symbol engine registry. Null on cold start.
+         */
+        private static Map<String, Object> voteBlockFor(String symbol) {
+            return com.topstep.trading.strategy.stdvote.BiasVoteEngine
+                    .get(symbol)
+                    .map(com.topstep.trading.strategy.stdvote.BiasVoteEngine::toApiMap)
+                    .orElse(null);
         }
 
         /**

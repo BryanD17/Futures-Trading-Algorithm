@@ -53,6 +53,9 @@ public class LevelEngine {
     private double todayLow = Double.MAX_VALUE;
     private double todayOpen = 0;
 
+    // True-day-open tracking (midnight ET calendar date last stamped).
+    private LocalDate currentMidnightDate;
+
     // Weekly tracking
     private LocalDate currentWeekStart;
     private double weekHigh = Double.MIN_VALUE;
@@ -107,6 +110,16 @@ public class LevelEngine {
         // Check for week change
         if (currentWeekStart == null || !weekStart.equals(currentWeekStart)) {
             onWeekChange(weekStart, candle);
+        }
+
+        // True day open (midnight ET): the first candle of each ET calendar
+        // date stamps MIDNIGHT_OPEN — §H1's "price vs true day open" vote
+        // reads this, NOT the 18:00-session DAILY_OPEN (V3 Agent 03).
+        LocalDate midnightDate = nyTime.toLocalDate();
+        if (currentMidnightDate == null || !midnightDate.equals(currentMidnightDate)) {
+            currentMidnightDate = midnightDate;
+            levels.put(LevelType.MIDNIGHT_OPEN,
+                    new KnownLevel(LevelType.MIDNIGHT_OPEN, candle.getOpen(), timestamp));
         }
 
         // Update session tracking

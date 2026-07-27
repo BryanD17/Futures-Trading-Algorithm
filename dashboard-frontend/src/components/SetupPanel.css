@@ -334,3 +334,13 @@
 .pill.chartwarm.unknown {
   color: var(--muted);
 }
+
+/* 3-of-4 bias vote pills (V3 Agent 03) */
+.vote-row { align-items: center; gap: 6px; }
+.vote-mode, .vote-final { font-size: 12px; color: var(--muted); }
+.pill.vote-pill.vote-bull { background: rgba(32, 201, 151, 0.15); border-color: var(--bull); color: var(--bull); }
+.pill.vote-pill.vote-bear { background: rgba(250, 82, 82, 0.15); border-color: var(--bear); color: var(--bear); }
+.pill.vote-pill.vote-abstain { color: var(--muted); }
+
+/* M2b premium/discount gate stats (V3 Agent 02) */
+.pd-gate-stats { font-size: 12px; color: var(--muted); margin-top: 6px; }

@@ -51,6 +51,10 @@ public enum LevelType {
     // OPENING PRICES (for gap analysis)
     // ═══════════════════════════════════════════════════════════════════
     DAILY_OPEN("Daily Open Price", false, 4),    // Neutral - not a high or low
+    // ICT "true day open": the first traded price at/after midnight ET.
+    // Distinct from DAILY_OPEN (the 18:00 ET session open of the PREVIOUS
+    // day) — added for the §H1 V3 bias vote (V3 Agent 03).
+    MIDNIGHT_OPEN("True Day Open (midnight ET)", false, 4),
     WEEKLY_OPEN("Weekly Open Price", false, 4),  // Neutral - not a high or low
     NY_OPEN("NY Open Price", false, 4),          // Neutral - can be swept either way
     LONDON_OPEN("London Open Price", false, 4),

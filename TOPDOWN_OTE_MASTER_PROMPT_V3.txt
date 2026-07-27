@@ -233,7 +233,7 @@ SECTION 2 — PROGRESS LEDGER
 
   [✅] Agent 01 — Pre-Flight: Audit-Anchor Verification + V2 State + Baselines
   [✅] Agent 02 — Premium/Discount Gate (M2b) with LOG->BLOCK Rollout
-  [⬜] Agent 03 — 3-of-4 Bias Vote per STDV_OTE_MODEL.md §H1 (LOG->VOTE)
+  [✅] Agent 03 — 3-of-4 Bias Vote per STDV_OTE_MODEL.md §H1 (LOG->VOTE)
   [⬜] Agent 04 — H4 + D1 Ladder with 18:00 ET Boundaries + Two-Tier HTF Backfill
   [⬜] Agent 05 — Upgrade Range & Votes to Consume D1 (AUTO Range Resolution)
   [⬜] Agent 06 — 30m OTE Verdict Pipeline: Persistent Stats + Config Confluence
@@ -256,6 +256,11 @@ SECTION 2 — PROGRESS LEDGER
               validateStdvOte between M2 and M3, DEFAULT LOG. Full suite
               472+6 tests green; new: PremiumDiscountEvaluatorTest (10),
               StdvOteValidatorPdGateTest (6).
+  2026-07-26  Agent 03 complete. BiasVoteEngine (V1–V4 per §H1, 3-of-4
+              aggregation) on the live path, DEFAULT LOG; MIDNIGHT_OPEN
+              level added for the true day open (LevelEngine's DAILY_OPEN
+              is the previous day's 18:00 session open — wrong level for
+              §H1's V3, documented in A-03). Suite 482+6 green.
   ------------------------------------------------------------------
 
 ================================================================================
@@ -539,8 +544,78 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
   BLOCKED ITEMS: none.
 
 ··· APPENDIX A-03 — Agent 03: 3-of-4 Bias Vote per §H1 ···
-  STATUS:            ⬜
-  (to be filled at completion)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-26
+  PR NUMBER:         (recorded in the ledger commit of this PR)
+  COMMIT HASH:       (squash on Main; git log records it)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - §H1 verbatim (A-01) drove the implementation: the four sources and
+      the >=3-aligned-else-NEUTRAL rule are §H1's own. Everything §H1 is
+      silent on used this document's defaults — see §H1 DECISIONS below.
+    - Four votes: strategy/stdvote/BiasVoteEngine.java — voteV1..voteV4
+      pure statics. Wiring from EXISTING primitives:
+        V2: DailyAmdCycleTracker instantiated in StdvOteRunnerStrategy
+            ctor and fed per 1m candle EXACTLY as the legacy strategy does
+            (update(candle, levelEngine, lastDisplacement) — mirror of
+            IctHighConfluenceStrategy:684); DISTRIBUTION_UP/DOWN phases
+            carry the leg direction, everything else ABSTAIN(no-dist-leg).
+        V3: LevelEngine MIDNIGHT_OPEN (new level, see decision below),
+            eqBandTicks band around the open -> ABSTAIN inside it.
+        V4: LevelEngine's PDH/PDL KnownLevel objects and their isRaided()
+            tapped state REUSED — zero re-detection; four cases + the
+            nearer-magnet tie rule implemented as specified.
+    - DAILY_OPEN boundary question ANSWERED: LevelEngine's DAILY_OPEN is
+      registered at day-change with the PREVIOUS day's session open
+      (17:00/18:00 ET day key) — it is NOT §H1's "true day open". A new
+      MIDNIGHT_OPEN level (first traded price at/after midnight ET,
+      stamped per ET calendar date in LevelEngine.processCandle) was
+      added and V3 reads THAT. DAILY_OPEN untouched.
+    - Single-seam replacement proven by grep: core.recordHtfBias on the
+      live path is fed at exactly ONE decision point
+      (StdvOteRunnerStrategy step 6: effectiveBias(mode, legacy, vote));
+      the only other call site is the scalp re-arm re-seed, which replays
+      the seam's OUTPUT (lastBias), not a second decision.
+    - Three modes per spec, DEFAULT LOG: BiasVoteEngine.install reads
+      System.getProperty("bias.vote.mode", "LOG"); LEGACY skips
+      evaluation entirely (runner-level no-invocation test).
+    - Surfaces: [VOTE] line printed per evaluation (format in QUICK_START);
+      [GATES] gains "vote=<bias>(<bull>/<bear>/<abs>) agree=<bool>";
+      /api/setup gains "vote" (four votes + counters, SetupController
+      .voteBlockFor); SetupPanel renders V1–V4 pills colored by direction,
+      gray ABSTAIN (SetupPanel.tsx vote-row + CSS).
+    - Tests a–g: BiasVoteEngineTest (10 tests) — isolated V1–V4 paths
+      incl. all four V4 cases + tie, aggregation table
+      (4-0/3-1/2-2/3+1abs/2abs), LEGACY no-invocation on a real runner
+      feed, LOG counters + legacy-decides seam, VOTE seam replacement
+      (unit + runner-level cold-start NEUTRAL stand-down), determinism,
+      hysteresis interplay (vote-NEUTRAL gets grace at the core hook).
+      Full suite: trading-engine 482 / 0 failures, api-backend 6 / 0,
+      dashboard build clean.
+    - QUICK_START gains "THE BIAS VOTE" — the table, the log-line anatomy,
+      and the adoption playbook.
+  §H1 DECISIONS:
+    - §H1 DECIDED: the four sources; >=3 same-direction ⇒ directional,
+      otherwise NEUTRAL (implemented verbatim).
+    - §H1 SILENT (this document's defaults applied): ABSTAIN semantics
+      (never counts for either side); the eqBandTicks band around the day
+      open; V4's tie rules (nearer magnet, equidistant/both-tapped/no-
+      levels ABSTAIN); the definition of "true day open" (midnight ET
+      chosen, new level added rather than silently reusing DAILY_OPEN).
+  Q1/Q2/Q3 ANSWERS:
+    - Q1: full suite green at HEAD (482+6).
+    - Q2: no second bias seam exists (grep above); no duplicated vote
+      logic — all four votes live in one engine.
+    - Q3: cold-start inputs (no PDH/PDL, no distribution leg, no midnight
+      open) all degrade to ABSTAIN -> NEUTRAL stand-down, tested at the
+      runner level; the silence-incident class cannot re-enter here (a
+      NEUTRAL vote stands the engine down exactly as a NEUTRAL legacy
+      bias always has).
+  ADAPTATIONS MADE:
+    - MIDNIGHT_OPEN written via direct map put (not registerLevel) so the
+      open updates every day even when within price tolerance of the
+      previous day's.
+  REGRESSIONS FOUND & FIXED: none.
+  BLOCKED ITEMS: none.
 
 ··· APPENDIX A-04 — Agent 04: H4 + D1 Ladder + Two-Tier HTF Backfill ···
   STATUS:            ⬜
