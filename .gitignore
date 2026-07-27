@@ -81,3 +81,4 @@ historical-data/
 # User specific
 config/local/
 .user-config
+/Futures-Trading-Algorithm/

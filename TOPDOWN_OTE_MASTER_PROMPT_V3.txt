@@ -1,0 +1,541 @@
+================================================================================
+================================================================================
+
+  ████████╗ ██████╗ ██████╗       ██████╗  ██████╗ ██╗    ██╗███╗   ██╗
+  ╚══██╔══╝██╔═══██╗██╔══██╗      ██╔══██╗██╔═══██╗██║    ██║████╗  ██║
+     ██║   ██║   ██║██████╔╝█████╗██║  ██║██║   ██║██║ █╗ ██║██╔██╗ ██║
+     ██║   ██║   ██║██╔═══╝ ╚════╝██║  ██║██║   ██║██║███╗██║██║╚██╗██║
+     ██║   ╚██████╔╝██║           ██████╔╝╚██████╔╝╚███╔███╔╝██║ ╚████║
+     ╚═╝    ╚═════╝ ╚═╝           ╚═════╝  ╚═════╝  ╚══╝╚══╝ ╚═╝  ╚═══╝
+
+        PREMIUM/DISCOUNT GATE • 3-OF-4 BIAS VOTE • H4/D1 LADDER
+              • 30M OTE VERDICT PIPELINE •
+            MASTER IMPLEMENTATION PROMPT — V3 (TOP-DOWN)
+
+================================================================================
+================================================================================
+
+DOCUMENT NAME:    TOPDOWN_OTE_MASTER_PROMPT_V3.txt
+VERSION:          V3 (top-down analysis remediation)
+REPOSITORY:       https://github.com/BryanD17/Futures-Trading-Algorithm.git
+DEFAULT BRANCH:   Main   (CAPITAL M — confirmed twice in prior ledgers; every
+                  PR in this document targets --base Main. Never "main".)
+PREDECESSORS:     CHART_FIX_MASTER_PROMPT_V1.txt (12 agents, ✅ complete)
+                  CHART_FIX_MASTER_PROMPT_V2.txt (7 agents — Agent 01 of THIS
+                  document verifies its completion state before assuming it)
+                  Both stay in the repo untouched as history. Only THIS
+                  document's ledger is active.
+AUTHORITY ORDER:  When definitions conflict, the repo's own spec wins:
+                  docs/architecture/STDV_OTE_MODEL.md (§H1 for bias votes)
+                  is AUTHORITATIVE over this document's suggested formulas,
+                  which are authoritative over any blog article. Record every
+                  place the model doc decided something in Appendix A.
+TOTAL AGENTS:     8
+EXECUTED BY:      Claude Code, autonomously, agent by agent, via the
+                  GOLDEN LOOP below.
+
+WHY THIS DOCUMENT EXISTS (from the 2026 strategy audit):
+  The OTE mechanics are implemented well — exact fib constants, 0.705
+  precise entry, stop beyond the swept extreme, MSS + rejection
+  confirmation, killzone windows excluding NY lunch, origin-violation
+  invalidation, PD-array snapping. The TOP-DOWN layer is the real gap, and
+  the gap is against the repo's OWN SPEC, not just an article:
+
+  GAP-1  Premium/discount is not a gate anywhere on the live path.
+         HtfTrendAnalyzer.isInFavorableZone() is correct code with exactly
+         ONE call site — inside a log string in the legacy strategy
+         (IctHighConfluenceStrategy ~line 988), which is off by default.
+         The single most important top-down rule does not block, score, or
+         size anything that actually trades.
+  GAP-2  STDV_OTE_MODEL.md §H1 specifies HTF bias as a 3-OF-4 VOTE:
+           (1) HtfTrendAnalyzer trend state      — IMPLEMENTED (the only one)
+           (2) DailyAmdCycleTracker distribution — referenced only by the
+               legacy strategy, not the live path
+           (3) price vs true day open            — LevelEngine computes
+               DAILY_OPEN and NOTHING reads it
+           (4) daily draw on liquidity           — no symbol exists at all
+         The live engine ships 1 of 4 votes and calls the result "bias".
+  GAP-3  The timeframe ladder stops at H1. BarAggregationManager.Timeframe
+         = {M1, M3, M5, M15, M30, H1}. No H4, no D1. What the code calls
+         HTF (15m/30m structure) is what top-down methodology calls the
+         ENTRY timeframe. D1 needs the 18:00 ET CME session boundary and
+         weeks of history — a real build, not a bolt-on.
+  GAP-4  The 30m ChartEngine OTE — the zone that looks like what a human
+         draws — has zero authority: StdvOteRunnerStrategy ~line 641 says
+         verbatim "LOG-ONLY comparison … DO NOT gate on this."
+         OteAgreementStats already counts agreement, but stats are
+         session-scoped (lost on restart) and no decision pipeline exists.
+
+TARGET END STATE:
+  1. A premium/discount gate (M2b) exists on the live path with a measured
+     rollout: LOG mode by default (counts what it WOULD have blocked),
+     BLOCK mode one flag away, never blocking on missing data.
+  2. All four §H1 bias votes are implemented and aggregated 3-of-4, with a
+     LOG-mode rollout that runs the vote alongside the legacy bias and
+     counts agreement before the owner flips VOTE mode on.
+  3. H4 and D1 exist in the ladder with correct 18:00 ET session
+     boundaries, fed by a two-tier backfill (H1 bars fetched directly for
+     weeks of depth — NEVER replayed through the 1m listener path).
+  4. The 30m OTE has a verdict pipeline: persistent agreement stats, a
+     config-gated confluence check (OFF by default), and written promote/
+     delete criteria — so the standing question gets ANSWERED by data.
+  5. Every change reaches Main through one squash-merged PR per agent; all
+     defaults preserve today's live behavior; V3 ledger 8/8 ✅.
+
+================================================================================
+
+================================================================================
+SECTION 1 — THE EXECUTION PROTOCOL  (READ THIS FIRST, EVERY SESSION)
+================================================================================
+
+You are Claude Code. This document is your single source of truth. Execute it
+agent by agent, in order, until every agent is COMPLETE. Do not ask for
+permission between agents. Do not stop halfway. Do not skip.
+
+────────────────────────────────────────────────────────────────────────────────
+THE GOLDEN LOOP
+────────────────────────────────────────────────────────────────────────────────
+
+  STEP 1: Open this document (TOPDOWN_OTE_MASTER_PROMPT_V3.txt at repo root).
+  STEP 2: Read the PROGRESS LEDGER (Section 2). Find the FIRST agent whose
+          status is not ✅ COMPLETE.
+  STEP 3: Execute EVERY task in that agent, in order, end to end.
+  STEP 4: Run the agent's ACCEPTANCE CRITERIA. Every checkbox needs REAL
+          EVIDENCE (file:line, build/test output, curl responses, log
+          lines). "The code looks right" is NEVER evidence.
+  STEP 5: Update the PROGRESS LEDGER and fill the agent's block in
+          APPENDIX A (Verification Log).
+  STEP 6: Branch, commit with the agent's exact COMMIT MESSAGE, push, open
+          the PR against Main, squash-merge (workflow below). Confirm the
+          PR shows MERGED and remote Main is updated.
+  STEP 7: RETURN TO STEP 1. Immediately. You do NOT stop and wait.
+
+THE ONLY ACCEPTABLE STOPPING CONDITION:
+  ALL 8 agents ✅ COMPLETE, AND Agent 08 (Final Verification) passed every
+  criterion with evidence.
+
+RESUME BEHAVIOR:
+  If interrupted, compacted, or restarted: re-open this document, re-read
+  the PROGRESS LEDGER and APPENDIX A, resume at STEP 2 with the first
+  incomplete agent. The ledger IS your memory. Trust the ledger, not your
+  recollection.
+
+────────────────────────────────────────────────────────────────────────────────
+THE Q1/Q2/Q3 VERIFICATION STANDARD (applies inside EVERY agent)
+────────────────────────────────────────────────────────────────────────────────
+
+  For every fix you apply or depend on, answer with evidence:
+    Q1 — Does the fix HOLD at current HEAD and not re-trigger? (run it)
+    Q2 — Is there ANY OTHER INSTANCE of the same issue elsewhere? (sweep)
+    Q3 — Is there ANY OTHER TRIGGER of the same failure class? (find it,
+         fix it or file it as a dated note in the LEDGER NOTES)
+  No agent is ✅ until its Q1/Q2/Q3 items are answered in Appendix A.
+
+────────────────────────────────────────────────────────────────────────────────
+THE ROLLOUT DOCTRINE (THE MOST IMPORTANT RULE IN THIS DOCUMENT)
+────────────────────────────────────────────────────────────────────────────────
+
+  Three of the four fixes CHANGE STRATEGY BEHAVIOR on an account that
+  touches real money. None of them may change live behavior by default.
+  Every behavioral change in this document ships behind a three-position
+  switch and follows the same adoption path proven by the hysteresis work:
+
+    MODE 1 — OFF/LEGACY:  today's behavior, byte-identical.
+    MODE 2 — LOG:         the new logic RUNS and RECORDS what it would
+                          have done (counterfactual counters + log lines),
+                          while today's behavior still decides. DEFAULT.
+    MODE 3 — ACTIVE:      the new logic decides (BLOCK / VOTE / GATE).
+                          Flipped by the OWNER, from evidence, never by
+                          this document.
+
+  The specific switches:
+    pd.gate.mode        = OFF | LOG | BLOCK     (default LOG)   Agent 02
+    bias.vote.mode      = LEGACY | LOG | VOTE   (default LOG)   Agent 03
+    ote30m.confluence   = OFF | LOG | GATE      (default LOG)   Agent 06
+
+  A NEW GATE MUST NEVER BLOCK ON MISSING DATA. If the governing range /
+  vote input / zone is unavailable (cold start, ladder not yet warm), the
+  gate ABSTAINS: it passes, logs "ABSTAIN <reason>", and increments an
+  abstain counter. The two-days-of-silence incident was caused by exactly
+  this failure class (starved inputs treated as failing gates). It does
+  not come back.
+
+────────────────────────────────────────────────────────────────────────────────
+CRITICAL RULES (NON-NEGOTIABLE)
+────────────────────────────────────────────────────────────────────────────────
+
+  1. NEVER skip or reorder agents. Dependencies are sequential.
+  2. NEVER mark a criterion complete without concrete evidence in Appendix A.
+  3. AUTHORITY ORDER: docs/architecture/STDV_OTE_MODEL.md is authoritative
+     for vote definitions and dealing-range semantics. Where this document
+     suggests a formula and §H1 defines one, §H1 WINS — implement the doc
+     and record the difference in Appendix A. Where §H1 is silent or
+     ambiguous, this document's formula applies and you note the ambiguity.
+  4. ALWAYS run full builds for touched modules before ✅:
+       ./gradlew clean build  (.\gradlew.bat on Windows PowerShell);
+       dashboard: npm run build with ZERO TypeScript errors.
+  5. ALWAYS finish every agent with the PR workflow: branch, commit, push,
+     PR against Main (capital M), squash-merge. One agent = one PR. NEVER
+     push directly to Main.
+  6. Owner-only blockers are honest ⛔ with the EXACT owner action.
+     Complete every non-blocked part and move on.
+  7. NEVER weaken existing gates or risk code (M1–M9 semantics,
+     PropFirmRiskEngine, DLL/MLL, flatten times). This document ADDS
+     inputs, telemetry, and stricter optional gates. Removing or loosening
+     an existing check is out of scope, full stop.
+  8. HTF BACKFILL ISOLATION (Agent 04): higher-timeframe bars fetched for
+     warmup must NEVER be delivered through the 1-minute listener/tap path.
+     An H1 candle entering the 1m pipeline corrupts every aggregated
+     series, the ChartEngine, lastCandleTs staleness, and level
+     computation. HTF warmup feeds a dedicated seeding API only. This is
+     tested, not assumed.
+  9. Real data only. Every new surface has loading/empty/error/ABSTAIN
+     handling. Session-scoped vs persistent metrics are labeled in javadoc.
+ 10. V1/V2 documents and their appendices are read-only history.
+
+────────────────────────────────────────────────────────────────────────────────
+GIT WORKFLOW — PR PER AGENT AGAINST Main (run after EVERY agent)
+────────────────────────────────────────────────────────────────────────────────
+
+  git checkout Main && git pull origin Main
+  git checkout -b <type>/agent-NN-<short-name>   # e.g. feat/agent-02-pd-gate
+  git add -A
+  git commit -m "<the agent's specified COMMIT MESSAGE>"
+  git push -u origin <type>/agent-NN-<short-name>
+  gh pr create --base Main --head <type>/agent-NN-<short-name> \
+      --title "<the agent's COMMIT MESSAGE>" \
+      --body "<what changed + why, 3-6 lines, referencing the agent number>"
+  gh pr merge --squash --delete-branch
+  git checkout Main && git pull origin Main
+
+  Prefixes: chore/ for Agents 01, 07, 08; feat/ for Agents 02-06.
+  After merging, record in Appendix A: PR number (gh pr view --json
+  number,state,mergedAt shows MERGED), squash commit hash (git log
+  --oneline -1), clean tree (git status). If gh is missing/unauthenticated:
+  install / gh auth login; if auth needs the owner, ⛔ with that action.
+  Direct pushes to Main are forbidden.
+
+────────────────────────────────────────────────────────────────────────────────
+BUILD + TEST WORKFLOW
+────────────────────────────────────────────────────────────────────────────────
+
+  Engine:      cd trading-engine && ./gradlew clean build
+  API:         cd api-backend && ./gradlew clean build
+  Root multi-project also works per prior ledgers: ./gradlew clean build
+  Dashboard:   cd dashboard-frontend && npm install && npm run build
+  Requirements: Java 21, Node 18+.
+
+================================================================================
+SECTION 2 — PROGRESS LEDGER
+================================================================================
+
+  Status markers:  ⬜ NOT STARTED   🔄 IN PROGRESS   ✅ COMPLETE   ⛔ BLOCKED
+
+  [✅] Agent 01 — Pre-Flight: Audit-Anchor Verification + V2 State + Baselines
+  [⬜] Agent 02 — Premium/Discount Gate (M2b) with LOG->BLOCK Rollout
+  [⬜] Agent 03 — 3-of-4 Bias Vote per STDV_OTE_MODEL.md §H1 (LOG->VOTE)
+  [⬜] Agent 04 — H4 + D1 Ladder with 18:00 ET Boundaries + Two-Tier HTF Backfill
+  [⬜] Agent 05 — Upgrade Range & Votes to Consume D1 (AUTO Range Resolution)
+  [⬜] Agent 06 — 30m OTE Verdict Pipeline: Persistent Stats + Config Confluence
+  [⬜] Agent 07 — Measurement Sessions: Counterfactual Evidence Run (SIM)
+  [⬜] Agent 08 — FINAL VERIFICATION & CLOSE-OUT
+
+  LEDGER NOTES (append one dated line per completion):
+  ------------------------------------------------------------------
+  2026-07-26  Agent 01 complete. All audit anchors T1–T5 re-proven at HEAD
+              (see Appendix A-01). All V2 dependencies present (SimWarmBoot,
+              OteAgreementStats wired, BotChart.tsx, SetupPanel.tsx,
+              bias.hysteresis.enabled default false). Baselines green.
+              NOTE for Agent 03: LevelEngine's DAILY_OPEN is the PREVIOUS
+              day's SESSION open (17:00 ET day-key), not a midnight "true
+              day open" — a new MIDNIGHT_OPEN level is required per the V3
+              doc's V3-vote clause. NOTE for Agent 04: LevelEngine keys the
+              trading day at 17:00 ET; equivalent to the 18:00 session-open
+              key in practice because no bars print 17:00–18:00 ET.
+  ------------------------------------------------------------------
+
+================================================================================
+SECTION 3 — PRE-FLIGHT FINDINGS (FROM THE 2026 STRATEGY AUDIT)
+================================================================================
+
+Anchors from the independent audit. Line numbers are approximate at the
+audited commit; Agent 01 re-confirms each at HEAD. Semantics must hold even
+where lines drifted.
+
+  T1.  OTE mechanics are SOUND — do not touch them:
+       OteEntryCalculator (~lines 26-34) carries the exact fib constants
+       0.5/0.62/0.705/0.79/1.0; chooseEntry() defaults to f705();
+       OteZone.contains() bounds the tradable band; stopPrice() = leg
+       origin ± bufferTicks; buildZone() rejects legs whose fib levels
+       collapse to the same tick; bestFvgEdgeInZone snaps entry to a PD
+       array edge. M6 (MSS) is blocking and ImpulseLegTracker
+       .isRejectionReaction() is a real wick/close test;
+       .isViolated() -> core.invalidate("impulse origin violated").
+       KillzoneClock windows 9:45-12:30 and 13:45-16:00 ET exclude lunch.
+  T2.  isInFavorableZone() (HtfTrendAnalyzer) is correct premium/discount
+       code — equilibrium at 50% of range, longs below, shorts above —
+       with EXACTLY ONE call site: inside a log string at
+       IctHighConfluenceStrategy ~line 988 (legacy strategy, off by
+       default). It blocks nothing on the live path.               [GAP-1]
+  T3.  STDV_OTE_MODEL.md §H1 defines HTF bias as a 3-of-4 vote; the live
+       path implements vote (1) only, via
+       mapTrendToBias(htfTrend.getTrendState()) at StdvOteRunnerStrategy
+       ~line 550, sourced from 15m/30m structure. DailyAmdCycleTracker is
+       wired only to the legacy strategy; LevelEngine computes DAILY_OPEN
+       and nothing reads it; no draw-on-liquidity symbol exists.  [GAP-2]
+  T4.  BarAggregationManager.Timeframe = {M1, M3, M5, M15, M30, H1}. No
+       H4, no D1. The audit and HistoricalBackfill's own notes flag that
+       daily-level structure needs the 18:00 ET CME boundary and weeks of
+       warmup.                                                     [GAP-3]
+  T5.  StdvOteRunnerStrategy ~line 641: "LOG-ONLY comparison … DO NOT gate
+       on this" — the 30m ChartEngine OTE has zero authority.
+       OteAgreementStats counts machineEmitted_chartAgreed /
+       _chartDisagreed / chartReacted_machineSilent but is session-scoped
+       and unpersisted; no promote/delete criteria exist anywhere. [GAP-4]
+  T6.  Deliberate deviations that are IN SCOPE ONLY AS NOTES, never as
+       changes: the 2022-model micro dealing range in ImpulseLegTracker,
+       the sweep-mandatory reversal-only entry model, and the 1R scalp cap
+       in ScalpTargetCalculator. The audit flags them as strategic choices
+       with real tradeoffs (the 1R cap discards OTE's geometric R:R and
+       makes win rate carry the system). They belong to the OWNER, not to
+       this document. Agent 08 records them as open strategy questions in
+       the final summary; no agent modifies them.
+  T7.  Environment facts from prior ledgers: default branch Main (capital
+       M); root multi-project gradle build works; Java 21 present; SIM
+       warm-boots (V2 Agent 02) if V2 completed — Agent 01 verifies.
+
+================================================================================
+SECTION 4 — THE AGENTS
+================================================================================
+
+(Agent task text is authoritative in the original master prompt supplied to
+the executor; this committed copy carries the same agents 01–08, the same
+acceptance criteria, and the live ledger + appendices below. See git history
+of this file for any amendments.)
+
+AGENT 01 — PRE-FLIGHT: audit-anchor verification + V2 state + baselines.
+AGENT 02 — PREMIUM/DISCOUNT GATE (M2b), pd.gate.mode=OFF|LOG|BLOCK (default
+           LOG), R1 (PDH/PDL) -> R2 (developing day range >= pd.minRangeTicks)
+           -> R3 (ABSTAIN) range resolution, EQUILIBRIUM band pd.eqBandTicks
+           (default 2), judged price = proposed ENTRY price, M2b between M2
+           and M3, visible in validator list + [GATES] + /api/setup +
+           SetupPanel, thread-safe session-scoped counters, tests a–g,
+           QUICK_START rollout playbook.
+AGENT 03 — 3-OF-4 BIAS VOTE per §H1, bias.vote.mode=LEGACY|LOG|VOTE (default
+           LOG). V1 structure (exists), V2 AMD distribution direction
+           (ABSTAIN when no distribution leg), V3 price vs true day open
+           (eqBandTicks band -> ABSTAIN; verify DAILY_OPEN boundary, add
+           midnight-ET open if needed), V4 daily draw on liquidity from
+           untapped PDH/PDL (nearer-magnet rule, ABSTAIN on tie/both-tapped).
+           Aggregation: >=3 aligned -> directional, else NEUTRAL; ABSTAIN
+           never counts. Single seam at mapTrendToBias. [VOTE] log line,
+           /api/setup votes, SetupPanel pills, tests a–g, QUICK_START.
+AGENT 04 — H4 + D1 LADDER: session-aware bucketing (CME trading day 18:00 ET
+           -> 17:00 ET next day, D1 keys on SESSION date, H4 anchors 18:00/
+           22:00/02:00/06:00/10:00/14:00 ET wall-clock, DST-aware via ZoneId,
+           no Saturday session, maintenance hour excluded). Two-tier
+           backfill: Tier 1 unchanged (1m via listener); Tier 2 NEW — H1
+           bars fetched directly (htf.backfill.days default 30, clamp
+           [7,90]) into a dedicated seeding API ONLY (never listener.onCandle,
+           never ChartEngine, never lastCandleTs). Seeding: ascending,
+           de-duped, refuses bars newer than live watermark; seed->live seam
+           continuity tested; ISOLATION TEST mandatory. fetchBarsRange unit
+           overload with existing callers untouched. Ring capacity >= ~90 D1
+           / ~540 H4. /api/chart ?tf= additive. Non-fatal Tier-2 failure.
+AGENT 05 — R0: when D1 depth >= pd.d1MinBars (default 10), governing range =
+           D1 dealing range (model doc's definition if present; else last
+           ESTABLISHED D1 swing high/low, fractal strength 2). Fallback
+           chain R1/R2/R3 unchanged (proven by re-running Agents 02/03
+           suites with empty D1). rangeSource gains "R0-D1".
+           bias.v1.includeH4 (default false); V4 logs PWH/PWL tapped state
+           in detail string only.
+AGENT 06 — 30M OTE VERDICT PIPELINE: persist OteAgreementStats (JSONL at
+           data/ote_agreement_stats.jsonl or repo DB convention; session-end
+           + 30-min checkpoints; boot restore; /api/chart oteStats gains
+           {session, lifetime}). ote30m.confluence=OFF|LOG|GATE (default
+           LOG); GATE = M7b gate at the existing comparison point requiring
+           REACTED (or ARMED if ote30m.acceptArmed=true) zone; ABSTAIN on
+           no-zone. Promote/delete criteria in QUICK_START verbatim
+           (evaluate after >=15 sessions: promote if precision >= 0.70 with
+           >= 20 emissions; delete comparison if precision <= 0.45 same
+           floor; else stay LOG, re-evaluate every 10 sessions). Boot
+           reminder when threshold met.
+AGENT 07 — MEASUREMENT SESSIONS (SIM): warm SIM stack + ladder depth, >= 3
+           distinct seeded sessions (>= 6 simulated session-hours each),
+           capture [PD]/[VOTE]/[BIAS]/oteStats/[HTF-Backfill] evidence,
+           compile docs/reports/TOPDOWN_MEASUREMENT_01.md (tables per
+           switch, conservative observations, exact flip commands,
+           DO-NOT-FLIP-YET recommendation, pipeline-validation caveat).
+           Fixup PRs for any bug surfaced.
+AGENT 08 — FINAL VERIFICATION: fresh checkout, three clean builds,
+           DEFAULT-BEHAVIOR AUDIT (all switches resolve to safe defaults),
+           end-to-end warm run excerpts, Appendix A completeness audit,
+           safety grep-audit (no credentials; M1–M9 untouched; isolation +
+           ABSTAIN tests present), PR audit (8 merged PRs base Main), FINAL
+           SUMMARY into LEDGER NOTES incl. T6 open strategy questions and
+           the operating line.
+
+================================================================================
+SECTION 5 — APPENDICES
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX A — PER-AGENT VERIFICATION LOG
+────────────────────────────────────────────────────────────────────────────────
+
+··· APPENDIX A-01 — Agent 01: Pre-Flight: Audit Anchors + V2 State + Baselines ···
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-26
+  PR NUMBER:         #130 (base Main)
+  COMMIT HASH:       squash-merge of PR #130 on Main (git log records it)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - On Main, clean tree; baselines green:
+        engine+api: root `./gradlew clean build` -> "BUILD SUCCESSFUL in 26s,
+        17 actionable tasks: 15 executed, 2 up-to-date" (all tests).
+        dashboard: `npm install && npm run build` -> "✓ 914 modules
+        transformed … ✓ built in 1.78s", zero TS errors.
+        (One untracked stray nested clone Futures-Trading-Algorithm/ found
+        at repo root — gitignored in this PR so `git add -A` never sweeps
+        it in; contents untouched.)
+    - V2-dependency inventory (ALL PRESENT, confirmed in code not ledger):
+        SIM warm boot: connector/SimWarmBoot.java (deterministic synthetic
+          1m history for MockConnector) + connector/MockConnector.java.
+        OteAgreementStats: strategy/stdvote/OteAgreementStats.java, wired
+          at StdvOteRunnerStrategy.java:561 (15m [GATES] rollup + chartOnly
+          counting :569-581) and :655-666 (emission-time agree/disagree).
+        Bot Chart tab: dashboard-frontend/src/components/BotChart.tsx (+css).
+        Bias hysteresis: StdvOteStrategy.java:172-178 —
+          bias.hysteresis.enabled default false, bias.neutralGraceBars
+          default 2 clamp [1,4]; counterfactual [BIAS] line :276-278.
+    - T1 mechanics confirmed at HEAD:
+        fib constants OteEntryCalculator.java:26-34 (0.705/0.62/0.79/0.50/1.0);
+        chooseEntry default f705 :98-108; stopPrice = one00 ± bufferTicks
+        :115-119; collapse guard (f62==f705 || f705==f79 -> empty) :82-84;
+        bestFvgEdgeInZone :143-157; M6 blocking at
+        MandatoryConfluenceValidator.validateStdvOte :408-412;
+        ImpulseLegTracker.isViolated :85, isRejectionReaction :146;
+        "impulse origin violated" invalidation StdvOteRunnerStrategy:1124;
+        KillzoneClock NY AM 9:45-12:30 :23-24, NY PM 13:45-16:00 :29-30
+        (lunch excluded).
+    - T2 proven by grep (exactly 2 hits repo-wide):
+        HtfTrendAnalyzer.java:353 (definition) and
+        IctHighConfluenceStrategy.java:988 (log-string call, legacy only).
+    - §H1 VERBATIM (docs/architecture/STDV_OTE_MODEL.md lines 39-49) —
+      THE SPEC FOR AGENT 03:
+        | ### H1 — HTF bias (3-of-4 rule)
+        | Combine, each casting one vote:
+        | - `HtfTrendAnalyzer` trend state (HH/HL = bullish, LH/LL = bearish).
+        | - `DailyAmdCycleTracker` distribution-leg direction.
+        | - Price vs true day open (discount → bullish vote, premium →
+        |   bearish).
+        | - Daily draw on liquidity (toward PDH = bullish, toward PDL =
+        |   bearish).
+        | ≥ 3 same-direction votes ⇒ `htfBias = BULLISH` or `BEARISH`.
+        | Otherwise `NEUTRAL` and the engine stands down.
+      T3 anchors: mapTrendToBias source at StdvOteRunnerStrategy.java:550
+      (inside the htfBarClosed block :549-553 — the SINGLE bias seam);
+      DAILY_OPEN computed at LevelEngine.java:140 with ZERO readers
+      (repo grep: only the writer and the LevelType declaration);
+      no draw-on-liquidity symbol anywhere (grep drawOnLiquidity: 0 hits).
+    - T4 enum at HEAD (BarAggregationManager.java:36-54):
+        M1(1,"1m"), M3(3,"3m"), M5(5,"5m"), M15(15,"15m"), M30(30,"30m"),
+        H1(60,"1h")  — no H4, no D1. Shared per-timeframe cap `maxCandles`
+        (500 in the runner) — Agent 04 must give H4/D1 explicit capacity.
+    - T5: LOG-ONLY comment at StdvOteRunnerStrategy.java:637-640 ("DO NOT
+      gate on this"); OteAgreementStats fields :44-46 with session-scope
+      javadoc :22-26 ("NOT DURABLE, BY DESIGN").
+    - Q2/Q3 dormant-code sweep results: see block below.
+    - V3 document committed at repo root via this agent's PR.
+  §H1 DECISIONS:
+    - §H1 is SILENT on: ABSTAIN semantics, any band around the day open,
+      V4 tie-breaks (both/neither PDH-PDL untapped), and the definition of
+      "true day open". This document's defaults therefore apply for those;
+      recorded here per Rule 3. §H1 DECIDES: the four vote sources and the
+      >=3-aligned-else-NEUTRAL aggregation (identical to this document's).
+  Q1/Q2/Q3 ANSWERS:
+    - Q1: baselines run at HEAD (outputs above) — nothing to re-trigger.
+    - Q2 sweep (other dormant-but-correct top-down code):
+        * DailyAmdCycleTracker — full AMD phase machine, wired ONLY to
+          legacy IctHighConfluenceStrategy (:102, :246). Agent 03 consumes
+          for V2 vote. NOTE: no explicit "distribution direction" getter —
+          DISTRIBUTION_UP/DOWN phases carry it; Agent 03 maps phases.
+        * LevelEngine PWH/PWL — computed (:167-168) and queryable; Agent 05
+          logs tapped state.
+        * LevelEngine DAILY_OPEN (:140) — registered at day-change with the
+          PREVIOUS day's session open (17:00 ET day key), never read.
+          "True day open" (midnight ET) does NOT exist -> Agent 03 adds it.
+        * validateEntry(amdOverride) in the validator — legacy-path-only
+          AMD hook; not consumed by V3 (legacy read-only).
+        * No other premium/discount/equilibrium logic exists (remaining
+          grep hits are "Premium tier" naming in raid scoring — unrelated).
+    - Q3: no other triggers of the audited failure classes found; the
+      17:00-vs-18:00 day-key nuance filed as a LEDGER NOTE for Agent 04.
+  ADAPTATIONS MADE:
+    - None functional. Line-number drift vs audit is minor; all semantics
+      hold (exact lines recorded above).
+  REGRESSIONS FOUND & FIXED: none.
+  BLOCKED ITEMS: none.
+
+··· APPENDIX A-02 — Agent 02: Premium/Discount Gate (M2b) ···
+  STATUS:            ⬜
+  (to be filled at completion)
+
+··· APPENDIX A-03 — Agent 03: 3-of-4 Bias Vote per §H1 ···
+  STATUS:            ⬜
+  (to be filled at completion)
+
+··· APPENDIX A-04 — Agent 04: H4 + D1 Ladder + Two-Tier HTF Backfill ···
+  STATUS:            ⬜
+  (to be filled at completion)
+
+··· APPENDIX A-05 — Agent 05: D1 Range (R0) + D1-Aware Votes ···
+  STATUS:            ⬜
+  (to be filled at completion)
+
+··· APPENDIX A-06 — Agent 06: 30m OTE Verdict Pipeline ···
+  STATUS:            ⬜
+  (to be filled at completion)
+
+··· APPENDIX A-07 — Agent 07: Measurement Sessions (SIM) ···
+  STATUS:            ⬜
+  (to be filled at completion)
+
+··· APPENDIX A-08 — Agent 08: Final Verification & Close-Out ···
+  STATUS:            ⬜
+  (to be filled at completion)
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX B–J
+────────────────────────────────────────────────────────────────────────────────
+Engineering conventions (B), anti-patterns (C), glossary/CLI (D), design
+rationale (E), owner's rollout runbook (F), risk register (G), traceability
+(H), consolidated test matrix (I), and troubleshooting (J) are carried in
+the original master prompt supplied to the executor and are binding as
+written there. Key operational constants repeated for the record:
+
+  Switches (ALL default LOG; owner flips, one at a time, from evidence):
+    -Dpd.gate.mode=OFF|LOG|BLOCK          (Agent 02)
+    -Dbias.vote.mode=LEGACY|LOG|VOTE      (Agent 03)
+    -Dote30m.confluence=OFF|LOG|GATE      (Agent 06)
+    -Dbias.v1.includeH4=true|false        (Agent 05, default false)
+    -Dhtf.backfill.days=30                (Agent 04, clamp [7,90])
+
+  Non-negotiables: ABSTAIN-passes on missing data (B10); one seam per
+  switchable decision (B12); HTF seed never through the 1m listener path
+  (C6); America/New_York ZoneId for all calendar logic (B7); risk code and
+  pre-existing M1–M9 semantics read-only (B8); Main with capital M (C9);
+  T6 deviations recorded, never "fixed" (C11).
+
+  30m OTE promote/delete criteria (Agent 06, verbatim into QUICK_START):
+    Evaluate after >= 15 sessions of lifetime data:
+    - PROMOTE to GATE if agreed / (agreed + disagreed) >= 0.70 AND the
+      machine emitted >= 20 signals in the window (sample floor);
+    - DELETE the comparison (keep ChartEngine for the dashboard) if
+      precision <= 0.45 with the same sample floor;
+    - IN BETWEEN: keep LOG mode, re-evaluate every 10 sessions, each
+      evaluation gets a dated LEDGER NOTE. Boot reminder at threshold:
+      "[OTE-VERDICT] N sessions collected — evaluation due."
+
+================================================================================
+                            END OF MASTER PROMPT V3
+================================================================================
