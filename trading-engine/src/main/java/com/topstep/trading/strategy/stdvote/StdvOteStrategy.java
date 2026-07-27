@@ -111,6 +111,26 @@ public final class StdvOteStrategy implements TradingStrategy {
      */
     private Double nearestOpposingLiquidity;
 
+    /**
+     * Candidate PD arrays for the M7 in-zone check (2026-07-27 funnel fix):
+     * STDV_OTE_MODEL.md L4 requires "a PD array (FVG / OB / IFVG / breaker)
+     * sits INSIDE the zone" — any qualifying array, not specifically the
+     * displacement's own FVG. The implementation only ever tested
+     * {@code setup.fvg}, and because the OTE band moves as the post-MSS
+     * terminus extends, that single fixed FVG routinely falls out of the
+     * band (30 "M7: no PD array" hits in one live hour). The runner feeds
+     * the detector's current unfilled-FVG list here each candle;
+     * {@link #recordOteImpulse} falls back to the NEWEST same-direction
+     * candidate whose edge lies inside the zone. Null/empty = the
+     * historical single-FVG behavior, byte-identical.
+     */
+    private List<FairValueGap> candidatePdArrays;
+
+    /** Runner feed for the M7 PD-array fallback scan (may be null). */
+    void setCandidatePdArrays(List<FairValueGap> unfilledFvgs) {
+        this.candidatePdArrays = unfilledFvgs;
+    }
+
     public StdvOteStrategy(String symbol,
                            StdvProjectionEngine projectionEngine,
                            OteEntryCalculator oteCalculator,
@@ -390,15 +410,29 @@ public final class StdvOteStrategy implements TradingStrategy {
         if (zone.isEmpty()) return;
         setup.ote = zone.get();
         OptionalDouble edge = oteCalculator.bestFvgEdgeInZone(setup.ote, setup.fvg);
+        String pdKind = "FVG";
+        if (edge.isEmpty() && candidatePdArrays != null) {
+            // Spec-correct PD-array search (L4): any same-direction unfilled
+            // FVG whose edge sits inside the band qualifies, newest first.
+            for (int i = candidatePdArrays.size() - 1; i >= 0; i--) {
+                FairValueGap candidate = candidatePdArrays.get(i);
+                if (candidate == null || candidate.isBullish() != bullish) continue;
+                OptionalDouble alt = oteCalculator.bestFvgEdgeInZone(setup.ote, candidate);
+                if (alt.isPresent()) {
+                    edge = alt;
+                    setup.fvg = candidate;
+                    pdKind = "FVG-alt";
+                    break;
+                }
+            }
+        }
         if (edge.isEmpty()) {
-            // Allow PD array to be an OB or IFVG via direct injection elsewhere.
-            // For SA4 we require the FVG to overlap.
             setup.lastGateFailed = "M7: no PD array in OTE band";
             gateDiagnosticSelfWritten = true;
             return;
         }
         setup.pdArrayInOte = edge.getAsDouble();
-        setup.pdArrayKind = "FVG";
+        setup.pdArrayKind = pdKind;
         if (reactionConfirmed) {
             setup.state = SetupState.OTE_ARMED;
         }

@@ -363,7 +363,17 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.structureDetector = new IctStructureDetector(50);
         this.liquidityDetector = new LiquidityDetector(30);
         this.fvgDetector = new FvgDetector(20);
-        this.displacementDetector = new DisplacementDetector(20, 1.5, 0.65, symbol);
+        // Displacement thresholds — configurable for measured tuning
+        // (2026-07-27 funnel work); DEFAULTS UNCHANGED from the historical
+        // constants. Range >= atrMult x ATR(20) with body >= bodyPct.
+        double dispAtrMult = doubleProperty("stdvote.displacement.atrMult", 1.5);
+        double dispBodyPct = doubleProperty("stdvote.displacement.bodyPct", 0.65);
+        this.displacementDetector = new DisplacementDetector(20, dispAtrMult, dispBodyPct, symbol);
+        if (dispAtrMult != 1.5 || dispBodyPct != 0.65) {
+            System.out.println("[StdvOteRunnerStrategy] " + symbol
+                    + " displacement thresholds OVERRIDDEN: atrMult=" + dispAtrMult
+                    + " bodyPct=" + dispBodyPct + " (defaults 1.5/0.65)");
+        }
         this.mssDetector = new MarketStructureShiftDetector(50, 2);
         System.out.println("[StdvOteRunnerStrategy] " + symbol
                 + " entry-anatomy detectors (displacement/FVG/MSS) on "
@@ -1224,6 +1234,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
 
     private void tryArmOte(Candle candle) {
         if (!impulseTracker.isArmed()) return;
+        // M7 PD-array candidates (2026-07-27 funnel fix): the spec accepts
+        // ANY PD array inside the band, so the core may fall back from the
+        // displacement's own FVG to the newest in-zone unfilled FVG.
+        core.setCandidatePdArrays(fvgDetector.getUnfilledFvgs());
         if (impulseTracker.isViolated()) {
             // Price took out the impulse origin (the OTE 1.0 invalidation)
             // before any entry — the leg is dead.
@@ -1380,6 +1394,19 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         if (s < spec.minMicros()) s = spec.minMicros();
         if (s > spec.maxMicros()) s = spec.maxMicros();
         return s;
+    }
+
+    /** Read a double system property with a safe fallback (stdvOte.* pattern). */
+    private static double doubleProperty(String name, double defaultValue) {
+        String raw = System.getProperty(name);
+        if (raw == null) return defaultValue;
+        try {
+            return Double.parseDouble(raw.trim());
+        } catch (NumberFormatException e) {
+            System.out.println("[StdvOteRunnerStrategy] WARN: invalid " + name
+                    + "='" + raw + "', using default " + defaultValue);
+            return defaultValue;
+        }
     }
 
     /** Read an int system property with a safe fallback (stdvOte.* pattern). */

@@ -53,7 +53,8 @@ tasks.named('test') {
     ['funnel.data.dir', 'funnel.symbol', 'scalpMode.enabled', 'scalp.minRaidScore',
      'bias.hysteresis.enabled', 'bias.neutralGraceBars',
      'stdvote.detectorTimeframe', 'stdvOte.setupExpiryBars',
-     'stdvOte.oteWindowBars', 'stdvOte.mssFreshBars'].each { p ->
+     'stdvOte.oteWindowBars', 'stdvOte.mssFreshBars',
+     'stdvote.displacement.atrMult', 'stdvote.displacement.bodyPct'].each { p ->
         if (System.getProperty(p) != null) {
             systemProperty p, System.getProperty(p)
         }

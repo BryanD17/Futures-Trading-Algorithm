@@ -68,6 +68,21 @@ class FunnelReplayHarness {
         SetupState prev = SetupState.IDLE;
         int deepest = 0;
 
+        // Simulated trade outcomes: limit fill at entry, then first-touch
+        // stop vs target (same-candle both-touch counted as a LOSS —
+        // pessimistic). Target reconstructed from the scalp geometry:
+        // entry ± rr * risk in the trade direction.
+        class SimTrade {
+            final boolean isLong; final double entry; final double stop; final double target;
+            final Instant at; boolean filled; Integer resultR; // +1 win, -1 loss
+            SimTrade(boolean isLong, double entry, double stop, double rr, Instant at) {
+                this.isLong = isLong; this.entry = entry; this.stop = stop; this.at = at;
+                double risk = Math.abs(entry - stop);
+                this.target = isLong ? entry + rr * risk : entry - rr * risk;
+            }
+        }
+        List<SimTrade> trades = new ArrayList<>();
+
         // Merge-replay by timestamp, MES (SMT) before MNQ per minute.
         int mi = 0;
         for (Candle c : mnq) {
@@ -76,6 +91,19 @@ class FunnelReplayHarness {
                 runner.onCandle(mes.get(mi++), null);
             }
             runner.onCandle(c, null);
+
+            // Advance open simulated trades on this candle.
+            for (SimTrade t : trades) {
+                if (t.resultR != null) continue;
+                if (!t.filled) {
+                    t.filled = t.isLong ? c.getLow() <= t.entry : c.getHigh() >= t.entry;
+                    if (!t.filled) continue;
+                }
+                boolean stopHit = t.isLong ? c.getLow() <= t.stop : c.getHigh() >= t.stop;
+                boolean targetHit = t.isLong ? c.getHigh() >= t.target : c.getLow() <= t.target;
+                if (stopHit) t.resultR = -1;            // pessimistic on both-touch
+                else if (targetHit) t.resultR = 1;
+            }
 
             SetupState s = ctx.state;
             if (s != prev) {
@@ -115,6 +143,8 @@ class FunnelReplayHarness {
                             + " entry=" + ctx.entry + " stop=" + ctx.stop
                             + " rr=" + String.format("%.2f", ctx.rr)
                             + " size=" + ctx.sizeFilled + " tier=" + ctx.tier);
+                    trades.add(new SimTrade(ctx.legBullish, ctx.entry, ctx.stop,
+                            ctx.rr, c.getTimestamp()));
                     // Simulate the position lifecycle the live stack provides:
                     // a close event lets the scalp re-arm engine hunt the
                     // next setup instead of parking in IN_TRADE forever.
@@ -169,6 +199,17 @@ class FunnelReplayHarness {
         System.out.println("[REPLAY] setup episodes started: " + episodes);
         System.out.println("[REPLAY] deepest-state-at-death histogram: " + deepestByEpisode);
         System.out.println("[REPLAY] invalidation reasons: " + reasons);
+        int wins = 0;
+        int losses = 0;
+        int unfilled = 0;
+        for (SimTrade t : trades) {
+            if (t.resultR == null) { unfilled++; continue; }
+            if (t.resultR > 0) wins++; else losses++;
+        }
+        System.out.println("[REPLAY] TRADES=" + trades.size()
+                + " wins=" + wins + " losses=" + losses
+                + " unfilled/open=" + unfilled
+                + " (1R scalp geometry, pessimistic both-touch)");
         System.out.println("[REPLAY] EMISSIONS: " + emissions.size());
         for (StrategySignalEvent e : emissions) {
             System.out.println("[REPLAY]   -> " + e.getSignalType() + " " + e.getSymbol()
