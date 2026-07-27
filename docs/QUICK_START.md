@@ -362,6 +362,38 @@ invariant, tested:** entries NEVER fire while the live bias evaluation is
 NEUTRAL — grace preserves progress, not entry permission. If you ever
 see an entry during NEUTRAL, kill the engine and file it.
 
+### M7b — 30M OTE VERDICT PIPELINE (V3 — config-gated, DEFAULT LOG)
+
+The 30m ChartEngine OTE comparison is no longer a permanent log line: its
+agreement stats PERSIST across restarts (`data/ote_agreement_stats.jsonl`,
+checkpointed every 30 minutes + at session end; `/api/chart` `oteStats`
+now carries `{session, lifetime}`), and a confluence gate is one flag away.
+
+Switch: `-Dote30m.confluence=OFF|LOG|GATE` (DEFAULT **LOG**).
+
+- `OFF` — the check never runs (byte-identical).
+- `LOG` — the V2 comparison formalized through counters; always passes.
+- `GATE` — M7b requires the chart's active zone for the signal direction
+  to be REACTED (or ARMED with `-Dote30m.acceptArmed=true`, default
+  false). NO zone tracked = ABSTAIN = pass + count (a thin chart must
+  never silently disable trading).
+
+PROMOTE / DELETE CRITERIA (verbatim — these are the decision rules):
+
+> Evaluate after >= 15 sessions of lifetime data:
+> - PROMOTE to GATE if agreement precision
+>   agreed / (agreed + disagreed) >= 0.70 AND the machine emitted
+>   >= 20 signals in the window (sample floor);
+> - DELETE the comparison (keep ChartEngine for the dashboard) if
+>   precision <= 0.45 with the same sample floor — at that point the
+>   30m zone is anti-signal or noise for this machine;
+> - IN BETWEEN: keep LOG mode, re-evaluate every 10 sessions, and
+>   record each evaluation as a dated LEDGER NOTE.
+
+The stats loader logs a reminder at boot once the threshold is met:
+`[OTE-VERDICT] 17 sessions collected — evaluation due.` — that line is
+your cue to run the numbers above.
+
 ### OTE AGREEMENT COUNTERS — the adoption playbook (V2)
 
 `/api/chart/{symbol}` now carries an `oteStats` object and the `[GATES]`

@@ -275,7 +275,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** Install the observability-only ChartEngine reference (may be null). */
     public void setChartEngine(com.topstep.trading.chart.ChartEngine engine) {
         this.chartEngine = engine;
+        // M7b reads the SAME chart the log comparison uses (V3 Agent 06).
+        ote30mGate.setChartEngine(engine);
     }
+
+    /** M7b 30m-OTE confluence gate (V3 Agent 06); never null after ctor. */
+    private final Ote30mConfluenceGate ote30mGate;
 
     /** Manipulation-leg snap tolerance in ticks (projection-level snapping). */
     private static final int MANIP_SNAP_TOL_TICKS = 3;
@@ -385,6 +390,11 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // LOG — the vote runs and counts agreement, legacy still decides.
         this.biasVoteEngine = BiasVoteEngine.install(symbol, spec.tickSize());
         this.amdTracker = new com.topstep.trading.strategy.DailyAmdCycleTracker(symbol);
+        // M7b 30m-OTE confluence gate (V3 Agent 06): default LOG — the
+        // V2 log-only comparison, formalized through counters; GATE is one
+        // flag away once the promote criteria are met.
+        this.ote30mGate = Ote30mConfluenceGate.install(symbol);
+        validator.setOte30mConfluenceGate(ote30mGate);
         this.core = new StdvOteStrategy(symbol, projectionEngine, oteCalculator, validator,
                 eventBus, /* expiryBars */ 40L);
 
@@ -644,7 +654,15 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                     + " chart30mOte=" + oteState
                     + " " + pdEvaluator.gatesToken(candle.getClose())
                     + " " + biasVoteEngine.gatesToken()
+                    + " " + ote30mGate.gatesToken()
                     + " " + stats.rollup());
+        }
+
+        // 6c. Crash-safe agreement-stats checkpoint every completed 30m bar
+        // (V3 Agent 06) — the loader collapses same-session lines last-wins,
+        // so re-checkpointing can never double count.
+        if (completedHtf.containsKey(Timeframe.M30)) {
+            OteAgreementStatsStore.checkpoint(symbol, candle.getTimestamp());
         }
 
         // 7. SMT state for the context (informational, doesn't gate).
@@ -898,6 +916,11 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
 
     @Override
     public void onSessionEnd() {
+        // Persist the session's agreement counters (V3 Agent 06). Candle
+        // time, not wall clock; a session with no candles has nothing new.
+        if (lastCandleInstant != null) {
+            OteAgreementStatsStore.checkpoint(symbol, lastCandleInstant);
+        }
         // Core-level invalidation of an in-flight setup must still fire.
         core.onSessionEnd();
         // Session-scoped wiring state must not leak into the next session.

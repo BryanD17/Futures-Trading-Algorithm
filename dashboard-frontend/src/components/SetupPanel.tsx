@@ -233,9 +233,10 @@ function ConfluenceChecklist({ snapshot }: { snapshot: SetupSnapshotDto }) {
   const passed: Record<string, boolean> = {
     M1: snapshot.symbol === 'MNQ' || snapshot.symbol === 'MES' || snapshot.symbol === 'MGC',
     M2: snapshot.htfBias !== 'NEUTRAL',
-    // M2b passes unless the evaluator is in BLOCK mode and its last gate
-    // evaluation rejected (LOG/OFF modes never block by construction).
+    // M2b/M7b pass unless the evaluator is in its blocking mode and its
+    // last gate evaluation rejected (LOG/OFF modes never block).
     M2b: !snapshot.pd || snapshot.pd.gatePassing,
+    M7b: !snapshot.ote30m || snapshot.ote30m.gatePassing,
     M3: snapshot.killzoneOpen,
     M4: !!snapshot.sweep && snapshot.raidScore > 0,
     M5: snapshot.displacement && !!snapshot.fvg,
