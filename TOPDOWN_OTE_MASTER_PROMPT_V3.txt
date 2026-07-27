@@ -546,7 +546,7 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
 ··· APPENDIX A-03 — Agent 03: 3-of-4 Bias Vote per §H1 ···
   STATUS:            ✅
   DATE COMPLETED:    2026-07-26
-  PR NUMBER:         (recorded in the ledger commit of this PR)
+  PR NUMBER:         #132 (base Main)
   COMMIT HASH:       (squash on Main; git log records it)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - §H1 verbatim (A-01) drove the implementation: the four sources and
