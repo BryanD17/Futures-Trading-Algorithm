@@ -40,9 +40,40 @@ public class ChartStateController {
     @GetMapping("/{symbol}")
     public ResponseEntity<Map<String, Object>> chart(
             @PathVariable String symbol,
-            @RequestParam(defaultValue = "100") int lookback) {
+            @RequestParam(defaultValue = "100") int lookback,
+            @RequestParam(defaultValue = "30m") String tf) {
 
         int safeLookback = Math.min(Math.max(lookback, 1), 2000);
+
+        // V3 Agent 04 (ADDITIVE — default tf=30m is byte-identical): 4h/1d
+        // serve the session-aware ladder from the authoritative
+        // BarAggregationManager. Anything else falls through to 30m.
+        if ("4h".equalsIgnoreCase(tf) || "1d".equalsIgnoreCase(tf)) {
+            com.topstep.trading.strategy.BarAggregationManager.Timeframe frame =
+                    "4h".equalsIgnoreCase(tf)
+                            ? com.topstep.trading.strategy.BarAggregationManager.Timeframe.H4
+                            : com.topstep.trading.strategy.BarAggregationManager.Timeframe.D1;
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("symbol", symbol.toUpperCase());
+            body.put("timeframe", tf.toLowerCase());
+            List<Map<String, Object>> bars = new ArrayList<>();
+            com.topstep.trading.strategy.HtfSeriesRegistry.get(symbol.toUpperCase())
+                    .ifPresent(mgr -> {
+                        for (Candle c : mgr.getCandlesSnapshot(frame, safeLookback)) {
+                            Map<String, Object> m = new LinkedHashMap<>();
+                            m.put("t", c.getTimestamp().toString());
+                            m.put("o", c.getOpen());
+                            m.put("h", c.getHigh());
+                            m.put("l", c.getLow());
+                            m.put("c", c.getClose());
+                            m.put("v", c.getVolume());
+                            bars.add(m);
+                        }
+                    });
+            body.put("candles", bars);
+            body.put("count", bars.size());
+            return ResponseEntity.ok(body);
+        }
         ChartSnapshot snap = engine.getChartEngine().snapshot(symbol.toUpperCase(), safeLookback);
 
         List<Map<String, Object>> candles = new ArrayList<>(snap.candles30m().size() + 1);

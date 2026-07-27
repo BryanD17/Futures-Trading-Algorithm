@@ -234,7 +234,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 01 — Pre-Flight: Audit-Anchor Verification + V2 State + Baselines
   [✅] Agent 02 — Premium/Discount Gate (M2b) with LOG->BLOCK Rollout
   [✅] Agent 03 — 3-of-4 Bias Vote per STDV_OTE_MODEL.md §H1 (LOG->VOTE)
-  [⬜] Agent 04 — H4 + D1 Ladder with 18:00 ET Boundaries + Two-Tier HTF Backfill
+  [✅] Agent 04 — H4 + D1 Ladder with 18:00 ET Boundaries + Two-Tier HTF Backfill
   [⬜] Agent 05 — Upgrade Range & Votes to Consume D1 (AUTO Range Resolution)
   [⬜] Agent 06 — 30m OTE Verdict Pipeline: Persistent Stats + Config Confluence
   [⬜] Agent 07 — Measurement Sessions: Counterfactual Evidence Run (SIM)
@@ -261,6 +261,11 @@ SECTION 2 — PROGRESS LEDGER
               level added for the true day open (LevelEngine's DAILY_OPEN
               is the previous day's 18:00 session open — wrong level for
               §H1's V3, documented in A-03). Suite 482+6 green.
+  2026-07-27  Agent 04 complete. H4+D1 in the ladder with CME session
+              bucketing (TradingSessionCalendar, ZoneId-only), two-tier
+              backfill (H1 unit fetch -> seedHigherTimeframe; SIM mirrors
+              with SimWarmBoot.generateHourly), isolation test green.
+              Suite 493+6 green.
   ------------------------------------------------------------------
 
 ================================================================================
@@ -618,8 +623,78 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
   BLOCKED ITEMS: none.
 
 ··· APPENDIX A-04 — Agent 04: H4 + D1 Ladder + Two-Tier HTF Backfill ···
-  STATUS:            ⬜
-  (to be filled at completion)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-27
+  PR NUMBER:         #133 (base Main)
+  COMMIT HASH:       (squash on Main; git log records it)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - H4 + D1 in the enum (BarAggregationManager.Timeframe H4(240,"4h"),
+      D1(1440,"1d")) with session-aware bucketing delegated to the new
+      strategy/TradingSessionCalendar (ET ZoneId only — B7): trading day
+      18:00→17:00 ET, D1 keyed on SESSION date, H4 anchored
+      18/22/02/06/10/14 ET wall-clock. Tests PASSED: dstSpringForwardAnchors
+      (02:00 anchor EST→EDT wall-clock hold + gap-day resolution),
+      dstFallBackAnchors (22:00 bucket absorbs the repeated hour),
+      sundayAndFridayAttribution (Sun 18:30 → Monday's bar; Fri closes own),
+      maintenanceHourExcluded (17:xx bar completes/extends NOTHING),
+      d1SessionComposition.
+    - fetchBarsRange unit overload: TopstepConnector gains
+      (symbol, contractId, start, end, unit, unitNumber); the historical
+      4-arg method now delegates with (BAR_UNIT_MINUTE, 1) — every existing
+      caller byte-untouched (diff scope: one delegation + one new method).
+    - Seeding API: BarAggregationManager.seedHigherTimeframe(List<Candle>)
+      — ascending sort, de-dup, refuses bars at/after the live watermark,
+      drops derived buckets colliding with live-built buckets, composes
+      H4/D1 via the session calendar, prepends before live history; the
+      seed→live seam merges a seeded partial-session bucket with its live
+      completion (seedThenLiveSeam test: Thursday bucket keeps the seeded
+      session open, takes the live high/close; strictly ascending, no
+      duplicate period starts). seedDedupAndWatermarkRefusal PASSED.
+    - ISOLATION TEST (the load-bearing criterion) PASSED —
+      BarAggregationHtfTest.seedingIsolation: real StdvOteRunnerStrategy +
+      ChartEngine fed 45 live 1m bars; after seeding 10 days of H1 via the
+      registry, assertions prove chart.snapshot().oneMinuteBarsIngested()
+      UNCHANGED and the full 1m/15m/30m series string-identical, while D1
+      depth grew. Seeding never calls listener.onCandle by construction
+      (HtfSeriesRegistry is a direct manager reference).
+    - TIER 2 wired: TopstepConnector.startMarketDataPolling runs
+      seedHigherTimeframes() once per symbol AFTER Tier 1, in a try/catch
+      whose failure path logs "[HTF-Backfill <sym>] non-fatal failure: …
+      continuing without HTF depth" — never a crash, never a block.
+      MockConnector mirrors it with SimWarmBoot.generateHourly (synthetic,
+      deterministic, skips maintenance hour + weekend, close anchored to
+      base price — syntheticHourlyGenerator test PASSED). Log format:
+      "[HTF-Backfill MNQ] seeded N H1 bars -> M H4, K D1 (30 days, R refused)".
+    - Ring capacities: capacityFor(H4)=max(500,600)=600 >= 540;
+      capacityFor(D1)=max(500,120)=500(runner)/120 floor >= 90; intraday
+      unchanged at maxCandles (ringCapacity test asserts 540/90/500).
+    - /api/chart tf param additive: ?tf=4h|1d served from
+      HtfSeriesRegistry snapshot; DEFAULT tf=30m takes the pre-V3 code
+      path byte-identically (guarded before any change to the 30m body).
+    - Full suite green: trading-engine 493 tests / 0 failures (11 new),
+      api-backend 6 / 0, dashboard build clean. QUICK_START gains
+      "THE TIMEFRAME LADDER".
+  §H1 DECISIONS: n/a for this agent.
+  Q1/Q2/Q3 ANSWERS:
+    - Q1: determinism + full suite at HEAD (above).
+    - Q2 (other places HTF bars could leak into the 1m path): grep shows
+      the ONLY consumers of fetchBarsRange's hour unit are
+      seedHigherTimeframes; SimWarmBoot.generateHourly is consumed only by
+      the MockConnector's seeding block. No listener delivery anywhere.
+    - Q3 (other triggers of corrupted aggregation): the merge-at-tail in
+      addCandle also guards a seeded-partial-vs-live-completion collision;
+      maintenance-break bars excluded at BOTH the live buffer and the seed
+      composer (same calendar function, single copy).
+  ADAPTATIONS MADE:
+    - LevelEngine's 17:00 day-key nuance (A-01 note) left as is —
+      equivalent in practice; D1 bucketing uses its own 18:00 session
+      calendar as specified.
+    - HtfSeriesRegistry (new) publishes THE authoritative per-symbol
+      manager (last-write-wins on engine restart) for connector seeding +
+      API reads — the troubleshooting entry "two managers" is prevented
+      by construction.
+  REGRESSIONS FOUND & FIXED: none (existing aggregation tests untouched).
+  BLOCKED ITEMS: none.
 
 ··· APPENDIX A-05 — Agent 05: D1 Range (R0) + D1-Aware Votes ···
   STATUS:            ⬜

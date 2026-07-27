@@ -105,6 +105,47 @@ public class TopstepConnector implements TradingConnector {
      */
     private final java.util.Set<String> backfilledSymbols = ConcurrentHashMap.newKeySet();
 
+    /** Symbols whose TIER-2 HTF seed already ran (once per process). */
+    private final java.util.Set<String> htfSeededSymbols = ConcurrentHashMap.newKeySet();
+
+    /**
+     * TIER-2 HTF backfill depth in days: -Dhtf.backfill.days=N
+     * (default 30, clamped to [7, 90]). ~24 H1 bars/day — 30 days is a few
+     * hundred bars, near-instant next to the 1m tier.
+     */
+    static final int HTF_BACKFILL_DAYS =
+        Math.min(90, Math.max(7, Integer.getInteger("htf.backfill.days", 30)));
+
+    /**
+     * Fetch HTF_BACKFILL_DAYS of H1 bars and hand them to the symbol's
+     * authoritative BarAggregationManager via the SEEDING API only
+     * (V3 Agent 04 — see Critical Rule 8 in TOPDOWN_OTE_MASTER_PROMPT_V3).
+     */
+    private void seedHigherTimeframes(String symbol, String contractId) {
+        java.util.Optional<com.topstep.trading.strategy.BarAggregationManager> manager =
+                com.topstep.trading.strategy.HtfSeriesRegistry.get(symbol);
+        if (manager.isEmpty()) {
+            logger.warn("[HTF-Backfill {}] no aggregation manager registered — skipping seed", symbol);
+            return;
+        }
+        Instant end = Instant.now();
+        Instant cursor = end.minus(java.time.Duration.ofDays(HTF_BACKFILL_DAYS));
+        java.util.List<Candle> h1 = new java.util.ArrayList<>();
+        // 10-day chunks: ~240 H1 bars each, far below the API's 1000 limit.
+        while (cursor.isBefore(end)) {
+            Instant chunkEnd = cursor.plus(java.time.Duration.ofDays(10));
+            if (chunkEnd.isAfter(end)) chunkEnd = end;
+            h1.addAll(fetchBarsRange(symbol, contractId, cursor, chunkEnd,
+                    BAR_UNIT_HOUR, 1));
+            cursor = chunkEnd;
+        }
+        com.topstep.trading.strategy.BarAggregationManager.SeedResult res =
+                manager.get().seedHigherTimeframe(h1);
+        logger.info("[HTF-Backfill {}] seeded {} H1 bars -> {} H4, {} D1 ({} days, {} refused)",
+                symbol, res.h1Seeded(), res.h4Derived(), res.d1Derived(),
+                HTF_BACKFILL_DAYS, res.refused());
+    }
+
     /**
      * Backfill depth in days: -Dbackfill.days=N (default 3, clamped to [1,7]).
      * Read once at class load so every symbol uses the same depth.
@@ -784,6 +825,20 @@ public class TopstepConnector implements TradingConnector {
      */
     private java.util.List<Candle> fetchBarsRange(String symbol, String contractId,
             java.time.Instant start, java.time.Instant end) {
+        // Historical default: 1-minute bars. Every pre-V3 caller goes
+        // through this overload untouched (Q1 regression guard).
+        return fetchBarsRange(symbol, contractId, start, end, BAR_UNIT_MINUTE, 1);
+    }
+
+    /**
+     * Unit-aware overload (V3 Agent 04): same HTTP + parsing path, with the
+     * bar unit/unitNumber as parameters so the TIER-2 HTF backfill can
+     * fetch HOUR bars directly instead of replaying tens of thousands of
+     * minutes. Never touches lastBarTimestamp, never delivers to a
+     * listener.
+     */
+    private java.util.List<Candle> fetchBarsRange(String symbol, String contractId,
+            java.time.Instant start, java.time.Instant end, int unit, int unitNumber) {
         java.util.List<Candle> parsedCandles = new java.util.ArrayList<>();
         try {
             logger.debug("Fetching bars for {} using contract ID: {} (live={})", symbol, contractId, useLiveData);
@@ -794,8 +849,8 @@ public class TopstepConnector implements TradingConnector {
             requestMap.put("live", useLiveData);  // Use auto-detected live flag
             requestMap.put("startTime", start.toString());
             requestMap.put("endTime", end.toString());
-            requestMap.put("unit", BAR_UNIT_MINUTE);
-            requestMap.put("unitNumber", 1);
+            requestMap.put("unit", unit);
+            requestMap.put("unitNumber", unitNumber);
             requestMap.put("limit", 1000);
             requestMap.put("includePartialBar", false);  // Exclude partial bars for cleaner data
 
@@ -996,6 +1051,21 @@ public class TopstepConnector implements TradingConnector {
                         ts -> lastBarTimestamp.put(symbol, ts));
             } else {
                 logger.warn("No listener registered for {} — skipping historical backfill", symbol);
+            }
+        }
+
+        // ── TIER 2: HTF SEED (V3 Agent 04) ───────────────────────────
+        // Weeks of H1 bars fetched DIRECTLY (hour unit) and delivered ONLY
+        // to the aggregation layer's seeding API — never through
+        // listener.onCandle, never into ChartEngine or lastBarTimestamp
+        // (Critical Rule 8). Failure is NON-FATAL: the engine ran without
+        // D1 yesterday; a failed seed degrades to ABSTAINs, never a crash.
+        if (htfSeededSymbols.add(symbol)) {
+            try {
+                seedHigherTimeframes(symbol, contractId);
+            } catch (Exception e) {
+                logger.warn("[HTF-Backfill {}] non-fatal failure: {} — continuing without HTF depth",
+                        symbol, e.getMessage());
             }
         }
 
