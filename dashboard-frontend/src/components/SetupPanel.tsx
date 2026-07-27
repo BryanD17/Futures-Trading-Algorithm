@@ -215,6 +215,9 @@ function ConfluenceChecklist({ snapshot }: { snapshot: SetupSnapshotDto }) {
   const passed: Record<string, boolean> = {
     M1: snapshot.symbol === 'MNQ' || snapshot.symbol === 'MES' || snapshot.symbol === 'MGC',
     M2: snapshot.htfBias !== 'NEUTRAL',
+    // M2b passes unless the evaluator is in BLOCK mode and its last gate
+    // evaluation rejected (LOG/OFF modes never block by construction).
+    M2b: !snapshot.pd || snapshot.pd.gatePassing,
     M3: snapshot.killzoneOpen,
     M4: !!snapshot.sweep && snapshot.raidScore > 0,
     M5: snapshot.displacement && !!snapshot.fvg,
@@ -249,6 +252,17 @@ function ConfluenceChecklist({ snapshot }: { snapshot: SetupSnapshotDto }) {
       {failedGate && (
         <p className="failed-gate" role="status">
           Last failed gate: <strong>{failedGate}</strong>
+        </p>
+      )}
+      {snapshot.pd && (
+        <p className="pd-gate-stats" role="status">
+          PD gate <strong>{snapshot.pd.mode}</strong> — would-block L/S:{' '}
+          {snapshot.pd.wouldBlockLong}/{snapshot.pd.wouldBlockShort}
+          {snapshot.pd.mode === 'BLOCK' && (
+            <>
+              {' '}· blocked L/S: {snapshot.pd.blockedLong}/{snapshot.pd.blockedShort}
+            </>
+          )}
         </p>
       )}
     </section>

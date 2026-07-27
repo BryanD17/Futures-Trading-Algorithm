@@ -361,6 +361,21 @@ public class LevelEngine {
     }
 
     /**
+     * The CURRENT trading day's developing high (since the session
+     * rollover), or empty before the first candle of the day. Used by the
+     * M2b premium/discount R2 range (breakout days) — read-only telemetry
+     * of state this engine already tracks.
+     */
+    public synchronized Optional<Double> getDevelopingDayHigh() {
+        return (todayHigh == Double.MIN_VALUE) ? Optional.empty() : Optional.of(todayHigh);
+    }
+
+    /** The CURRENT trading day's developing low; empty before the first candle. */
+    public synchronized Optional<Double> getDevelopingDayLow() {
+        return (todayLow == Double.MAX_VALUE) ? Optional.empty() : Optional.of(todayLow);
+    }
+
+    /**
      * Get PWH level if available.
      */
     public synchronized Optional<Double> getPWH() {

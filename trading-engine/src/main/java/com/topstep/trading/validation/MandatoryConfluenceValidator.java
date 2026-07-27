@@ -72,6 +72,20 @@ public class MandatoryConfluenceValidator {
         this.activeRiskLimits = limits;
     }
 
+    /**
+     * Premium/discount evaluator behind the M2b gate (V3 Agent 02). Null →
+     * M2b is not evaluated at all (pre-V3 behavior, byte-identical); the
+     * evaluator's own OFF mode is likewise a cheap no-op. Volatile for the
+     * same wiring pattern as {@link #activeRiskLimits}.
+     */
+    private volatile com.topstep.trading.strategy.stdvote.PremiumDiscountEvaluator pdEvaluator;
+
+    /** Inject the M2b premium/discount evaluator (null disables the gate). */
+    public void setPremiumDiscountEvaluator(
+            com.topstep.trading.strategy.stdvote.PremiumDiscountEvaluator evaluator) {
+        this.pdEvaluator = evaluator;
+    }
+
     public MandatoryConfluenceValidator(MultiTimeframeAnalyzer mtfAnalyzer,
                                         DisplacementDetector displacementDetector,
                                         ChartStateQueryAPI chartState) {
@@ -377,6 +391,23 @@ public class MandatoryConfluenceValidator {
                     java.util.List.of("M2: trade direction mismatches HTF bias"), "M2");
         }
         confirmations.add("M2: bias=" + ctx.htfBias);
+
+        // M2b — premium/discount: the proposed ENTRY price (a resting limit,
+        // never the current tick) must sit at a DISCOUNT for longs / a
+        // PREMIUM for shorts relative to the governing range's equilibrium.
+        // LOG mode (default) counts + passes; BLOCK mode rejects; ABSTAIN
+        // (missing/degenerate range) ALWAYS passes (Rollout Doctrine).
+        com.topstep.trading.strategy.stdvote.PremiumDiscountEvaluator pd = pdEvaluator;
+        if (pd != null) {
+            com.topstep.trading.strategy.stdvote.PremiumDiscountEvaluator.GateDecision d =
+                    pd.gateCheck(ctx.entry, biasBullish);
+            if (!d.passed()) {
+                return ValidationResult.fail(
+                        java.util.List.of("M2b: " + d.reason()), "M2b");
+            }
+            confirmations.add("M2b: Premium/Discount (entry vs equilibrium) — "
+                    + d.reason());
+        }
 
         // M3 — killzone open.
         if (!ctx.killzoneOpen) {

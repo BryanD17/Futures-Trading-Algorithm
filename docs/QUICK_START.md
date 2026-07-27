@@ -212,6 +212,7 @@ One-line meaning of each mandatory gate (from
 |------|---------|
 | M1 | Instrument is MNQ/MES/MGC. |
 | M2 | HTF bias is not NEUTRAL AND the trade direction matches it. |
+| M2b | Premium/Discount (entry vs equilibrium) — see the section below. |
 | M3 | Inside a killzone. |
 | M4 | Liquidity sweep present AND raid score >= instrument minimum. |
 | M5 | Displacement candle AND a FairValueGap present. |
@@ -219,6 +220,43 @@ One-line meaning of each mandatory gate (from
 | M7 | OTE zone built, PD-array edge inside the band, RR >= floor at the -2.0 target. |
 | M8 | Size request >= instrument minimum (5 micros). |
 | M9 | Clean diagnostics — no unresolved failure after the risk-engine pre-flight. |
+
+### M2b — PREMIUM/DISCOUNT GATE (V3 — config-gated, DEFAULT LOG)
+
+The top-down rule: longs are only taken at a DISCOUNT (proposed ENTRY price
+below the equilibrium/midpoint of the governing range), shorts only at a
+PREMIUM (above it). The judged price is the resting OTE limit, never the
+current tick — price momentarily in premium while the limit rests in
+discount is the normal geometry of the setup.
+
+Governing range resolution (each verdict logs which range governed):
+
+| Step | Range | When |
+|------|-------|------|
+| R1 | Yesterday's PDH/PDL | price inside [PDL, PDH] (default) |
+| R2 | Today's developing range | breakout day, once the range spans >= `pd.minRangeTicks` |
+| R3 | ABSTAIN | no usable range — gate PASSES, logs, counts |
+
+Switch: `-Dpd.gate.mode=OFF|LOG|BLOCK` (DEFAULT **LOG**).
+
+- `OFF` — evaluator never runs (pre-V3 behavior, byte-identical).
+- `LOG` — verdicts are computed and counted; an unfavorable verdict prints
+  `[PD MNQ] WOULD-BLOCK LONG entry=... eq=... range=R1 hi=.../lo=...` but
+  the gate passes. The `[GATES]` line carries `pd=DISCOUNT(R1)` /
+  `pd=WOULD-BLOCK-LONG`; `/api/setup/{symbol}` serves the counters in `pd`.
+- `BLOCK` — DISCOUNT required for longs, PREMIUM for shorts; the
+  EQUILIBRIUM band (±`pd.eqBandTicks`, default 2 ticks around the midpoint)
+  blocks BOTH directions; ABSTAIN always passes.
+
+Tuning: `pd.eqBandTicks` (default 2), `pd.minRangeTicks` (default 2x the
+symbol's `chart.minLegTicks`, per-symbol override `pd.minRangeTicks.MNQ`).
+
+ROLLOUT PLAYBOOK: run LOG for 3–5 sessions. For every WOULD-BLOCK line,
+check what that signal actually did — WOULD-BLOCK on losers is the gate
+earning its keep; WOULD-BLOCK on winners means tighten `pd.eqBandTicks` or
+revisit the range source before flipping. Then flip `-Dpd.gate.mode=BLOCK`
+and verify M2b blocked counts roughly match the LOG-mode WOULD-BLOCK rate
+(a large mismatch is a bug — revert to LOG and file it).
 
 ### BIAS HYSTERESIS (V2 — config-gated, DEFAULT OFF)
 
