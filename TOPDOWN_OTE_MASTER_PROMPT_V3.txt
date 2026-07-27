@@ -483,7 +483,7 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
 ··· APPENDIX A-02 — Agent 02: Premium/Discount Gate (M2b) ···
   STATUS:            ✅
   DATE COMPLETED:    2026-07-26
-  PR NUMBER:         (recorded in the ledger commit of this PR)
+  PR NUMBER:         #131 (base Main)
   COMMIT HASH:       (squash on Main; git log records it)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - Evaluator: strategy/stdvote/PremiumDiscountEvaluator.java —
