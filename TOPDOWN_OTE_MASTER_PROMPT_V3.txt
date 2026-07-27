@@ -237,7 +237,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 04 — H4 + D1 Ladder with 18:00 ET Boundaries + Two-Tier HTF Backfill
   [✅] Agent 05 — Upgrade Range & Votes to Consume D1 (AUTO Range Resolution)
   [✅] Agent 06 — 30m OTE Verdict Pipeline: Persistent Stats + Config Confluence
-  [⬜] Agent 07 — Measurement Sessions: Counterfactual Evidence Run (SIM)
+  [✅] Agent 07 — Measurement Sessions: Counterfactual Evidence Run (SIM)
   [⬜] Agent 08 — FINAL VERIFICATION & CLOSE-OUT
 
   LEDGER NOTES (append one dated line per completion):
@@ -278,6 +278,11 @@ SECTION 2 — PROGRESS LEDGER
               loader, boot reminder at 15 sessions); M7b confluence gate
               (OFF|LOG|GATE, default LOG) between M7 and M8; promote/
               delete criteria verbatim in QUICK_START. Suite 505+6 green.
+  2026-07-27  Agent 07 complete. Three warm SIM sessions (seeds 42/1337/
+              777) run through the real API jar; all four counter families
+              captured; lifetime oteStats proven to survive two restarts;
+              docs/reports/TOPDOWN_MEASUREMENT_01.md committed with the
+              DO-NOT-FLIP-YET recommendation. No fixups required.
   ------------------------------------------------------------------
 
 ================================================================================
@@ -825,8 +830,55 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
   BLOCKED ITEMS: none.
 
 ··· APPENDIX A-07 — Agent 07: Measurement Sessions (SIM) ···
-  STATUS:            ⬜
-  (to be filled at completion)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-27
+  PR NUMBER:         #136 (base Main)
+  COMMIT HASH:       (squash on Main; git log records it)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - Warm SIM + ladder depth: the REAL api-backend boot jar was run three
+      times (java -Dsim.backfill.seed=<seed> -jar …) with the engine
+      started via POST /api/control/start?mode=SIM. Curl evidence:
+        /api/chart/MNQ -> "warm": true, "barsIngested1m": 4324;
+        /api/chart/MNQ?tf=1d -> timeframe 1d, count 22 (19 seeded + live);
+        /api/chart/MNQ?tf=4h -> count 133;
+        seed lines: "[HTF-Backfill MNQ] seeded 444 H1 bars -> 115 H4,
+        19 D1 (30 days, 0 refused, SYNTHETIC)"; MES correctly skipped
+        (SMT-only, no runner/manager).
+    - >= 3 sessions: seeds 42, 1337, 777 — each replays 3 synthetic days
+      of 1m (≈3 sessions of 15m cadence, 288 [VOTE] evaluations per
+      symbol per boot; >= the 6-session-hour target). Counter families
+      captured per session (raw excerpts in the report + scratchpad logs):
+        [PD]: config lines + continuous [GATES] pd=PREMIUM(R1) previews;
+          gate counters 0 (zero emission attempts on synthetic tape —
+          expected, explained in the report);
+        [VOTE]: per-session agree/disagree tables (e.g. S1 MNQ 41/247,
+          all disagreements voteNeutral_legacyDirectional — the
+          Troubleshooting-J chronic-ABSTAIN signature);
+        [BIAS]: 0 counterfactual lines (setups died of expiry, not bias
+          flips, on this tape; interplay unit-tested instead);
+        oteStats: lifetime chartOnly 20 -> 44 -> 48 across sessions with
+          "[OTE-VERDICT] MNQ: restored 4 session(s)" at boots 2 and 3 —
+          persistence + restart restore PROVEN on the real stack;
+        [HTF-Backfill]: above.
+    - docs/reports/TOPDOWN_MEASUREMENT_01.md committed: per-switch tables,
+      three conservative observations per switch, copy-pasteable flip
+      commands, the pipeline-validation caveat, and an explicit
+      DO-NOT-FLIP-YET recommendation.
+    - Fixups: NONE required — no bug surfaced across the three sessions.
+  §H1 DECISIONS: n/a for this agent.
+  Q1/Q2/Q3 ANSWERS:
+    - Q1: three clean boots, zero exceptions in session logs.
+    - Q2: checked both symbols (MNQ + MGC) — same healthy shapes.
+    - Q3: the only anomaly candidate (all-zero PD gate counters) was
+      traced to zero emissions on synthetic tape (oteAgree/oteDisagree
+      also 0), i.e. expected generator behavior, not a defect; recorded
+      in the report's verdict section.
+  ADAPTATIONS MADE:
+    - SIM HTF seed uses SimWarmBoot.generateHourly (synthetic H1 from the
+      same seed family) as Agent 04 wired — approach noted per the task's
+      "note the approach" clause.
+  REGRESSIONS FOUND & FIXED: none.
+  BLOCKED ITEMS: none.
 
 ··· APPENDIX A-08 — Agent 08: Final Verification & Close-Out ···
   STATUS:            ⬜
