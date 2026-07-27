@@ -914,7 +914,7 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
 ··· APPENDIX A-08 — Agent 08: Final Verification & Close-Out ···
   STATUS:            ✅
   DATE COMPLETED:    2026-07-27
-  PR NUMBER:         #TBD-A08 (base Main)
+  PR NUMBER:         #137 (base Main)
   COMMIT HASH:       (squash on Main; git log records it)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - Fresh checkout (git clone --branch Main into a clean directory),
