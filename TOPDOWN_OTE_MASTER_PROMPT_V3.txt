@@ -386,8 +386,8 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
 ··· APPENDIX A-01 — Agent 01: Pre-Flight: Audit Anchors + V2 State + Baselines ···
   STATUS:            ✅
   DATE COMPLETED:    2026-07-26
-  PR NUMBER:         (recorded below after PR creation)
-  COMMIT HASH:       (recorded below after squash-merge)
+  PR NUMBER:         #130 (base Main)
+  COMMIT HASH:       squash-merge of PR #130 on Main (git log records it)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - On Main, clean tree; baselines green:
         engine+api: root `./gradlew clean build` -> "BUILD SUCCESSFUL in 26s,
