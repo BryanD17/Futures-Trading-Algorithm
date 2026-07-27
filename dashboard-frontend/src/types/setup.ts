@@ -104,6 +104,30 @@ export interface SetupSnapshotDto {
   sizeFilled: number;
   lastGateFailed: string | null;
   pd: PdGateDto | null;
+  vote: BiasVoteDto | null;
+}
+
+// 3-of-4 bias vote telemetry (V3 Agent 03). Null on cold start.
+export interface BiasVoteEntryDto {
+  source: 'V1' | 'V2' | 'V3' | 'V4';
+  direction: 'BULL' | 'BEAR' | 'ABSTAIN';
+  detail: string;
+}
+
+export interface BiasVoteDto {
+  mode: 'LEGACY' | 'LOG' | 'VOTE';
+  finalBias?: MarketBiasName;
+  alignedBull?: number;
+  alignedBear?: number;
+  abstains?: number;
+  votes?: BiasVoteEntryDto[];
+  agree?: boolean;
+  counters: {
+    agree: number;
+    disagree: number;
+    voteNeutral_legacyDirectional: number;
+    voteDirectional_legacyNeutral: number;
+  };
 }
 
 // M2b premium/discount gate telemetry (V3 Agent 02). Session-scoped

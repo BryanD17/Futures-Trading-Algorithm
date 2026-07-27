@@ -208,6 +208,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** M2b premium/discount evaluator (V3 Agent 02); never null after ctor. */
     private final PremiumDiscountEvaluator pdEvaluator;
 
+    /** 3-of-4 bias vote engine (V3 Agent 03); never null after ctor. */
+    private final BiasVoteEngine biasVoteEngine;
+
+    /** AMD cycle tracker feeding the V2 vote (previously legacy-only). */
+    private com.topstep.trading.strategy.DailyAmdCycleTracker amdTracker;
+
     private static final ZoneId ET_ZONE = ZoneId.of("America/New_York");
 
     /**
@@ -370,6 +376,11 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.pdEvaluator = PremiumDiscountEvaluator.install(
                 symbol, spec.tickSize(), levelEngine);
         validator.setPremiumDiscountEvaluator(pdEvaluator);
+        // 3-of-4 bias vote (V3 Agent 03): V2's AMD tracker joins the live
+        // path (it previously fed only the legacy strategy); default mode
+        // LOG — the vote runs and counts agreement, legacy still decides.
+        this.biasVoteEngine = BiasVoteEngine.install(symbol, spec.tickSize());
+        this.amdTracker = new com.topstep.trading.strategy.DailyAmdCycleTracker(symbol);
         this.core = new StdvOteStrategy(symbol, projectionEngine, oteCalculator, validator,
                 eventBus, /* expiryBars */ 40L);
 
@@ -463,6 +474,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         equalLevelDetector.ageAndCleanupLevels();
         impulseAnalyzer.update(candle);
         correlationTracker.update(candle);
+        // V2-vote input (V3 Agent 03): mirror the legacy strategy's feed —
+        // per 1m candle, with the level engine and the latest displacement.
+        amdTracker.update(candle, levelEngine, displacementDetector.getLastDisplacement());
 
         // 1c. ENTRY ANATOMY — displacement, FVG, MSS/CHoCH — is evaluated
         // on the DETECTOR TIMEFRAME (default 5m, -Dstdvote.detectorTimeframe
@@ -556,7 +570,27 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // repeated same-bias records are idempotent in the core (INVALIDATED
         // sits above IN_TRADE, so a dead setup ignores repeats).
         if (htfBarClosed) {
-            MarketBias bias = mapTrendToBias(htfTrend.getTrendState());
+            MarketBias legacyBias = mapTrendToBias(htfTrend.getTrendState());
+            // 3-of-4 bias vote (V3 Agent 03). LEGACY: not evaluated at all.
+            // LOG (default): evaluated + counted, legacy still decides.
+            // VOTE: the vote replaces legacy AT THIS ONE SEAM (B12) — the
+            // only place core.recordHtfBias is fed on the live path.
+            BiasVoteEngine.BiasVoteResult voteResult = null;
+            if (biasVoteEngine.mode() != BiasVoteEngine.VoteMode.LEGACY) {
+                voteResult = biasVoteEngine.evaluate(
+                        new BiasVoteEngine.VoteInputs(
+                                htfTrend.getTrendState(),
+                                amdTracker.getCurrentPhase(),
+                                levelEngine.getLevel(
+                                        com.topstep.trading.chartstate.LevelType.MIDNIGHT_OPEN)
+                                        .map(com.topstep.trading.chartstate.KnownLevel::getPrice),
+                                candle.getClose(),
+                                levelEngine.getLevel(com.topstep.trading.chartstate.LevelType.PDH),
+                                levelEngine.getLevel(com.topstep.trading.chartstate.LevelType.PDL)),
+                        legacyBias);
+            }
+            MarketBias bias = BiasVoteEngine.effectiveBias(
+                    biasVoteEngine.mode(), legacyBias, voteResult);
             core.recordHtfBias(bias);
             lastBias = bias;
         }
@@ -597,6 +631,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                     + " kzActive=" + killzoneActive
                     + " chart30mOte=" + oteState
                     + " " + pdEvaluator.gatesToken(candle.getClose())
+                    + " " + biasVoteEngine.gatesToken()
                     + " " + stats.rollup());
         }
 
@@ -836,6 +871,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         correlationTracker.resetAll();
         barManager.reset();
         htfTrend = new HtfTrendAnalyzer(symbol, barManager);
+        amdTracker = new com.topstep.trading.strategy.DailyAmdCycleTracker(symbol);
         resetTransientState();
         lastPrimaryTimestamp = null;
         lastSmtTimestamp = null;

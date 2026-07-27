@@ -258,6 +258,43 @@ revisit the range source before flipping. Then flip `-Dpd.gate.mode=BLOCK`
 and verify M2b blocked counts roughly match the LOG-mode WOULD-BLOCK rate
 (a large mismatch is a bug — revert to LOG and file it).
 
+### THE BIAS VOTE (V3 — 3-of-4 per STDV_OTE_MODEL.md §H1, DEFAULT LOG)
+
+The model doc defines HTF bias as FOUR votes, each BULL / BEAR / ABSTAIN:
+
+| Vote | Source | Plain language |
+|------|--------|----------------|
+| V1 | HtfTrendAnalyzer state | 15m/30m structure: HH/HL = BULL, LH/LL = BEAR, ranging = ABSTAIN |
+| V2 | DailyAmdCycleTracker | The daily AMD cycle's distribution leg direction; no distribution leg yet = ABSTAIN |
+| V3 | Price vs true day open | Below the midnight-ET open = discount = BULL; above = BEAR; within ±`pd.eqBandTicks` of the open = ABSTAIN |
+| V4 | Daily draw on liquidity | Untapped PDH pulls price up (BULL), untapped PDL pulls down (BEAR); both untapped = the nearer one; both tapped / equidistant = ABSTAIN |
+
+Aggregation: >= 3 same-direction votes ⇒ BULLISH/BEARISH, otherwise NEUTRAL
+(2+ abstentions make 3-of-4 impossible — NEUTRAL by arithmetic, which the
+hysteresis machinery treats as uncertainty, not contradiction).
+
+Switch: `-Dbias.vote.mode=LEGACY|LOG|VOTE` (DEFAULT **LOG**).
+
+- `LEGACY` — the vote engine never runs (pre-V3, byte-identical).
+- `LOG` — every 15m bias evaluation prints one line and counts agreement,
+  while the legacy single-vote bias still decides:
+  `[VOTE MNQ] V1=BULL(weak-bullish) V2=ABSTAIN(no-dist-leg) V3=BEAR(above-open) V4=BULL(PDH-untapped) -> vote=NEUTRAL legacy=BULLISH AGREE=false`
+- `VOTE` — the vote's finalBias replaces the legacy value at the single
+  seam feeding `core.recordHtfBias`.
+
+The `[GATES]` line carries `vote=<bias>(<bull>/<bear>/<abstains>)
+agree=<bool>`; `/api/setup/{symbol}` serves the four votes + counters in
+`vote`; the Setup panel renders four V1–V4 pills (gray = ABSTAIN).
+
+ADOPTION PLAYBOOK: run LOG for 3–5 sessions and read the counters. High
+agreement = low risk AND low reward in flipping. The interesting rows:
+`voteDirectional_legacyNeutral` (setups the richer bias would have
+enabled — investigate every one) and disagreements (V2–V4 overruling
+structure — spot-check 5+ against the Bot Chart and TopstepX: whose bias
+read the tape better?). Flip `-Dbias.vote.mode=VOTE` only after that
+review, and keep hysteresis settings unchanged that week (one switch at a
+time).
+
 ### BIAS HYSTERESIS (V2 — config-gated, DEFAULT OFF)
 
 Field evidence 2026-07-09: a session passed M1–M4 and was destroyed by

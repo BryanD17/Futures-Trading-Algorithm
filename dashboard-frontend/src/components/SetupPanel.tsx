@@ -109,6 +109,24 @@ export default function SetupPanel() {
             <WarmPill warmth={chartWarmth} />
           </div>
 
+          {snapshot.vote?.votes && (
+            <div className="setup-row vote-row" aria-label="3-of-4 bias vote">
+              <span className="vote-mode">VOTE {snapshot.vote.mode}</span>
+              {snapshot.vote.votes.map((v) => (
+                <span
+                  key={v.source}
+                  className={`pill vote-pill vote-${v.direction.toLowerCase()}`}
+                  title={v.detail}
+                >
+                  {v.source}: <strong>{v.direction}</strong>
+                </span>
+              ))}
+              <span className="vote-final">
+                → {snapshot.vote.finalBias} (agree: {String(snapshot.vote.agree)})
+              </span>
+            </div>
+          )}
+
           <div className="setup-grid">
             <ConfluenceChecklist snapshot={snapshot} />
             <OteBlock snapshot={snapshot} precision={precision} />
