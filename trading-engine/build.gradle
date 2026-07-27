@@ -46,6 +46,18 @@ application {
 
 tasks.named('test') {
     useJUnitPlatform()
+    // Forward the diagnosis/tuning properties into the TEST JVM so the
+    // FunnelReplayHarness (offline real-tape replay) can be parameterized
+    // from the gradle command line. Absent properties forward as null and
+    // change nothing.
+    ['funnel.data.dir', 'funnel.symbol', 'scalpMode.enabled', 'scalp.minRaidScore',
+     'bias.hysteresis.enabled', 'bias.neutralGraceBars',
+     'stdvote.detectorTimeframe', 'stdvOte.setupExpiryBars',
+     'stdvOte.oteWindowBars', 'stdvOte.mssFreshBars'].each { p ->
+        if (System.getProperty(p) != null) {
+            systemProperty p, System.getProperty(p)
+        }
+    }
 }
 
 java {
