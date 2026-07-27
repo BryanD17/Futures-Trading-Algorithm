@@ -237,9 +237,6 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private static final int SIZE_TIER_2 = 10;
     private static final int SIZE_TIER_1 = 6;
 
-    /** Bars-since-MSS window in which we still consider the impulse fresh. */
-    private static final int MSS_FRESH_BARS = 30;
-
     /**
      * Timeframe on which the ENTRY ANATOMY (displacement, FVG, MSS/CHoCH)
      * is measured — {@code -Dstdvote.detectorTimeframe} in minutes
@@ -260,8 +257,31 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         }
     }
 
-    /** Maximum bars allowed in OTE_ARMED before the setup invalidates. */
-    private static final int MAX_BARS_IN_OTE = 8;
+    /**
+     * FUNNEL CALIBRATION (2026-07-27 no-trade diagnosis): the 2026-07-09
+     * field fix moved the entry anatomy (displacement/FVG/MSS) from 1m to
+     * 5m bars but left every window around it calibrated in 1m FEED bars —
+     * giving the whole funnel 40 minutes on a 5x slower clock. A 12h LIVE
+     * session died of exactly this: 144/173 invalidations were
+     * "expired (40 bars without progress)"; an offline replay of the same
+     * real tape reproduced 0 emissions with 96 expiry deaths. The windows
+     * below now scale by the DETECTOR timeframe, restoring the original
+     * design durations (40/8/30 DETECTOR bars). On a 1m detector timeframe
+     * the values are numerically identical to the historical constants.
+     * Overrides (in detector bars): stdvOte.setupExpiryBars,
+     * stdvOte.oteWindowBars, stdvOte.mssFreshBars.
+     */
+    private final int setupExpiryFeedBars =
+            intProperty("stdvOte.setupExpiryBars", 40) * detectorTimeframe.getMinutes();
+
+    /** Maximum feed bars allowed in OTE_ARMED before the setup invalidates. */
+    private final int maxBarsInOte =
+            intProperty("stdvOte.oteWindowBars", 8) * detectorTimeframe.getMinutes();
+
+    /** Feed bars since MSS in which the impulse is still fresh (see the
+     *  FUNNEL CALIBRATION note — 30 DETECTOR bars, scaled to the feed). */
+    private final int mssFreshBars =
+            intProperty("stdvOte.mssFreshBars", 30) * detectorTimeframe.getMinutes();
 
     /**
      * OBSERVABILITY ONLY (chart-in-memory rollout): the runner's ChartEngine,
@@ -396,7 +416,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.ote30mGate = Ote30mConfluenceGate.install(symbol);
         validator.setOte30mConfluenceGate(ote30mGate);
         this.core = new StdvOteStrategy(symbol, projectionEngine, oteCalculator, validator,
-                eventBus, /* expiryBars */ 40L);
+                eventBus, /* expiryBars, feed bars (see FUNNEL CALIBRATION) */
+                setupExpiryFeedBars);
+        System.out.println("[StdvOteRunnerStrategy] " + symbol
+                + " funnel windows (feed bars): expiry=" + setupExpiryFeedBars
+                + " oteWindow=" + maxBarsInOte + " mssFresh=" + mssFreshBars
+                + " (detector " + detectorTimeframe.getLabel() + ")");
 
         // Scalp mode (SA3 target model + SA4 frequency/gates). All the
         // sequential mandatory gates run exactly as in legacy mode.
@@ -671,8 +696,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // Track time in OTE.
         if (ctx.state == SetupState.OTE_ARMED) {
             barsInOte++;
-            if (barsInOte > MAX_BARS_IN_OTE) {
-                core.invalidate("OTE window expired (" + MAX_BARS_IN_OTE + " bars)");
+            if (barsInOte > maxBarsInOte) {
+                core.invalidate("OTE window expired (" + maxBarsInOte + " bars)");
                 barsInOte = 0;
             }
         } else {
@@ -1170,7 +1195,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     }
 
     private void tryRecordMss(Candle candle) {
-        if (lastObservedMss == null || barsSinceMss > MSS_FRESH_BARS) return;
+        if (lastObservedMss == null || barsSinceMss > mssFreshBars) return;
         boolean biasBullish = (lastBias == MarketBias.BULLISH);
         if (lastObservedMss.isBullish != biasBullish) {
             // Counter-bias MSS — invalidates the setup per the spec.

@@ -439,6 +439,30 @@ the section above), THEN revisit whether `hasReactedOte` should become a
 gate — that change is a separate, owner-approved plan with its own
 backtest and PR. Neither switch happens automatically.
 
+### FUNNEL CALIBRATION — windows scale with the detector timeframe (fix 2026-07-27)
+
+Root cause of the "never trades" LIVE session (12h, 0 emissions): the
+2026-07-09 field fix moved the entry anatomy to 5m bars but left the setup
+windows calibrated in 1m FEED bars — the whole funnel had 40 minutes on a
+5x slower clock. Evidence: 144/173 live invalidations were "expired (40
+bars without progress)"; an offline replay of the same real tape (the
+`FunnelReplayHarness` test, run with `-Dfunnel.data.dir=<dir of real 1m
+JSON>`) reproduced 0 emissions — and produced real emissions after the fix.
+
+The windows now scale by `stdvote.detectorTimeframe` (defaults restore the
+ORIGINAL design durations; on a 1m detector they equal the historical
+constants exactly):
+
+| Window | Default (detector bars) | Effective on 5m | Override |
+|--------|------------------------:|----------------:|----------|
+| Setup expiry | 40 | 200 feed bars (~3.3h) | `stdvOte.setupExpiryBars` |
+| OTE_ARMED window | 8 | 40 feed bars | `stdvOte.oteWindowBars` |
+| MSS freshness | 30 | 150 feed bars | `stdvOte.mssFreshBars` |
+
+The startup line `funnel windows (feed bars): expiry=… oteWindow=…
+mssFresh=…` prints the resolved values per symbol — verify it after any
+detector-timeframe change.
+
 ### DETECTOR TIMEFRAME — the 5m entry anatomy (field fix 2026-07-09)
 
 Displacement, FVG, and MSS/CHoCH are now measured on **5-minute candles**
