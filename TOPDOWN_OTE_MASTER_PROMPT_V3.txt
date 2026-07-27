@@ -235,7 +235,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 02 — Premium/Discount Gate (M2b) with LOG->BLOCK Rollout
   [✅] Agent 03 — 3-of-4 Bias Vote per STDV_OTE_MODEL.md §H1 (LOG->VOTE)
   [✅] Agent 04 — H4 + D1 Ladder with 18:00 ET Boundaries + Two-Tier HTF Backfill
-  [⬜] Agent 05 — Upgrade Range & Votes to Consume D1 (AUTO Range Resolution)
+  [✅] Agent 05 — Upgrade Range & Votes to Consume D1 (AUTO Range Resolution)
   [⬜] Agent 06 — 30m OTE Verdict Pipeline: Persistent Stats + Config Confluence
   [⬜] Agent 07 — Measurement Sessions: Counterfactual Evidence Run (SIM)
   [⬜] Agent 08 — FINAL VERIFICATION & CLOSE-OUT
@@ -266,6 +266,13 @@ SECTION 2 — PROGRESS LEDGER
               backfill (H1 unit fetch -> seedHigherTimeframe; SIM mirrors
               with SimWarmBoot.generateHourly), isolation test green.
               Suite 493+6 green.
+  2026-07-27  Agent 05 complete. R0 (D1 dealing range, fractal-2 swings via
+              shared FractalSwings) prepended to the PD range chain;
+              bias.v1.includeH4 (default false) H4-conflict consult;
+              PWH/PWL detail-only context on V4. Model doc gives NO D1
+              dealing-range formula (§H2's dealing range is the intraday
+              manipulation leg) -> V3 fallback definition used, noted in
+              A-05. Suite 498+6 green; Agents 02/03 suites UNCHANGED.
   ------------------------------------------------------------------
 
 ================================================================================
@@ -697,8 +704,55 @@ APPENDIX A — PER-AGENT VERIFICATION LOG
   BLOCKED ITEMS: none.
 
 ··· APPENDIX A-05 — Agent 05: D1 Range (R0) + D1-Aware Votes ···
-  STATUS:            ⬜
-  (to be filled at completion)
+  STATUS:            ✅
+  DATE COMPLETED:    2026-07-27
+  PR NUMBER:         #TBD-A05 (base Main)
+  COMMIT HASH:       (squash on Main; git log records it)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - R0 implemented: PremiumDiscountEvaluator.d1DealingRange() — last
+      ESTABLISHED fractal-strength-2 swing high/low on the D1 series
+      (shared FractalSwings utility — the same formula the optional V1 H4
+      consult uses; one swing formula, not three). Threshold pd.d1MinBars
+      (default 10), read in install(); classify() tries R0 first and falls
+      through untouched when D1 is thin/swing-less/degenerate.
+      DOC-SILENCE NOTED: STDV_OTE_MODEL.md defines the dealing range only
+      as the intraday manipulation leg (§H2) and gives no D1 formula — the
+      V3 document's fallback definition (audit's phrasing) applies.
+    - Fallback chain intact: the wiring guarantees it structurally —
+      direct-constructed evaluators keep an EMPTY D1 source (only
+      install() wires the ladder), so PremiumDiscountEvaluatorTest (10)
+      and StdvOteValidatorPdGateTest (6) and BiasVoteEngineTest (10) run
+      byte-UNCHANGED and green in the same build (engine suite 498/0);
+      unit re-proof: Agent05D1UpgradesTest.emptyD1IsPreAgent05.
+    - rangeSource telemetry: "R0-D1" appears in PdContext.rangeSource, the
+      [PD]/[GATES] tokens, and verdictsByRangeSource (asserted in
+      r0Governs: eq 20000 from swings 21000/19000, PREMIUM/DISCOUNT sides,
+      API map contains key "R0-D1").
+    - bias.v1.includeH4 DEFAULT false (Boolean.getBoolean in install;
+      direct ctor leaves it false). When true: H4 fractal direction
+      CONTRADICTING the 15m/30m read demotes V1 to ABSTAIN("h4-conflict…")
+      — consult, never a new direction; test includeH4Conflict proves both
+      the off-default and the demotion. PWH/PWL ride V4's DETAIL string
+      only (",wk:PWH-untapped/PWL-tapped"), vote unchanged
+      (weeklyDetailOnly test).
+    - Full suite green: trading-engine 498/0 (5 new), api-backend 6/0.
+      QUICK_START range table updated to R0->R1->R2->R3.
+  §H1 DECISIONS:
+    - §H1 names the DAILY draw on liquidity — PWH/PWL therefore stay
+      context-only (no weekly vote invented, per C10).
+    - §H1/H2 silent on a D1 dealing-range formula — fallback definition
+      used and flagged (above).
+  Q1/Q2/Q3 ANSWERS:
+    - Q1: full suite at HEAD (498+6, 0 failures).
+    - Q2: swing/fractal math exists in ONE shared utility (FractalSwings)
+      used by both R0 and the H4 consult; no second copy.
+    - Q3: a failed/thin HTF seed cannot change behavior — R0 simply never
+      activates (structural, tested); no new cold-start blocking path.
+  ADAPTATIONS MADE:
+    - VoteInputs extended via a 6-arg convenience constructor so every
+      pre-Agent-05 caller and test compiles and runs unchanged.
+  REGRESSIONS FOUND & FIXED: none.
+  BLOCKED ITEMS: none.
 
 ··· APPENDIX A-06 — Agent 06: 30m OTE Verdict Pipeline ···
   STATUS:            ⬜

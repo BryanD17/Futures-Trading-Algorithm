@@ -590,7 +590,15 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                                         .map(com.topstep.trading.chartstate.KnownLevel::getPrice),
                                 candle.getClose(),
                                 levelEngine.getLevel(com.topstep.trading.chartstate.LevelType.PDH),
-                                levelEngine.getLevel(com.topstep.trading.chartstate.LevelType.PDL)),
+                                levelEngine.getLevel(com.topstep.trading.chartstate.LevelType.PDL),
+                                // V3 Agent 05: weekly tapped-state context
+                                // (detail-only) + H4 series for the optional
+                                // V1 consult (copied only when enabled).
+                                levelEngine.getLevel(com.topstep.trading.chartstate.LevelType.PWH),
+                                levelEngine.getLevel(com.topstep.trading.chartstate.LevelType.PWL),
+                                biasVoteEngine.includeH4()
+                                        ? barManager.getCandlesSnapshot(Timeframe.H4, 120)
+                                        : java.util.List.of()),
                         legacyBias);
             }
             MarketBias bias = BiasVoteEngine.effectiveBias(
