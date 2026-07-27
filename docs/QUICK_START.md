@@ -221,6 +221,37 @@ One-line meaning of each mandatory gate (from
 | M8 | Size request >= instrument minimum (5 micros). |
 | M9 | Clean diagnostics — no unresolved failure after the risk-engine pre-flight. |
 
+### THE TIMEFRAME LADDER (V3 — H4 + D1 with CME session boundaries)
+
+The aggregation ladder now reaches Daily: `{1m, 3m, 5m, 15m, 30m, 1h, 4h,
+1d}`. The intraday frames are clock-aligned exactly as before; H4 and D1
+are SESSION-aware:
+
+- The CME trading day runs 18:00 ET → 17:00 ET next day. The daily bar for
+  "Tuesday" OPENS Monday 18:00 ET; Sunday 18:00 ET opens Monday's session.
+- 17:00–18:00 ET is the maintenance break — no bars, and a stray bar there
+  belongs to NO daily/H4 bucket.
+- H4 anchors to the session open: 18:00, 22:00, 02:00, 06:00, 10:00,
+  14:00 ET wall-clock (DST-safe: the zone does the bucketing, never a
+  fixed UTC offset).
+
+TWO-TIER BACKFILL:
+
+- Tier 1 (unchanged): `backfill.days` of 1m bars through the listener path.
+- Tier 2 (new): `-Dhtf.backfill.days=N` (default **30**, clamped [7, 90])
+  of H1 bars fetched DIRECTLY from the API and delivered ONLY to the
+  aggregation layer's seeding API — never through the 1m listener, never
+  into the ChartEngine. On success you'll see:
+  `[HTF-Backfill MNQ] seeded 330 H1 bars -> 120 H4, 21 D1 (30 days, 0 refused)`
+  A failed seed is NON-FATAL: the engine runs exactly as it did pre-V3 and
+  D1-dependent logic ABSTAINS.
+
+D1 signals are only as deep as the seed — with `htf.backfill.days=7` you
+get ~5 daily bars, below the `pd.d1MinBars` threshold Agent 05 uses.
+
+The Bot Chart API accepts `GET /api/chart/{symbol}?tf=30m|4h|1d`
+(default 30m, unchanged).
+
 ### M2b — PREMIUM/DISCOUNT GATE (V3 — config-gated, DEFAULT LOG)
 
 The top-down rule: longs are only taken at a DISCOUNT (proposed ENTRY price

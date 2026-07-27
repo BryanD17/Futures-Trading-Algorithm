@@ -352,6 +352,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // True HTF bias source: 1m → 15m/30m aggregation → trend analyzer.
         this.barManager = new BarAggregationManager(symbol, 500);
         this.htfTrend = new HtfTrendAnalyzer(symbol, barManager);
+        // V3 Agent 04: publish THE authoritative aggregation manager for
+        // this symbol so the connector's TIER-2 HTF seed and the /api/chart
+        // ?tf= reads target the same instance the strategy trades from.
+        com.topstep.trading.strategy.HtfSeriesRegistry.register(symbol, barManager);
 
         // Chart-state pipeline for raid quality scoring.
         this.candleSeries = new CandleSeries(symbol, 5000);

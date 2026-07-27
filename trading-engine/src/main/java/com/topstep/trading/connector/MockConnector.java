@@ -144,6 +144,26 @@ public class MockConnector implements TradingConnector {
             }
             logger.info("[SimWarmBoot] {}: delivered {} SYNTHETIC 1m bars ({} days, seed={}). Chart memory is warm.",
                     symbol, delivered, days, seed);
+
+            // ── TIER 2 (V3 Agent 04): synthetic H1 seed via the SEEDING
+            // API only — mirrors the live connector's HTF backfill shape.
+            // Never through listener.onCandle (Critical Rule 8).
+            try {
+                int htfDays = SimWarmBoot.configuredHtfDays();
+                java.util.List<Candle> h1 = SimWarmBoot.generateHourly(
+                        symbol, currentPrices.getOrDefault(symbol, 5000.0),
+                        htfDays, seed, Instant.now());
+                com.topstep.trading.strategy.HtfSeriesRegistry.get(symbol).ifPresentOrElse(mgr -> {
+                    com.topstep.trading.strategy.BarAggregationManager.SeedResult res =
+                            mgr.seedHigherTimeframe(h1);
+                    logger.info("[HTF-Backfill {}] seeded {} H1 bars -> {} H4, {} D1 ({} days, {} refused, SYNTHETIC)",
+                            symbol, res.h1Seeded(), res.h4Derived(), res.d1Derived(),
+                            htfDays, res.refused());
+                }, () -> logger.warn("[HTF-Backfill {}] no aggregation manager registered — skipping seed", symbol));
+            } catch (Exception e) {
+                logger.warn("[HTF-Backfill {}] non-fatal failure: {} — continuing without HTF depth",
+                        symbol, e.getMessage());
+            }
         }
 
         // Start generating mock candles (default: every 5 seconds; see the

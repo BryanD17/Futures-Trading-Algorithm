@@ -124,6 +124,68 @@ public final class SimWarmBoot {
         return out;
     }
 
+    /** Same depth property + clamp the TIER-2 HTF seed uses: [7,90], default 30. */
+    public static final String HTF_DAYS_PROPERTY = "htf.backfill.days";
+
+    /** Configured TIER-2 depth in days, clamped to [7, 90] (default 30). */
+    public static int configuredHtfDays() {
+        return (int) Math.min(90L, Math.max(7L, Long.getLong(HTF_DAYS_PROPERTY, 30L)));
+    }
+
+    /**
+     * Generate {@code days} of synthetic H1 bars ending strictly before
+     * {@code endExclusive} (V3 Agent 04 — SIM's TIER-2 equivalent, so the
+     * H4/D1 ladder is exercised in SIM exactly like LIVE). Deterministic
+     * for identical inputs; skips the 17:00-18:00 ET maintenance hour and
+     * the weekend gap (Fri 17:00 ET -> Sun 18:00 ET); the final close is
+     * anchored to {@code basePrice} so the series meets the 1m tier
+     * seamlessly.
+     */
+    public static List<Candle> generateHourly(String symbol, double basePrice,
+                                              int days, long seed, Instant endExclusive) {
+        int d = (int) Math.min(90L, Math.max(7L, days));
+        Instant end = endExclusive.truncatedTo(ChronoUnit.HOURS);
+        Instant start = end.minus(Duration.ofDays(d));
+        Random rng = new Random(seed ^ 0x48544631L ^ (long) symbol.hashCode()); // "HTF1"
+
+        double amplitude = basePrice * 0.004;
+        java.util.List<Instant> stamps = new ArrayList<>();
+        for (Instant t = start; t.isBefore(end); t = t.plus(Duration.ofHours(1))) {
+            java.time.ZonedDateTime et = t.atZone(java.time.ZoneId.of("America/New_York"));
+            int hour = et.getHour();
+            java.time.DayOfWeek dow = et.getDayOfWeek();
+            if (hour == 17) continue;                                    // maintenance
+            if (dow == java.time.DayOfWeek.SATURDAY) continue;           // weekend
+            if (dow == java.time.DayOfWeek.SUNDAY && hour < 18) continue;
+            if (dow == java.time.DayOfWeek.FRIDAY && hour > 17) continue;
+            stamps.add(t);
+        }
+        int n = stamps.size();
+        if (n == 0) return List.of();
+        double[] closes = new double[n];
+        double level = basePrice;
+        for (int i = 0; i < n; i++) {
+            level += rng.nextGaussian() * amplitude * 0.25;
+            closes[i] = level;
+        }
+        double correction = basePrice - closes[n - 1];
+        for (int i = 0; i < n; i++) {
+            closes[i] += correction * ((double) (i + 1) / n);
+        }
+        List<Candle> out = new ArrayList<>(n);
+        double prevClose = closes[0];
+        for (int i = 0; i < n; i++) {
+            double open = prevClose;
+            double close = closes[i];
+            double wick = Math.abs(rng.nextGaussian()) * amplitude * 0.08;
+            out.add(new Candle(symbol, stamps.get(i), open,
+                    Math.max(open, close) + wick, Math.min(open, close) - wick,
+                    close, 2000 + rng.nextInt(4000)));
+            prevClose = close;
+        }
+        return out;
+    }
+
     /**
      * The day's structural shape as a fraction of the leg amplitude, by
      * minute-of-synthetic-day. Piecewise linear:
