@@ -735,12 +735,34 @@ public class LiveEngineRunner {
     /**
      * Handle strategy signal event.
      */
+    /**
+     * Release the strategy's post-emission latch when a signal dies without
+     * an order or position (2026-07-27 no-trade fix). The STDV+OTE core
+     * enters IN_TRADE (and the scalp runner sets positionOpen=true) the
+     * moment it EMITS — before this engine decides whether an order is
+     * actually placed. Every suppressed/vetoed/rejected signal therefore
+     * used to leave the symbol latched forever: no position would ever
+     * close, so the re-arm engine's positionOpen guard blocked all future
+     * setups until a process restart. The release publishes a synthetic
+     * PositionClosedEvent (pnl 0), whose ONLY subscriber is the strategy
+     * runner — it clears the latch and starts the normal re-arm cooldown.
+     * NOT used when a real order/position exists (duplicate-pending and
+     * existing-position skips): their genuine close events arrive later.
+     */
+    private void releaseUnexecutedSignal(StrategySignalEvent signal, String why) {
+        System.out.println("[SignalRelease] " + signal.getSymbol() + ": " + why
+                + " — releasing strategy latch (no order/position created)");
+        eventBus.publish(new com.topstep.trading.event.PositionClosedEvent(
+                signal.getSymbol(), 0.0, false, Instant.now()));
+    }
+
     private void handleStrategySignal(StrategySignalEvent signal) {
         // ── WARMUP GUARD layer 1: nothing trades until every initial
         // subscription (and its synchronous historical backfill) returned.
         if (!warmupComplete) {
             System.out.println("[Warmup] Suppressing signal during startup warmup: "
                 + signal.getSignalType() + " " + signal.getSymbol());
+            releaseUnexecutedSignal(signal, "warmup suppression");
             return;
         }
 
@@ -750,6 +772,7 @@ public class LiveEngineRunner {
             System.out.println("[Warmup] Suppressing signal created during historical replay: "
                 + signal.getSignalType() + " " + signal.getSymbol()
                 + " (created=" + signal.getTimestamp() + ")");
+            releaseUnexecutedSignal(signal, "created during warmup replay");
             return;
         }
 
@@ -761,11 +784,13 @@ public class LiveEngineRunner {
             System.out.println("[Warmup] Suppressing signal from historical/stale data: "
                 + signal.getSignalType() + " " + signal.getSymbol()
                 + " (lastCandle=" + lastTs + ")");
+            releaseUnexecutedSignal(signal, "stale-data suppression");
             return;
         }
 
         if (paused.get() || killSwitchActive.get() || flatteningPositions.get()) {
             System.out.println("\n⏸ Signal ignored (paused/kill/flattening): " + signal.getReason());
+            releaseUnexecutedSignal(signal, "paused/kill/flattening");
             return;
         }
 
@@ -834,6 +859,7 @@ public class LiveEngineRunner {
             if (!riskManagerDecision.isApproved()) {
                 System.out.println("\n❌ LIVE Signal BLOCKED by TradingRiskManager: " + signal.getReason());
                 System.out.println("  Reason: " + riskManagerDecision.getReason());
+                releaseUnexecutedSignal(signal, "TradingRiskManager block");
                 return;
             }
 
@@ -842,6 +868,7 @@ public class LiveEngineRunner {
             if (conditionIssue != null) {
                 System.out.println("\n❌ LIVE Signal SKIPPED: " + signal.getReason());
                 System.out.println("  Reason: " + conditionIssue);
+                releaseUnexecutedSignal(signal, "market conditions");
                 return;
             }
         }
@@ -869,6 +896,7 @@ public class LiveEngineRunner {
         if (!riskCalc.isTradingAllowed()) {
             System.out.println("\n❌ Signal DENIED by PhaseAwareRiskCalculator: " + signal.getReason());
             System.out.println("  Reason: " + riskCalc.getBlockReason());
+            releaseUnexecutedSignal(signal, "PhaseAwareRiskCalculator deny");
             return;
         }
 
@@ -912,11 +940,15 @@ public class LiveEngineRunner {
 
             } catch (Exception e) {
                 System.err.println("❌ Order submission failed: " + e.getMessage());
+                // The order never reached the market — free the strategy.
+                executionEngine.removeOrder(signal.getSymbol());
+                releaseUnexecutedSignal(signal, "order submission failed");
             }
 
         } else {
             System.out.println("\n❌ Signal DENIED by PropFirmRiskEngine: " + signal.getReason());
             System.out.println("  Reason: " + decision.getReason());
+            releaseUnexecutedSignal(signal, "PropFirmRiskEngine deny");
         }
     }
 
@@ -975,11 +1007,19 @@ public class LiveEngineRunner {
             System.err.println("  ❌ ORDER REJECTED!");
             // Remove rejected order from ExecutionEngine
             executionEngine.removeOrderById(order.getSymbol(), orderId);
+            // No position will ever exist for this entry — free the strategy.
+            if (order.getFilledQuantity() == 0 && signal != null) {
+                releaseUnexecutedSignal(signal, "entry order REJECTED by broker");
+            }
         }
 
         if (status == OrderStatus.CANCELED) {
             // Remove cancelled order from ExecutionEngine
             executionEngine.removeOrderById(order.getSymbol(), orderId);
+            // A cancel with zero fill means the entry died unexecuted.
+            if (order.getFilledQuantity() == 0 && signal != null) {
+                releaseUnexecutedSignal(signal, "entry order CANCELED unfilled");
+            }
         }
     }
 
