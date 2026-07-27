@@ -65,6 +65,11 @@ public final class PremiumDiscountEvaluator {
     public static final int DEFAULT_EQ_BAND_TICKS = 2;
     /** System property: minimum developing-range span in ticks for R2. */
     public static final String MIN_RANGE_TICKS_PROPERTY = "pd.minRangeTicks";
+    /** System property: minimum D1 depth (bars) before R0 governs (V3 Agent 05). */
+    public static final String D1_MIN_BARS_PROPERTY = "pd.d1MinBars";
+    public static final int DEFAULT_D1_MIN_BARS = 10;
+    /** Fractal strength for the D1 dealing-range swings. */
+    public static final int D1_SWING_STRENGTH = 2;
 
     /** Three-position rollout switch (Rollout Doctrine). */
     public enum PdMode { OFF, LOG, BLOCK }
@@ -99,9 +104,20 @@ public final class PremiumDiscountEvaluator {
                 Integer.getInteger(MIN_RANGE_TICKS_PROPERTY, 2 * chartMinLeg));
         PremiumDiscountEvaluator e = new PremiumDiscountEvaluator(
                 symbol, tickSize, levels, mode, eqBand, minRange);
+        // R0 (V3 Agent 05): the D1 dealing range from the authoritative
+        // ladder, once it is at least pd.d1MinBars deep. Wired ONLY here —
+        // direct-constructed evaluators (tests, pre-Agent-05 wiring) keep
+        // an empty D1 source and behave exactly as before (fallback proof).
+        int d1MinBars = Integer.getInteger(D1_MIN_BARS_PROPERTY, DEFAULT_D1_MIN_BARS);
+        e.configureD1Source(() -> com.topstep.trading.strategy.HtfSeriesRegistry
+                .get(symbol)
+                .map(m -> m.getCandlesSnapshot(
+                        com.topstep.trading.strategy.BarAggregationManager.Timeframe.D1, 200))
+                .orElse(java.util.List.of()), d1MinBars);
         REGISTRY.put(symbol, e);
         System.out.println("[PD " + symbol + "] config: mode=" + mode
-                + " eqBandTicks=" + eqBand + " minRangeTicks=" + minRange);
+                + " eqBandTicks=" + eqBand + " minRangeTicks=" + minRange
+                + " d1MinBars=" + d1MinBars);
         return e;
     }
 
@@ -136,6 +152,23 @@ public final class PremiumDiscountEvaluator {
     private final AtomicLong blockedShort = new AtomicLong();
     private final Map<String, AtomicLong> abstainsByReason = new ConcurrentHashMap<>();
     private final Map<String, AtomicLong> verdictsByRangeSource = new ConcurrentHashMap<>();
+
+    /**
+     * D1 series source for the R0 dealing range (V3 Agent 05). Default:
+     * EMPTY — R0 never governs unless {@link #configureD1Source} wires a
+     * real ladder, so every pre-Agent-05 behavior (and test) is unchanged.
+     */
+    private volatile java.util.function.Supplier<java.util.List<com.topstep.trading.domain.Candle>>
+            d1Source = java.util.List::of;
+    private volatile int d1MinBars = DEFAULT_D1_MIN_BARS;
+
+    /** Wire the D1 ladder for R0 (production: install(); tests: direct). */
+    public void configureD1Source(
+            java.util.function.Supplier<java.util.List<com.topstep.trading.domain.Candle>> source,
+            int minBars) {
+        if (source != null) this.d1Source = source;
+        this.d1MinBars = Math.max(1, minBars);
+    }
 
     /** Token of the most recent gate event since the last [GATES] line. */
     private volatile String pendingGateEventToken;
@@ -238,7 +271,16 @@ public final class PremiumDiscountEvaluator {
         double hi;
         double lo;
         String source;
-        if (pdh.isPresent() && pdl.isPresent() && pdh.get() > pdl.get()
+        double[] d1Range = d1DealingRange();
+        if (d1Range != null) {
+            // R0 (V3 Agent 05): the last ESTABLISHED D1 swing high/low —
+            // the dealing range where the methodology starts. Falls through
+            // to R1/R2/R3 exactly as before whenever D1 is thin or has no
+            // confirmed swings yet (safe degradation by construction).
+            hi = d1Range[0];
+            lo = d1Range[1];
+            source = "R0-D1";
+        } else if (pdh.isPresent() && pdl.isPresent() && pdh.get() > pdl.get()
                 && price >= pdl.get() && price <= pdh.get()) {
             hi = pdh.get();
             lo = pdl.get();
@@ -265,6 +307,31 @@ public final class PremiumDiscountEvaluator {
 
         // Reused midpoint formula — never forked (C7).
         double eq = HtfTrendAnalyzer.equilibriumOf(hi, lo);
+        return verdictFor(price, hi, lo, eq, source);
+    }
+
+    /**
+     * The D1 dealing range: most recent fractal-strength-2 swing high and
+     * low on the D1 series, once it is {@code pd.d1MinBars} deep. Null when
+     * R0 cannot govern (thin series, no confirmed swings, degenerate range)
+     * — STDV_OTE_MODEL.md gives no explicit D1 dealing-range formula (its
+     * §H2 dealing range is the intraday manipulation leg), so the V3
+     * document's fallback definition applies; recorded in Appendix A-05.
+     */
+    private double[] d1DealingRange() {
+        java.util.List<com.topstep.trading.domain.Candle> d1 = d1Source.get();
+        if (d1 == null || d1.size() < d1MinBars) return null;
+        java.util.List<Double> highs = FractalSwings.swingHighs(d1, D1_SWING_STRENGTH);
+        java.util.List<Double> lows = FractalSwings.swingLows(d1, D1_SWING_STRENGTH);
+        if (highs.isEmpty() || lows.isEmpty()) return null;
+        double hi = highs.get(highs.size() - 1);
+        double lo = lows.get(lows.size() - 1);
+        if (!(hi > lo)) return null;
+        return new double[] {hi, lo};
+    }
+
+    private PdContext verdictFor(double price, double hi, double lo,
+                                 double eq, String source) {
         PdVerdict verdict;
         if (Math.abs(price - eq) <= eqBandTicks * tickSize) {
             verdict = PdVerdict.EQUILIBRIUM;

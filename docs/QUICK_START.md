@@ -264,9 +264,18 @@ Governing range resolution (each verdict logs which range governed):
 
 | Step | Range | When |
 |------|-------|------|
-| R1 | Yesterday's PDH/PDL | price inside [PDL, PDH] (default) |
+| R0 | D1 dealing range (last ESTABLISHED daily swing high/low, fractal strength 2) | once the D1 series is >= `pd.d1MinBars` (default 10) deep with confirmed swings |
+| R1 | Yesterday's PDH/PDL | price inside [PDL, PDH] |
 | R2 | Today's developing range | breakout day, once the range spans >= `pd.minRangeTicks` |
 | R3 | ABSTAIN | no usable range — gate PASSES, logs, counts |
+
+Every `[PD]` verdict names the governing range (`R0-D1`, `R1`, `R2`); a
+thin or failed HTF seed simply never activates R0 — the R1/R2/R3 chain is
+byte-identical to pre-R0 behavior. Related V3-Agent-05 knobs:
+`-Dbias.v1.includeH4=true` (DEFAULT false — measure first) lets the V1
+structure vote ABSTAIN when H4 fractal structure contradicts the 15m/30m
+read; V4 logs PWH/PWL tapped state in its detail string (context only,
+never a vote).
 
 Switch: `-Dpd.gate.mode=OFF|LOG|BLOCK` (DEFAULT **LOG**).
 

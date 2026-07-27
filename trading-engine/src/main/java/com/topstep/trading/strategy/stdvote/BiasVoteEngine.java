@@ -47,6 +47,15 @@ public final class BiasVoteEngine {
     /** System property: bias source switch. */
     public static final String MODE_PROPERTY = "bias.vote.mode";
 
+    /**
+     * System property (V3 Agent 05, DEFAULT false — measure first): when
+     * true, V1 additionally consults the seeded H4 series' fractal
+     * structure ({@link FractalSwings} — the SAME unmodified swing formula
+     * R0 uses) and ABSTAINS when H4 structure contradicts the 15m/30m
+     * read. It never adds a direction of its own — consult, not overrule.
+     */
+    public static final String INCLUDE_H4_PROPERTY = "bias.v1.includeH4";
+
     /** Three-position rollout switch (Rollout Doctrine). */
     public enum VoteMode { LEGACY, LOG, VOTE }
 
@@ -65,13 +74,26 @@ public final class BiasVoteEngine {
     public record BiasVoteResult(MarketBias finalBias, List<BiasVote> votes,
                                  int alignedBull, int alignedBear, int abstains) {}
 
-    /** Everything one evaluation needs — assembled by the runner per 15m bar. */
+    /** Everything one evaluation needs — assembled by the runner per 15m bar.
+     *  The V3-Agent-05 extras (weekly levels for V4 detail, H4 series for
+     *  the optional V1 consult) default to empty via the 6-arg convenience
+     *  constructor, so pre-Agent-05 callers and tests compile unchanged. */
     public record VoteInputs(HtfTrendState trendState,
                              DailyPhase amdPhase,
                              Optional<Double> trueDayOpen,
                              double price,
                              Optional<KnownLevel> pdh,
-                             Optional<KnownLevel> pdl) {}
+                             Optional<KnownLevel> pdl,
+                             Optional<KnownLevel> pwh,
+                             Optional<KnownLevel> pwl,
+                             List<com.topstep.trading.domain.Candle> h4Series) {
+        public VoteInputs(HtfTrendState trendState, DailyPhase amdPhase,
+                          Optional<Double> trueDayOpen, double price,
+                          Optional<KnownLevel> pdh, Optional<KnownLevel> pdl) {
+            this(trendState, amdPhase, trueDayOpen, price, pdh, pdl,
+                    Optional.empty(), Optional.empty(), List.of());
+        }
+    }
 
     // Per-symbol registry for the API layer (OteAgreementStats pattern).
     private static final Map<String, BiasVoteEngine> REGISTRY = new ConcurrentHashMap<>();
@@ -83,9 +105,10 @@ public final class BiasVoteEngine {
                 PremiumDiscountEvaluator.EQ_BAND_TICKS_PROPERTY,
                 PremiumDiscountEvaluator.DEFAULT_EQ_BAND_TICKS);
         BiasVoteEngine e = new BiasVoteEngine(symbol, tickSize, mode, eqBand);
+        e.includeH4 = Boolean.getBoolean(INCLUDE_H4_PROPERTY);
         REGISTRY.put(symbol, e);
         System.out.println("[VOTE " + symbol + "] config: mode=" + mode
-                + " eqBandTicks=" + eqBand);
+                + " eqBandTicks=" + eqBand + " v1.includeH4=" + e.includeH4);
         return e;
     }
 
@@ -109,6 +132,18 @@ public final class BiasVoteEngine {
     private final double tickSize;
     private final VoteMode mode;
     private final int eqBandTicks;
+    /** {@code bias.v1.includeH4} — set by install(); false in direct ctor. */
+    private volatile boolean includeH4;
+
+    /** True when V1 should consult the H4 series (runner input hint). */
+    public boolean includeH4() {
+        return includeH4;
+    }
+
+    /** Test hook mirroring configureBiasHysteresis's pattern. */
+    void configureIncludeH4(boolean enabled) {
+        this.includeH4 = enabled;
+    }
 
     // ── Session-scoped agreement counters (labeled; NOT persisted) ───────
     private final AtomicLong evaluations = new AtomicLong();
@@ -267,11 +302,32 @@ public final class BiasVoteEngine {
      */
     public BiasVoteResult evaluate(VoteInputs in, MarketBias legacyBias) {
         evaluations.incrementAndGet();
+        BiasVote v1 = voteV1(in.trendState());
+        // Optional H4 consult (V3 Agent 05, DEFAULT OFF): H4 fractal
+        // structure contradicting the 15m/30m direction demotes V1 to
+        // ABSTAIN. It never invents a direction (consult, not overrule).
+        if (includeH4 && v1.direction() != VoteDirection.ABSTAIN
+                && in.h4Series() != null && !in.h4Series().isEmpty()) {
+            int h4Dir = FractalSwings.direction(in.h4Series(), 2);
+            boolean conflict = (h4Dir > 0 && v1.direction() == VoteDirection.BEAR)
+                    || (h4Dir < 0 && v1.direction() == VoteDirection.BULL);
+            if (conflict) {
+                v1 = new BiasVote("V1", VoteDirection.ABSTAIN,
+                        "h4-conflict(" + v1.detail() + ")");
+            }
+        }
+        BiasVote v4 = voteV4(in.price(), in.pdh(), in.pdl(), tickSize, eqBandTicks);
+        // Weekly draw CONTEXT in the detail string only — no vote change
+        // (V3 Agent 05; §H1 names the DAILY draw, so PWH/PWL stay telemetry).
+        String weekly = weeklyDetail(in.pwh(), in.pwl());
+        if (!weekly.isEmpty()) {
+            v4 = new BiasVote(v4.source(), v4.direction(), v4.detail() + weekly);
+        }
         List<BiasVote> votes = List.of(
-                voteV1(in.trendState()),
+                v1,
                 voteV2(in.amdPhase()),
                 voteV3(in.price(), in.trueDayOpen(), tickSize, eqBandTicks),
-                voteV4(in.price(), in.pdh(), in.pdl(), tickSize, eqBandTicks));
+                v4);
         BiasVoteResult result = aggregate(votes);
         boolean agreed = result.finalBias() == legacyBias;
         lastResult = result;
@@ -295,6 +351,16 @@ public final class BiasVoteEngine {
           .append(" AGREE=").append(agreed);
         System.out.println(sb);
         return result;
+    }
+
+    /** Weekly tapped-state context for V4's detail string (never a vote). */
+    private static String weeklyDetail(Optional<KnownLevel> pwh, Optional<KnownLevel> pwl) {
+        if (pwh.isEmpty() && pwl.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder(",wk:");
+        pwh.ifPresent(l -> sb.append("PWH-").append(l.isRaided() ? "tapped" : "untapped"));
+        if (pwh.isPresent() && pwl.isPresent()) sb.append('/');
+        pwl.ifPresent(l -> sb.append("PWL-").append(l.isRaided() ? "tapped" : "untapped"));
+        return sb.toString();
     }
 
     /** Compact rollup for the [GATES] line: {@code vote=NEUTRAL(1/1/2) agree=false}. */
