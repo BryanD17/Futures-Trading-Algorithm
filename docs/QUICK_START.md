@@ -394,6 +394,30 @@ The stats loader logs a reminder at boot once the threshold is met:
 `[OTE-VERDICT] 17 sessions collected — evaluation due.` — that line is
 your cue to run the numbers above.
 
+### OWNER'S ROLLOUT RUNBOOK (V3 — the one-switch-at-a-time rule)
+
+Everything V3 added is in LOG mode, counting quietly. NEVER flip two
+switches in the same week — attribution dies the moment two behavior
+changes overlap. Order of adoption (matches expected impact and risk):
+
+1. `-Dpd.gate.mode=BLOCK` — after 3–5 LIVE LOG sessions (playbook in the
+   M2b section above).
+2. `-Dbias.vote.mode=VOTE` — after reviewing the agreement counters
+   (playbook in THE BIAS VOTE section). Keep hysteresis settings
+   unchanged that week.
+3. `-Dote30m.confluence=GATE` — ONLY when the M7b promote criteria pass
+   (that section's blockquote is the decision rule; DELETE is the other
+   arm).
+
+First evidence tables: `docs/reports/TOPDOWN_MEASUREMENT_01.md`
+(synthetic-tape pipeline validation — live observation precedes any flip).
+
+Standing safety checks (unchanged from V2, still true): `warm=true`
+before expecting trades; Bot Chart matches TopstepX; `lastGateFailed`
+should name market reasons, not plumbing; DLL/MLL/flatten-by verified;
+Topstep's current written automation policy re-checked for the account
+type; kill switch tested weekly.
+
 ### OTE AGREEMENT COUNTERS — the adoption playbook (V2)
 
 `/api/chart/{symbol}` now carries an `oteStats` object and the `[GATES]`
