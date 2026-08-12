@@ -76,6 +76,17 @@ public final class MutableDetection implements Detection {
         this.stateChangedAtBar = bar;
     }
 
+    /**
+     * §S6 pool update: replace the zone outright. Distinct from
+     * {@link #widenTo} because a re-clustered pool's band is RECOMPUTED (a
+     * newer ATR gives a different tolerance), not accumulated — widening
+     * would let a pool grow monotonically until it covered everything.
+     */
+    void resetZone(double bottom, double top) {
+        this.priceBottom = Math.min(bottom, top);
+        this.priceTop = Math.max(bottom, top);
+    }
+
     /** §S2 consecutive-gap merge: widen the zone to the union of both gaps. */
     void widenTo(double bottom, double top) {
         this.priceBottom = Math.min(this.priceBottom, Math.min(bottom, top));

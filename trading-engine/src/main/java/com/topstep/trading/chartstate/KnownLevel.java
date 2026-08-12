@@ -23,6 +23,15 @@ public class KnownLevel {
     private final int clusterSize;              // Number of swing points in cluster
     private final double clusterSpread;         // Price spread of the cluster
 
+    /**
+     * Where this level came from (V4 Agent 03). "NATIVE" for everything the
+     * LevelEngine computes itself; "ICTLIB_CLUSTER" for a §S6 liquidity pool
+     * published through IctLibLevelAdapter. Purely descriptive — no consumer
+     * branches on it, so levels behave identically whatever their source.
+     * Defaults to NATIVE in every pre-existing constructor.
+     */
+    private String source = "NATIVE";
+
     // State tracking
     private int touchCount;                     // How many times price approached this level
     private boolean raided;                     // Has this level been swept
@@ -89,6 +98,15 @@ public class KnownLevel {
         this(type.name(), type, price, createdAt, null, clusterSize, 0.0);
     }
 
+    /**
+     * Equal-level constructor carrying a source tag (V4 Agent 03).
+     */
+    public KnownLevel(LevelType type, double price, Instant createdAt,
+                      int clusterSize, String source) {
+        this(type.name(), type, price, createdAt, null, clusterSize, 0.0);
+        if (source != null && !source.isBlank()) this.source = source;
+    }
+
     private static String generateId(String instrument, LevelType type, double price, Instant createdAt) {
         return String.format("%s_%s_%.5f_%d", instrument, type.name(), price, createdAt.toEpochMilli());
     }
@@ -119,6 +137,11 @@ public class KnownLevel {
 
     public Instant getExpiresAt() {
         return expiresAt;
+    }
+
+    /** Provenance tag: "NATIVE", or "ICTLIB_CLUSTER" for a §S6 pool. */
+    public String getSource() {
+        return source;
     }
 
     public int getClusterSize() {

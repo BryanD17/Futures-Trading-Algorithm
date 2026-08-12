@@ -52,6 +52,13 @@ public final class IctLibEngine {
     private final IctLibConfig config;
     private final Map<String, SymbolState> states = new ConcurrentHashMap<>();
 
+    /**
+     * §S6 pools are published into the engine's ONE level universe through
+     * this adapter (Appendix E8). Symbols with no LevelEngine attached are
+     * simply not published — never an error, never a block.
+     */
+    private final IctLibLevelAdapter levelAdapter = new IctLibLevelAdapter();
+
     public IctLibEngine() {
         this(IctLibConfig.fromSystemProperties());
     }
@@ -62,6 +69,22 @@ public final class IctLibEngine {
 
     public IctLibConfig config() {
         return config;
+    }
+
+    /**
+     * Attach a symbol's {@link com.topstep.trading.chartstate.LevelEngine} so
+     * confirmed §S6 pools register as equal-high/low levels the raid pipeline
+     * can fire on. One-directional: ictlib publishes, it never reads raid state
+     * back.
+     */
+    public void attachLevelEngine(String symbol,
+                                  com.topstep.trading.chartstate.LevelEngine engine) {
+        levelAdapter.attach(symbol, engine);
+    }
+
+    /** The pool → LevelEngine adapter (exposed for tests and diagnostics). */
+    public IctLibLevelAdapter levelAdapter() {
+        return levelAdapter;
     }
 
     /**
@@ -84,7 +107,7 @@ public final class IctLibEngine {
         if (candle.isPartial()) return;
 
         SymbolState st = states.computeIfAbsent(candle.getSymbol(),
-                s -> new SymbolState(s, config));
+                s -> new SymbolState(s, config, levelAdapter));
         synchronized (st) {
             st.ingest(candle);
         }
@@ -92,7 +115,8 @@ public final class IctLibEngine {
 
     /** The symbol's registry, created empty on first ask (never null). */
     public DetectionRegistry registry(String symbol) {
-        return states.computeIfAbsent(symbol, s -> new SymbolState(s, config)).registry;
+        return states.computeIfAbsent(symbol,
+                s -> new SymbolState(s, config, levelAdapter)).registry;
     }
 
     /** The symbol's registry only if candles have been seen for it. */
@@ -127,7 +151,7 @@ public final class IctLibEngine {
         final IctLibDiffStats diff;
         LocalDate sessionDate;
 
-        SymbolState(String symbol, IctLibConfig config) {
+        SymbolState(String symbol, IctLibConfig config, IctLibLevelAdapter adapter) {
             this.symbol = symbol;
             this.config = config;
             this.registry = new DetectionRegistry(symbol, config.retentions());
@@ -137,10 +161,18 @@ public final class IctLibEngine {
             this.diff = IctLibDiffStats.forSymbol(symbol);
             for (String tf : new String[]{TF_1M, TF_15M}) {
                 series.put(tf, new TimeframeSeries(tf));
+                // Every family runs on BOTH timeframes. Appendix S names 1m as
+                // the default and 1m+15m for §S1/§S2 specifically; running the
+                // rest on both as well costs a few capped lists and gives the
+                // chart a legible layer (1m pools on a 30m chart are noise)
+                // without any consumer having to re-derive anything.
                 detectors.put(tf, List.of(
                         new DisplacementScanner(config),
                         new FairValueGapDetector(config),
-                        new BprDetector()));
+                        new BprDetector(),
+                        new VolumeImbalanceDetector(config),
+                        new OpeningGapDetector(),
+                        new LiquidityPoolDetector(config, adapter)));
             }
         }
 

@@ -23,7 +23,19 @@ public enum DetectionType {
     FVG("fvg"),
 
     /** §S3 — balanced price range: overlap of an active bullish and bearish FVG. */
-    BPR("bpr");
+    BPR("bpr"),
+
+    /** §S4 — body gap between consecutive candles whose wicks still overlap. */
+    VOLUME_IMBALANCE("volumeImbalance"),
+
+    /** §S5 — gap between the previous week's last session close and the week open. */
+    OPENING_GAP_WEEKLY("openingGapWeekly"),
+
+    /** §S5 — gap between the previous session's close and the current session's open. */
+    OPENING_GAP_DAILY("openingGapDaily"),
+
+    /** §S6 — clustered equal swings: where resting stops pool. */
+    LIQUIDITY_POOL("liquidityPool");
 
     private final String jsonKey;
 

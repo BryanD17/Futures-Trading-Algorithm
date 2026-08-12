@@ -214,7 +214,7 @@ SECTION 2 — PROGRESS LEDGER
 
   [✅] Agent 01 — Pre-Flight: Predecessor State + Baselines + License Sweep Base
   [✅] Agent 02 — ictlib I: Displacement, FVG/IFVG, BPR (spec §S1–§S3)
-  [⬜] Agent 03 — ictlib II: Volume Imbalance, Opening Gaps, Liquidity Pools (§S4–§S6)
+  [✅] Agent 03 — ictlib II: Volume Imbalance, Opening Gaps, Liquidity Pools (§S4–§S6)
   [⬜] Agent 04 — ictlib III: Order Blocks + Structure Engine MSS/BOS (§S7–§S8)
   [⬜] Agent 05 — Trend-Shift OTE Anchoring Mode in ChartEngine (§S9)
   [⬜] Agent 06 — Bot Chart Overlay Parity (Every Detection Rendered)
@@ -224,6 +224,15 @@ SECTION 2 — PROGRESS LEDGER
 
   LEDGER NOTES (append one dated line per completion):
   ------------------------------------------------------------------
+  2026-08-12 Agent 03 ✅ — §S4/§S5/§S6 landed. Volume imbalance carries a
+    near-miss negative for all five inequalities in BOTH directions (10 tests);
+    opening gaps key on TradingSessionCalendar only (one calendar, one truth)
+    and survive a holiday-shifted Monday; liquidity pools publish into
+    LevelEngine as ICTLIB_CLUSTER equal levels — proven raid-able by
+    integration test. Bug caught by the tests, not by review: a cold-ATR early
+    return was DISCARDING confirmed pivots instead of merely abstaining from
+    clustering, which silently delayed every pool by a scan window. ictlib
+    suite 67/67, full suite 579/0.
   2026-08-12 Agent 02 ✅ — ictlib package born (16 classes) behind ONE ingest
     seam (ChartEngine.setCandleTap). §S1/§S2/§S3 implemented from spec with
     monotonic lifecycles, consecutive-gap merge, IFVG flag and per-family
@@ -1140,7 +1149,7 @@ block empty for an agent marked ✅.
   STATUS:            ✅ COMPLETE
   DATE COMPLETED:    2026-08-12
   PR NUMBER:         #142 (base Main, state MERGED)
-  COMMIT HASH:       recorded in the Agent 03 doc update
+  COMMIT HASH:       ff1a2c6  (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - Package + registry + engine with ONE ingest seam:
         package  trading-engine/src/main/java/com/topstep/trading/ictlib/
@@ -1303,20 +1312,166 @@ block empty for an agent marked ✅.
       MutableDetection, TimeframeSeries.
 
 ··· APPENDIX A-03 — Agent 03: ictlib II (VI, Opening Gaps, Liquidity Pools) ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
-  COMMIT HASH:       (squash-merge commit on Main)
+  STATUS:            ✅ COMPLETE
+  DATE COMPLETED:    2026-08-12
+  PR NUMBER:         #143 (base Main, state MERGED)
+  COMMIT HASH:       recorded in the Agent 04 doc update
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - §S4-§S6 implemented per spec (file:line per family):
+        §S4  ictlib/VolumeImbalanceDetector.java:32
+             (the five conditions are one conjunct each, in spec order, at
+              VolumeImbalanceDetector.java:97 and :108 — readable against the
+              spec line by line, which is the point)
+        §S5  ictlib/OpeningGapDetector.java:38
+        §S6  ictlib/LiquidityPoolDetector.java:47
+             cluster arithmetic (pure, so W4 is a direct unit test):
+             LiquidityPoolDetector.java:120
+        support: ictlib/SwingPivots.java:19 (confirmHigh :34, atr :73)
+        adapter: ictlib/IctLibLevelAdapter.java:31
+        config:  ictlib/IctLibConfig.java — every §S4/§S5/§S6 parameter with
+                 its spec default and an ictlib.* override.
+    - NEAR-MISS NEGATIVE TESTS for every §S4 inequality (10 of them, all
+      PASSED) — IctLibVolumeImbalanceTest:
+        w3Positive                  W3 verbatim -> zone [21002.00, 21005.00]
+        bullNegativeCondition1      o[i]=21001.5 not above c[i-1]      -> none
+        bullNegativeCondition2      c[i]=21001 not above c[i-1]        -> none
+        bullNegativeCondition3      o[i-1]=21006                       -> none
+        bullNegativeCondition4      l[i]=21003.5, no wick overlap      -> none
+        bullNegativeCondition5      h[i-1]=21006 pierces the body      -> none
+        bearishPositive             mirror -> zone [21000.00, 21005.00]
+        bearNegativeCondition1..5   the mirrored flips                 -> none
+        filledNeedsFullCoverage     poke-in stays ACTIVE; full cover -> FILLED
+        retentionCap                <= 6 over a 40-imbalance feed
+      SPEC OBSERVATION found while writing these: condition (3) cannot be the
+      SOLE failure for geometrically valid candles. o[i-1] <= h[i-1], and (5)
+      requires h[i-1] < bodyBot[i] <= o[i], so (5) already implies (3). The
+      condition is still evaluated in spec order (nothing removed); the (3')
+      tests assert the outcome and record the redundancy rather than pretend to
+      isolate it. Recorded in IctLibVolumeImbalanceTest#bullNegativeCondition3.
+    - LevelEngine adapter + integration test (pool -> raid-able level):
+        adapter          ictlib/IctLibLevelAdapter.java:31
+        engine hook      IctLibEngine.attachLevelEngine :80 / levelAdapter :86
+        LevelEngine API  chartstate/LevelEngine.java:447 (source-tagged
+                         overload of the previously CALLER-LESS addEqualLevel;
+                         the EQUAL_HIGH/EQUAL_LOW slots were unused, so
+                         nothing is displaced)
+        provenance       chartstate/KnownLevel.java:33 (source, default
+                         "NATIVE") + getSource :143
+        live wiring      StdvOteRunnerStrategy.setIctLibEngine :319 ->
+                         StdvOteMultiInstrumentEngine.setIctLibEngine :220 ->
+                         both runners
+        TEST IctLibLevelAdapterTest#poolBecomesARaidableLevel PASSED — it does
+        not merely assert the level exists, it asserts the level is RAID-ABLE:
+        price 21049.75, clusterSize 3, source ICTLIB_CLUSTER, isRaided false,
+        present in getUnraidedLevels(), and returned by
+        getNearestUnraidedLevelAbove(21000.0) — the exact query the raid
+        pipeline uses to pick a target.
+        Also PASSED: unattachedSymbolIsSkipped (no LevelEngine -> pools still
+        form, nothing published, no error); adapterNeverTouchesRaidState (pool
+        swept inside ictlib -> LevelEngine.isRaided still false, proving the
+        one-directional contract); nativeLevelsAreUntagged.
+    - Holiday-Monday opening-gap test PASSING:
+        IctLibOpeningGapTest#holidayMondayWeeklyGap — Friday 2026-08-07 closes
+        21000.0, Monday never trades at all, the week's first candles arrive
+        Tuesday 09:30 ET at 21040.0. ONE weekly gap forms, [21000.0, 21040.0],
+        midline 21020.0, sessionDate 2026-08-11. Nothing in the detector asks
+        whether a date "is a Monday" — weeks are compared by the SESSION
+        dates' Mondays, which is what makes the holiday case fall out for free.
+        Companion tests: w8DailyGap (Appendix W8 verbatim: 21020.0 -> 21031.5,
+        midline 21025.75); gapTouchesButNeverTerminates (trading fully through
+        the zone leaves it TOUCHED, never FILLED — these are magnets);
+        maintenanceBreakIsNotASession (a stray 17:30 ET bar does not become the
+        session close); midWeekBoundaryIsDailyOnly; zeroWidthGapIsNotADetection.
+        All timestamps are built through TradingSessionCalendar.ET, never fixed
+        UTC offsets (critical rule 10).
+    - Caps + determinism tested:
+        pools           IctLibLiquidityPoolTest#retentionCap (<= 4 per side)
+        VI              IctLibVolumeImbalanceTest#retentionCap (<= 6)
+        gaps            IctLibOpeningGapTest#retentionCaps (<= 2 daily, <= 3 weekly)
+        determinism     IctLibDeterminismTest#sameFeedSameDetections still
+                        green with all six families running, plus
+                        retentionCapsHoldOverALongFeed over 2000 bars.
+        §S6 ATR is a SIMPLE mean, not Wilder smoothing (SwingPivots.java:73):
+        Wilder's recursive form depends on where the series started, so a
+        replay of the same 50 bars would produce a different tolerance than the
+        live run did. Determinism is not negotiable here.
+    - Full suite green: trading-engine tests=579 failures=0 errors=0 skipped=1;
+      ictlib subtotal 67/67 across 10 classes.
+      `./gradlew clean build` BUILD SUCCESSFUL (17 actionable tasks).
+    - License sweep CLEAN: source-only grep (*.java/*.ts/*.tsx) for LuxAlgo |
+      ChartPrime | //@version | input.color | box.new -> 0 hits; grep -w Pine
+      -> 0 hits.
+    - PR merged: #143, base Main.
   SPEC DECISIONS (where Appendix S was ambiguous and you decided):
-    - (decision + first-principles reason, or "none")
+    - §S6 cluster contiguity — the spec says to stop at the first swing "farther
+      than tolerance from y ON THE FAR SIDE", then plainly states the cluster
+      must be contiguous in recency. The trailing clause is ambiguous, so the
+      plain rule governs: the walk stops at the first same-side swing more than
+      tolerance away in EITHER direction. First principles — a pool is a run of
+      swings that stopped at the same price, and a swing that broke well past
+      them ended that run whichever way it broke. Recorded at
+      LiquidityPoolDetector.java:26; asserted by #clusterIsContiguous.
+    - §S6 direction encoding — BUYSIDE/SELLSIDE mapped onto DetectionDirection
+      by WHERE the pool sits (BULLISH = buyside, above price), with the
+      unambiguous word also carried in meta.side so no consumer has to infer the
+      convention. Recorded at LiquidityPoolDetector.java:35.
+    - §S6 pool update semantics — a re-clustered pool's zone is RECOMPUTED
+      (MutableDetection.resetZone), not widened like a §S2 merge. A newer ATR
+      gives a different tolerance, and accumulating would let a pool grow
+      monotonically until it covered everything. Recorded at
+      MutableDetection.resetZone's javadoc.
+    - §S5 zero-width gaps — when the previous close equals the new open there is
+      no untraded band, so no detection is created. It would render as a line
+      the chart could never enter and would occupy a retention slot a real
+      magnet needs. Recorded at OpeningGapDetector.java:31; test
+      #zeroWidthGapIsNotADetection.
+    - §S5 week detection — the spec says a holiday-shifted week "keys on
+      SESSIONS, not calendar days" without giving a rule. DECIDED: compare the
+      SESSION dates' Mondays (previousOrSame(MONDAY)); a new week is any session
+      whose Monday differs from the previous session's. No calendar-day test, no
+      holiday table to maintain, and the holiday case needs no special path.
+      Recorded at OpeningGapDetector.java:22.
+    - §S5 calendar source — the V3 D1 ladder EXISTS (TradingSessionCalendar,
+      verified in Agent 01), so §S5 uses it and there is deliberately no local
+      notion of "day" in the detector. This is the direct mitigation of risk
+      G-R7 (two calendars drifting one session apart).
+    - Timeframes — Appendix S names 1m as the default for §S4-§S6 and 1m+15m for
+      §S1/§S2. DECIDED: every family runs on BOTH registered timeframes. Caps
+      are per (family, timeframe, side) so the memory cost is a few bounded
+      lists, and it gives the chart a legible layer — 1m pools drawn on a 30m
+      chart are noise. Recorded at IctLibEngine.java (SymbolState detector
+      construction).
   Q1/Q2/Q3 ANSWERS (where required):
-    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+    - Q1: full clean build + 579-test suite green at HEAD; the ictlib suite
+      re-run green after the pivot fix below.
+    - Q2: swept for a SECOND session calendar that could drift from
+      TradingSessionCalendar — LevelEngine keeps its own 17:00 ET trading-day
+      rollover for PDH/PDL, which is its existing contract and is NOT used by
+      §S5; the gap detector never reads it. Also swept for other callers of
+      addEqualLevel before publishing pools into it: there were NONE, so the
+      EQUAL_HIGH/EQUAL_LOW slots were free and no native level is displaced.
+    - Q3: failure class = "a detector that quietly drops data while abstaining".
+      FOUND AND FIXED: LiquidityPoolDetector returned early when ATR was still
+      cold, which skipped pivot CONFIRMATION as well as clustering — so every
+      swing during warmup was lost forever and the first real pool was delayed
+      by a full scan window. The tests caught it (a 3-pivot cluster produced
+      nothing while a 4-pivot one produced a 3-member cluster anchored at the
+      wrong swing). Fix: record swings unconditionally, abstain only from the
+      clustering step (LiquidityPoolDetector.java:78). Swept the other families
+      for the same shape — §S1/§S2 abstain by returning false from a pure
+      predicate and store nothing, §S5 skips only maintenance-break bars and
+      updates no state from them by design, so neither can lose data this way.
   ADAPTATIONS / REGRESSIONS / BLOCKED:
-    - (as in prior documents; "none" where clean)
+    - Adaptation: KnownLevel gained an optional `source` tag defaulting to
+      "NATIVE" in every pre-existing constructor, and LevelEngine gained a
+      source-tagged addEqualLevel overload. Purely additive and purely
+      descriptive — no consumer branches on the tag, so levels behave
+      identically whatever their origin.
+    - Adaptation: LevelEngine stores ONE level per LevelType, so each side has a
+      single equal-level slot and the most recently confirmed pool occupies it.
+      That is the existing shape of the level store, not a choice made here;
+      recorded in IctLibLevelAdapter's javadoc so nobody reads it as a bug.
+    - Regressions: none (579/0). Blocked: none.
 
 ··· APPENDIX A-04 — Agent 04: ictlib III (Order Blocks, MSS/BOS) ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)

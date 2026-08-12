@@ -214,6 +214,16 @@ public final class StdvOteMultiInstrumentEngine {
     }
 
     /**
+     * Hand the ICT library to every per-symbol strategy so each one publishes
+     * its LevelEngine (V4 Agent 03 — §S6 pools become raid-able levels).
+     */
+    public void setIctLibEngine(com.topstep.trading.ictlib.IctLibEngine engine) {
+        for (StdvOteRunnerStrategy s : strategies.values()) {
+            s.setIctLibEngine(engine);
+        }
+    }
+
+    /**
      * Stop routing. Unsubscribes market data and shuts strategies down.
      * Open positions managed by the execution engine are NOT closed here.
      */
