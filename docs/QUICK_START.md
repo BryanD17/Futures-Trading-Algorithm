@@ -608,6 +608,75 @@ dies upstream -> fix upstream fragility first (F3), then REVISIT whether
 
 ---
 
+## PROFILES & THE SIMULATOR — V4 Agent 08
+
+A **profile** is a named required-confluence set for entries.
+
+| Profile | Requires |
+|---------|----------|
+| `STRICT` **(default)** | today's full M1–M9 chain, byte-identical |
+| `STANDARD` | killzone + bias (legacy **or** vote) + scored sweep + a PD array (ictlib FVG **or** order block) + structure (gate MSS **or** ictlib MSS/BOS) + OTE band touch (machine leg **or** chart zone) + M2b/M8/M9 unchanged |
+| `MINIMAL` | killzone + sweep + structure + OTE band touch + M8/M9 unchanged |
+
+```bash
+-Dtrade.profile=STANDARD      # default STRICT
+```
+
+### RISK IS PROFILE-INDEPENDENT
+
+DLL/MLL, max contracts, flatten-by, sizing bounds, warmup guards, the kill
+switch and **killzone-only entry** hold identically in every profile. That is
+not a convention — `PropFirmRiskEngine` is never passed a profile and has no way
+to obtain one, and `ProfileRiskIndependenceTest` pins it with 16 tests
+parameterised across all three (including a structural test that fails the day
+someone threads a profile into the risk layer).
+
+### The seam
+
+**One** place in any gating path reads `TradeProfile.active()`:
+`MandatoryConfluenceValidator.validateStdvOte`. The chain runs first and exactly
+once in every profile — which matters beyond tidiness, because M2b and M7b keep
+LOG-mode counters and evaluating them twice would corrupt evidence the owner
+reads for a different decision.
+
+### The simulator runs whether or not you flip anything
+
+At every emission evaluation **and** on each 15m tick, all three profiles are
+judged. Running in `STRICT` — the default — every session still answers "what
+would `STANDARD` have done?", so a flip is never a guess.
+
+```
+[PROFILE MNQ] active=STRICT wouldTrade: STANDARD=3 MINIMAL=7 (session)
+```
+
+A profile that stays satisfied for twenty samples counts **once**: the counts
+measure opportunities, not how long a condition persisted.
+
+Would-trade events carry the timestamp, direction, entry/stop/target and the
+active profile's **full** blocking-gate list, and persist to JSONL
+(`-Dprofile.sim.file`, default `data/profile_sim.jsonl`) so they survive
+restarts. `GET /api/confluence/{symbol}` serves the counters, the ranked
+blocking gates and the last 5 events per profile.
+
+### ADOPTION PLAYBOOK — in order, no shortcuts
+
+1. **Observe.** Run at defaults (`STRICT`) in LIVE for 3–5 sessions. The
+   simulator is already recording.
+2. **Read the three numbers daily** (runbook R2): would-trade counts, STRICT's
+   ranked blocking gates, `[ICTLIB-DIFF]`.
+3. **If `MINIMAL` = 0** → the problem is upstream (warmth, sweeps, funnel
+   progression), *not* strictness. No flag fixes that. Fix upstream first.
+   **This is what the first report found — see `docs/reports/PROFILE_SIM_01.md`.**
+4. **If `STANDARD` >> `STRICT` = 0** with sane blocking gates → review the last
+   10 would-trade events against the Bot Chart. Would you have taken them by
+   hand? If most yes, flip to `STANDARD`.
+5. **One switch, one week.** Never move `trade.profile` and `chart.anchorMode`
+   in the same week — neither result would mean anything.
+6. **Never flip straight to `MINIMAL`.** It is a diagnostic floor, not a trading
+   mode. Trading it requires a written reason in the V4 LEDGER NOTES first.
+
+---
+
 ## THE CONFLUENCE STACK — V4 Agent 07
 
 `GET /api/confluence/{symbol}` returns **one snapshot per direction**: every
