@@ -77,6 +77,13 @@ public class SimEngineRunner {
     private final com.topstep.trading.chart.ChartEngine chartEngine =
             new com.topstep.trading.chart.ChartEngine();
 
+    // V4 Agent 02 — the ICT detection library, hung off the chart's candle tap
+    // so it provably reads the same bars the Bot Chart draws (ONE ingest seam).
+    // Observation-grade: it feeds the chart overlay, the confluence snapshot
+    // and the profile simulator, and gates nothing.
+    private final com.topstep.trading.ictlib.IctLibEngine ictLibEngine =
+            com.topstep.trading.ictlib.IctLibEngine.attachTo(chartEngine);
+
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
     private final CountDownLatch shutdownLatch = new CountDownLatch(1);
@@ -200,6 +207,7 @@ public class SimEngineRunner {
             );
             EngineFacade.getInstance().setSimRunner(this);
             EngineFacade.getInstance().setChartEngine(chartEngine);
+            EngineFacade.getInstance().setIctLibEngine(ictLibEngine);
 
             // Subscribe to market data. Multi-instrument mode owns its own
             // subscriptions for all active + SMT-only symbols; single-symbol

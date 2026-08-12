@@ -135,6 +135,31 @@ public class EngineFacade {
         return chartEngine;
     }
 
+    /**
+     * The running engine's ICT detection library (V4 Agent 02). Registered by
+     * the runners alongside the ChartEngine and dropped with it, so the API
+     * never serves a stopped engine's stale detections.
+     */
+    private com.topstep.trading.ictlib.IctLibEngine ictLibEngine;
+
+    /** Register the running engine's ICT library (called by the runners). */
+    public synchronized void setIctLibEngine(
+            com.topstep.trading.ictlib.IctLibEngine engine) {
+        this.ictLibEngine = engine;
+    }
+
+    /**
+     * The ICT detection library. Never null — with no runner registered an
+     * empty library is created, so the API returns the honest empty shape
+     * exactly as {@link #getChartEngine()} does.
+     */
+    public synchronized com.topstep.trading.ictlib.IctLibEngine getIctLibEngine() {
+        if (ictLibEngine == null) {
+            ictLibEngine = new com.topstep.trading.ictlib.IctLibEngine();
+        }
+        return ictLibEngine;
+    }
+
     // ==================== Control Operations ====================
 
     /**
@@ -313,6 +338,7 @@ public class EngineFacade {
         // empty shape (warm=false) instead of a dead engine's stale memory
         // — the dashboard's COLD banner depends on this being truthful.
         chartEngine = null;
+        ictLibEngine = null;
     }
 
     /**
@@ -570,6 +596,7 @@ public class EngineFacade {
         simRunner = null;
         liveRunner = null;
         chartEngine = null;
+        ictLibEngine = null;
     }
 
     /**

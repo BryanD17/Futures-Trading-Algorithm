@@ -129,6 +129,20 @@ public final class ChartEngine {
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
+     * Optional downstream consumer of the SAME 1m candles this chart sees
+     * (V4 Agent 02). The ICT detection library hangs off this tap rather than
+     * subscribing to the market-data bus separately, so the detections drawn on
+     * the Bot Chart are provably derived from the candles drawn beneath them.
+     * Null (the default) = nothing attached, zero cost.
+     */
+    private volatile java.util.function.Consumer<Candle> candleTap;
+
+    /** Install the single downstream candle tap (null clears it). */
+    public void setCandleTap(java.util.function.Consumer<Candle> tap) {
+        this.candleTap = tap;
+    }
+
+    /**
      * Feed a 1m candle (historical backfill or live — same path, which is what
      * guarantees the in-memory chart matches the broker chart).
      */
@@ -138,6 +152,18 @@ public final class ChartEngine {
                 candle.getSymbol(), s -> new SymbolChart(s));
         synchronized (chart) {
             chart.ingest(candle);
+        }
+        // Outside the per-symbol lock: the tap must never be able to stall the
+        // chart's own ingest, and it keeps its own state.
+        java.util.function.Consumer<Candle> tap = candleTap;
+        if (tap != null) {
+            try {
+                tap.accept(candle);
+            } catch (RuntimeException e) {
+                // Observation-grade consumers never take down the candle path.
+                System.out.println("[CHART " + candle.getSymbol()
+                        + "] candle tap failed: " + e);
+            }
         }
     }
 
