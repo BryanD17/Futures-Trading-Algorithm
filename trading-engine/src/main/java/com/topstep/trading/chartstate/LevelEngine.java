@@ -435,6 +435,20 @@ public class LevelEngine {
         levels.put(type, new KnownLevel(type, price, timestamp, clusterSize));
     }
 
+    /**
+     * Add or update an equal level, tagged with its origin (V4 Agent 03).
+     *
+     * <p>Used by {@code IctLibLevelAdapter} to publish §S6 liquidity pools into
+     * the ONE level universe the raid pipeline already reads, so a clustered
+     * pool the Bot Chart draws is the same object a raid can fire on. The level
+     * is otherwise indistinguishable from a natively computed equal level —
+     * the tag is descriptive, not behavioural.
+     */
+    public synchronized void addEqualLevel(LevelType type, double price, int clusterSize,
+                                           Instant timestamp, String source) {
+        levels.put(type, new KnownLevel(type, price, timestamp, clusterSize, source));
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // UTILITY
     // ═══════════════════════════════════════════════════════════════════

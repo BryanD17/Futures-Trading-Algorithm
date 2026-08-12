@@ -46,14 +46,21 @@ final class IctLibFixture {
         final TimeframeSeries series;
         final DetectionRegistry registry;
         final List<FamilyDetector> detectors;
+        /** Pools published through the §S6 listener, in confirmation order. */
+        final List<Detection> pools;
 
         Harness(IctLibConfig config) {
             this.series = new TimeframeSeries(IctLibEngine.TF_1M);
             this.registry = new DetectionRegistry(SYM, config.retentions());
+            this.pools = new ArrayList<>();
             this.detectors = List.of(
                     new DisplacementScanner(config),
                     new FairValueGapDetector(config),
-                    new BprDetector());
+                    new BprDetector(),
+                    new VolumeImbalanceDetector(config),
+                    new OpeningGapDetector(),
+                    new LiquidityPoolDetector(config,
+                            (sym, pool) -> pools.add(pool)));
         }
 
         void push(Candle candle) {

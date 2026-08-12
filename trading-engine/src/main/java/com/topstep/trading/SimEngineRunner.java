@@ -157,8 +157,10 @@ public class SimEngineRunner {
         if (multiEngine != null) {
             multiEngine.setCandleTap(chartEngine::onCandle);
             multiEngine.setChartEngine(chartEngine);
+            multiEngine.setIctLibEngine(ictLibEngine);
         } else if (strategy instanceof com.topstep.trading.strategy.stdvote.StdvOteRunnerStrategy sors) {
             sors.setChartEngine(chartEngine);
+            sors.setIctLibEngine(ictLibEngine);
         }
 
         // Subscribe to strategy signals

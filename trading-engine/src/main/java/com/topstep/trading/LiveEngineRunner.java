@@ -438,8 +438,10 @@ public class LiveEngineRunner {
                 chartEngine.onCandle(c);
             });
             stdvOteMultiEngine.setChartEngine(chartEngine);
+            stdvOteMultiEngine.setIctLibEngine(ictLibEngine);
         } else if (strategy instanceof com.topstep.trading.strategy.stdvote.StdvOteRunnerStrategy sors) {
             sors.setChartEngine(chartEngine);
+            sors.setIctLibEngine(ictLibEngine);
         }
 
         // === Convex Payoff Optimization: Initialize lifecycle-aware risk components ===

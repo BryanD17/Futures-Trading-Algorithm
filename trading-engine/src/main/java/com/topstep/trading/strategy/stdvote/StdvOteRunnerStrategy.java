@@ -306,6 +306,20 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
      */
     private volatile com.topstep.trading.chart.ChartEngine chartEngine;
 
+    /**
+     * Publish this symbol's LevelEngine to the ICT library (V4 Agent 03) so
+     * §S6 clustered liquidity pools register as equal-high/low levels in the
+     * ONE level universe the raid pipeline already reads (Appendix E8).
+     *
+     * <p>One-directional and additive: ictlib writes levels, it never reads
+     * raid state and never marks anything raided. Not calling this simply means
+     * pools stay inside ictlib — no gate, detector or raid behaviour changes
+     * either way.
+     */
+    public void setIctLibEngine(com.topstep.trading.ictlib.IctLibEngine engine) {
+        if (engine != null) engine.attachLevelEngine(symbol, levelEngine);
+    }
+
     /** Install the observability-only ChartEngine reference (may be null). */
     public void setChartEngine(com.topstep.trading.chart.ChartEngine engine) {
         this.chartEngine = engine;

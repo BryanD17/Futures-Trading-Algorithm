@@ -33,6 +33,15 @@ public enum DetectionState {
     BROKEN(true),
 
     /**
+     * §S6 — one boundary of a liquidity pool has been closed through: the pool
+     * is being raided but is not yet consumed.
+     */
+    PARTIAL(false),
+
+    /** §S6 — both boundaries closed through. The pool is spent. Terminal. */
+    SWEPT(true),
+
+    /**
      * An instantaneous detection (§S1 displacement): it describes one candle
      * and never advances. Terminal by construction, not by consumption.
      */

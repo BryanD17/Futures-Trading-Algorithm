@@ -679,6 +679,40 @@ Once per session (and on demand via `IctLibEngine.logDiffLines()`):
 A big `existing`/small `ictlib` is the filter working. Verify a handful on the
 Bot Chart before concluding anything else.
 
+### Families (Agent 03)
+
+| § | Family | Lifecycle | Retention |
+|---|--------|-----------|-----------|
+| S4 | `VOLUME_IMBALANCE` | `ACTIVE → FILLED` (range fully covers the zone) | 6 |
+| S5 | `OPENING_GAP_WEEKLY` | `ACTIVE → TOUCHED` (**never terminal**) | 3 |
+| S5 | `OPENING_GAP_DAILY` | `ACTIVE → TOUCHED` (**never terminal**) | 2 |
+| S6 | `LIQUIDITY_POOL` | `ACTIVE → PARTIAL → SWEPT` | 4 per side |
+
+Opening gaps deliberately have **no fill-terminal state**: they act as
+persistent magnets, so they are evicted by retention count and nothing else.
+
+Sessions come from `TradingSessionCalendar` — the same calendar the V3 D1
+ladder uses — and nowhere else. 18:00 ET opens the next session; 17:00–18:00 ET
+is the maintenance break and belongs to no session. A new trading **week** is
+detected by comparing the *session* dates' Mondays, so a holiday-shifted open
+keys on the first session that actually trades, never on the calendar Monday.
+
+### Liquidity pools publish into the ONE level universe
+
+A confirmed §S6 pool does not stay locked inside ictlib. `IctLibLevelAdapter`
+registers it in `LevelEngine` as an `EQUAL_HIGH` (buyside) or `EQUAL_LOW`
+(sellside) level tagged `ICTLIB_CLUSTER`, so the raid pipeline can fire on the
+same object the Bot Chart draws.
+
+This is strictly **one-directional**: ictlib registers levels; it never reads
+raid state and never marks a level raided. Raid detection stays the raid
+pipeline's job. The pool's own `PARTIAL`/`SWEPT` lifecycle is ictlib's
+independent read — keeping the two separately derived is what makes a
+disagreement *visible* rather than self-confirming.
+
+Not attaching a `LevelEngine` for a symbol is not an error: pools still form,
+they simply are not published.
+
 ### Tuning knobs
 
 | Property | Default | Meaning |
@@ -690,6 +724,16 @@ Bot Chart before concluding anything else.
 | `ictlib.fvg.mode` | `FVG` | `FVG` or `IFVG` (inverted/overlap read). |
 | `ictlib.retain.fvg` | `10` | §S2 retention **per side**. |
 | `ictlib.retain.bpr` | `5` | §S3 retention **per side**. |
+| `ictlib.retain.volumeImbalance` | `6` | §S4 retention. |
+| `ictlib.vi.projectBars` | `3` | §S4 display-only marker projection. |
+| `ictlib.retain.gapWeekly` | `3` | §S5 weekly opening-gap retention. |
+| `ictlib.retain.gapDaily` | `2` | §S5 daily opening-gap retention. |
+| `ictlib.pool.swingLen` | `5` | §S6 bars to the left of a pivot. |
+| `ictlib.pool.toleranceDiv` | `2.5` | §S6 `tolerance = ATR(n) / div`. Raise it if pools never form on an instrument. |
+| `ictlib.pool.minCluster` | `3` | §S6 swings needed to make a pool. |
+| `ictlib.pool.scanDepth` | `50` | §S6 rolling swing history per side. |
+| `ictlib.pool.atrPeriod` | `10` | §S6 ATR window (simple mean, for replay determinism). |
+| `ictlib.retain.pool` | `4` | §S6 retention **per side**. |
 
 The resolved config is printed once at start:
 `[ICTLIB] ictlib enabled=true displacement(meanLen=5,...) gaps(mode=FVG,...)`.
