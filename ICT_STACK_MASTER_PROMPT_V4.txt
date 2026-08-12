@@ -1,0 +1,1634 @@
+================================================================================
+================================================================================
+
+  ██╗ ██████╗████████╗    ███████╗████████╗ █████╗  ██████╗██╗  ██╗
+  ██║██╔════╝╚══██╔══╝    ██╔════╝╚══██╔══╝██╔══██╗██╔════╝██║ ██╔╝
+  ██║██║        ██║       ███████╗   ██║   ███████║██║     █████╔╝
+  ██║██║        ██║       ╚════██║   ██║   ██╔══██║██║     ██╔═██╗
+  ██║╚██████╗   ██║       ███████║   ██║   ██║  ██║╚██████╗██║  ██╗
+  ╚═╝ ╚═════╝   ╚═╝       ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
+
+     FULL ICT DETECTION LIBRARY • CHART OVERLAY PARITY • CONFLUENCE
+        STACK • PROFILE SIMULATOR ("WHY NO TRADE" AS A NUMBER)
+            MASTER IMPLEMENTATION PROMPT — V4 (ICT STACK)
+
+================================================================================
+================================================================================
+
+DOCUMENT NAME:    ICT_STACK_MASTER_PROMPT_V4.txt
+VERSION:          V4 (ICT detection + confluence + trade-flow remediation)
+REPOSITORY:       https://github.com/BryanD17/Futures-Trading-Algorithm.git
+DEFAULT BRANCH:   Main   (CAPITAL M — every PR targets --base Main.)
+PREDECESSORS:     V1 (chart-in-memory), V2 (verification + Bot Chart +
+                  hysteresis), V3 (top-down: M2b, bias vote, H4/D1, OTE
+                  verdict). All remain in the repo as read-only history.
+                  Agent 01 verifies which predecessor work actually exists
+                  at HEAD before anything relies on it.
+TOTAL AGENTS:     9
+EXECUTED BY:      Claude Code, autonomously, via the GOLDEN LOOP.
+
+⚖️ LICENSING GUARDRAIL — READ BEFORE ANY CODE IS WRITTEN (NON-NEGOTIABLE):
+  The owner supplied two TradingView Pine Script indicators as REFERENCE
+  BEHAVIOR: "ICT Concepts [LuxAlgo]" (CC BY-NC-SA 4.0 — NonCommercial,
+  ShareAlike) and "Smart Money Fibonacci OTE Engine [ChartPrime]" (MPL
+  2.0). This repository is MIT-licensed and used commercially.
+  THEREFORE:
+   - Do NOT translate, port, copy, or paraphrase-copy ANY Pine source,
+     comments, variable names, or structure from those scripts into this
+     repository. Not one line. CC BY-NC-SA code in an MIT commercial repo
+     is a license violation; MPL file-copyleft entanglement is avoided the
+     same way.
+   - IMPLEMENT ONLY from the DETECTION SPECIFICATIONS in Appendix S of
+     this document. Those specs describe standard, public ICT/SMC market
+     concepts (fair value gaps, order blocks, displacement, liquidity
+     pools, opening gaps, structure shifts, fib anchoring) as mathematics
+     over OHLCV — concepts are not copyrightable; their Pine expression
+     is. Appendix S is the ONLY source. If Appendix S is ambiguous, decide
+     from first principles and record the decision — do not "check the
+     Pine".
+   - Name types in this repo's own vocabulary (e.g. VolumeImbalance,
+     OpeningGap, TrendShiftAnchor) — no Lux/Prime-branded names.
+  Agent 08 grep-audits for this. A violation is a hard stop and revert.
+
+WHY THIS DOCUMENT EXISTS (owner's report, 2026-08):
+  The algorithm still does not trade. The owner supplied the two
+  indicators wanting (1) the visualization layer to reach parity with
+  what a full ICT chart shows, and (2) those detections stacked as
+  confluences so trades actually place. Two truths shape the plan:
+   - Detection quality: parts of the reference behavior are genuinely
+     better than what the engine has (FVGs REQUIRING a displacement
+     candle; OTE fibs anchored on TREND SHIFTS instead of micro reversal
+     legs; liquidity as CLUSTERED equal swings, which the raid pipeline
+     already approximates but the chart never shows).
+   - Trade-flow truth: indicators draw; gates decide. The engine does not
+     trade because the required-confluence set is stricter than what the
+     tape offers in the observed windows. That gets FIXED with evidence,
+     not by deleting safety: this document builds a PROFILE SIMULATOR
+     that counts, per session, the trades each confluence profile WOULD
+     have taken and names the gate that blocked each one — then the OWNER
+     picks the profile.
+
+TARGET END STATE:
+  1. A unified ICT detection library (ictlib) implementing Appendix S:
+     displacement, FVG/IFVG, BPR, volume imbalance, NWOG/NDOG, clustered
+     liquidity pools, order blocks with breaker lifecycle, MSS/BOS — all
+     deterministic, tested, additive (existing gate detectors untouched).
+  2. Trend-shift OTE anchoring available in ChartEngine as a selectable
+     mode alongside the existing fractal-leg mode.
+  3. Bot Chart overlay parity: every ictlib detection rendered on the
+     dashboard chart with lifecycle states — the "visualization aspect is
+     done" milestone, verifiable against TopstepX side by side.
+  4. A ConfluenceSnapshot service scoring the live confluence stack per
+     symbol/direction, exposed via API + [CONFLUENCE] telemetry.
+  5. Confluence PROFILES (STRICT = today / STANDARD / MINIMAL) with a
+     LOG-mode simulator counting would-be trades + blocking gates per
+     profile per session — "why no trade" becomes a table.
+  6. A measurement report and a final verification. All defaults preserve
+     today's live behavior; the OWNER flips profiles from evidence.
+     V4 ledger 9/9 ✅.
+
+================================================================================
+
+================================================================================
+SECTION 1 — THE EXECUTION PROTOCOL  (READ THIS FIRST, EVERY SESSION)
+================================================================================
+
+You are Claude Code. This document is your single source of truth. Execute it
+agent by agent, in order, until every agent is COMPLETE. Do not ask for
+permission between agents. Do not stop halfway. Do not skip.
+
+────────────────────────────────────────────────────────────────────────────────
+THE GOLDEN LOOP
+────────────────────────────────────────────────────────────────────────────────
+
+  STEP 1: Open this document (ICT_STACK_MASTER_PROMPT_V4.txt at repo root).
+  STEP 2: Read the PROGRESS LEDGER (Section 2). Find the FIRST agent whose
+          status is not ✅ COMPLETE.
+  STEP 3: Execute EVERY task in that agent, in order, end to end.
+  STEP 4: Run the agent's ACCEPTANCE CRITERIA. Every checkbox needs REAL
+          EVIDENCE (file:line, build/test output, curl responses, log
+          lines, UI evidence). "The code looks right" is NEVER evidence.
+  STEP 5: Update the PROGRESS LEDGER and fill the agent's block in
+          APPENDIX A (Verification Log).
+  STEP 6: Branch, commit with the agent's exact COMMIT MESSAGE, push, open
+          the PR against Main, squash-merge. Confirm MERGED and remote
+          Main updated.
+  STEP 7: RETURN TO STEP 1. Immediately. You do NOT stop and wait.
+
+STOPPING CONDITION: ALL 9 agents ✅ COMPLETE AND Agent 09 passed with
+evidence. RESUME: re-open this document, trust the ledger, resume at the
+first incomplete agent.
+
+────────────────────────────────────────────────────────────────────────────────
+THE Q1/Q2/Q3 VERIFICATION STANDARD (applies inside EVERY agent)
+────────────────────────────────────────────────────────────────────────────────
+
+    Q1 — Does the fix HOLD at current HEAD and not re-trigger? (run it)
+    Q2 — Is there ANY OTHER INSTANCE of the same issue elsewhere? (sweep)
+    Q3 — Is there ANY OTHER TRIGGER of the same failure class? (find it,
+         fix it or file a dated LEDGER NOTE)
+
+────────────────────────────────────────────────────────────────────────────────
+THE ROLLOUT DOCTRINE (unchanged from V2/V3 — the spine of everything)
+────────────────────────────────────────────────────────────────────────────────
+
+  Nothing changes live behavior by default. Every behavioral capability
+  ships behind a switch: OFF/LEGACY -> LOG (default; new logic runs and
+  counts what it WOULD do while today's logic decides) -> ACTIVE (owner-
+  flipped, from evidence, one switch at a time). This document's switches:
+
+    chart.anchorMode      = FRACTAL_LEG | TREND_SHIFT   (default FRACTAL_LEG)
+    trade.profile         = STRICT | STANDARD | MINIMAL (default STRICT)
+    (plus per-detection chart-layer toggles, which are display-only)
+
+  A GATE OR DETECTOR MUST NEVER BLOCK ON MISSING DATA: ABSTAIN = pass +
+  log + count. The cold-start deadlock class stays dead.
+
+  RISK IS PROFILE-INDEPENDENT: PropFirmRiskEngine, DLL/MLL, max contracts,
+  flatten-by, sizing bounds, and the kill switch apply IDENTICALLY in
+  STRICT, STANDARD, and MINIMAL. Profiles select which STRATEGY
+  confluences are required — they can never loosen a RISK control. This
+  is tested, not assumed.
+
+────────────────────────────────────────────────────────────────────────────────
+CRITICAL RULES (NON-NEGOTIABLE)
+────────────────────────────────────────────────────────────────────────────────
+
+  1. LICENSING GUARDRAIL (title block) governs every line you write:
+     implement ONLY from Appendix S; never from the Pine sources; no
+     Lux/Prime-derived names, comments, or structure. Agent 09 audits.
+  2. NEVER skip or reorder agents. NEVER mark criteria without evidence.
+  3. ADDITIVE over invasive: existing gate detectors, the M1-M9 validator
+     semantics, the raid pipeline, and all predecessor machinery keep
+     working untouched. ictlib is a NEW parallel library feeding the
+     chart, the confluence stack, and the simulator. The single seam
+     where profiles take effect (Agent 08) is the only place gating is
+     parameterized — and STRICT there means byte-identical to today.
+  4. ALWAYS full builds before ✅: ./gradlew clean build per module
+     (.\gradlew.bat on Windows); dashboard npm run build, zero TS errors.
+  5. PR per agent against Main (capital M), squash-merged. NEVER push
+     directly to Main. Fixups get their own small PRs.
+  6. Owner-only blockers are honest ⛔ with the EXACT owner action.
+  7. Determinism: all detection on CLOSED candles, no wall-clock reads in
+     detection logic, same feed -> identical detections, always.
+  8. Every detection type carries a LIFECYCLE STATE (Appendix S defines
+     each) — chart rendering and confluence scoring read the state, they
+     never recompute it differently (one source of truth per detection).
+  9. Bounded memory: every detection list has a configured retention cap;
+     nothing grows per-candle without bound.
+ 10. Session/killzone calendar logic in America/New_York (or the zone
+     Appendix S names) via ZoneId — never fixed UTC offsets.
+
+────────────────────────────────────────────────────────────────────────────────
+GIT WORKFLOW — PR PER AGENT AGAINST Main
+────────────────────────────────────────────────────────────────────────────────
+
+  git checkout Main && git pull origin Main
+  git checkout -b <type>/agent-NN-<short-name>   # e.g. feat/agent-02-fvg
+  git add -A
+  git commit -m "<the agent's specified COMMIT MESSAGE>"
+  git push -u origin <type>/agent-NN-<short-name>
+  gh pr create --base Main --head <type>/agent-NN-<short-name> \
+      --title "<COMMIT MESSAGE>" --body "<what + why, 3-6 lines>"
+  gh pr merge --squash --delete-branch
+  git checkout Main && git pull origin Main
+
+  Prefixes: chore/ for 01 and 09; feat/ for 02-08. Record PR number,
+  MERGED state, and squash hash in Appendix A. gh missing/unauthenticated
+  -> install / gh auth login / ⛔ with owner action. No direct pushes.
+
+────────────────────────────────────────────────────────────────────────────────
+BUILD + TEST WORKFLOW
+────────────────────────────────────────────────────────────────────────────────
+
+  Engine: cd trading-engine && ./gradlew clean build
+  API:    cd api-backend && ./gradlew clean build
+  UI:     cd dashboard-frontend && npm install && npm run build
+  Java 21, Node 18+. Root multi-project build works per prior ledgers.
+
+================================================================================
+SECTION 2 — PROGRESS LEDGER
+================================================================================
+
+  Status:  ⬜ NOT STARTED   🔄 IN PROGRESS   ✅ COMPLETE   ⛔ BLOCKED
+
+  [✅] Agent 01 — Pre-Flight: Predecessor State + Baselines + License Sweep Base
+  [⬜] Agent 02 — ictlib I: Displacement, FVG/IFVG, BPR (spec §S1–§S3)
+  [⬜] Agent 03 — ictlib II: Volume Imbalance, Opening Gaps, Liquidity Pools (§S4–§S6)
+  [⬜] Agent 04 — ictlib III: Order Blocks + Structure Engine MSS/BOS (§S7–§S8)
+  [⬜] Agent 05 — Trend-Shift OTE Anchoring Mode in ChartEngine (§S9)
+  [⬜] Agent 06 — Bot Chart Overlay Parity (Every Detection Rendered)
+  [⬜] Agent 07 — ConfluenceSnapshot Service + [CONFLUENCE] Telemetry + API
+  [⬜] Agent 08 — Confluence Profiles + Profile Simulator + First Report
+  [⬜] Agent 09 — FINAL VERIFICATION & CLOSE-OUT (incl. license audit)
+
+  LEDGER NOTES (append one dated line per completion):
+  ------------------------------------------------------------------
+  2026-08-12 Agent 01 ✅ — three baselines GREEN at 38c75ef; every V1/V2/V3
+    predecessor this document depends on verified PRESENT in code (nothing
+    to build minimally later); 15 existing detection classes inventoried;
+    license sweep baseline CLEAN (0 hits / 6 patterns); 4 spec collisions
+    recorded (§S1, §S2, §S6, §S8) — all become [ICTLIB-DIFF] telemetry, no
+    silent replacement. V4 document placed at repo root.
+  ------------------------------------------------------------------
+
+================================================================================
+SECTION 3 — PRE-FLIGHT FINDINGS
+================================================================================
+
+  P1. The engine has detection primitives already (FvgDetector,
+      LiquidityDetector / raid pipeline levels, MSS for the 2022 model,
+      displacement checks inside the stdvote path). They are GATE inputs,
+      tuned for the state machine. ictlib does not replace them — it is
+      the chart/confluence-grade library with fuller lifecycles. Agent 01
+      inventories the existing detectors so adapters (not duplicates)
+      connect where reuse is sane (e.g. liquidity pools SHOULD register
+      into LevelEngine as equal-high/low levels rather than duplicate).
+  P2. Chart infrastructure exists if V2/V3 completed: ChartEngine (30m,
+      OTE lifecycle), /api/chart, Bot Chart tab, [GATES] telemetry,
+      stats persistence pattern, warm SIM boot. Agent 01 verifies each in
+      CODE, not in predecessor ledgers.
+  P3. The engine's TRADING killzones (KillzoneClock: 9:45-12:30,
+      13:45-16:00 ET) are DIFFERENT from the reference indicator's
+      DISPLAY sessions (NY 07:00-09:00 NY time; London open 07:00-10:00
+      London; London close 15:00-17:00 London; Asia 10:00-14:00 Tokyo).
+      Both get rendered as chart shading with distinct labels; the
+      TRADING windows remain the only gate input. No gate change.
+  P4. Owner's report: still no trades. Predecessor telemetry ([GATES],
+      lastGateFailed, counterfactual counters) is the diagnostic
+      substrate; Agent 08's simulator turns it into per-profile would-
+      trade counts — the actionable number.
+  P5. Default branch Main (capital M). Java 21. Root gradle build works.
+
+================================================================================
+
+================================================================================
+SECTION 4 — THE AGENTS
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 01 — PRE-FLIGHT: PREDECESSOR STATE + BASELINES + LICENSE SWEEP BASE
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 60–90 minutes
+
+TASKS:
+  1. Clone/pull; on Main, clean tree. Three baseline builds recorded
+     (engine, api, dashboard). Red baseline -> smallest fix in a
+     chore/agent-01-baseline PR first.
+  2. Predecessor inventory IN CODE (not ledgers): ChartEngine + OteState
+     lifecycle; /api/chart + Bot Chart tab; [GATES] telemetry; stats
+     persistence pattern (JSONL or DB — note which); SIM warm boot; M2b /
+     bias vote / hysteresis flags if V3 ran. Record present/absent. Absent
+     pieces this document depends on (chart tab for Agent 06; persistence
+     pattern for Agent 08; warm SIM for Agent 08's report) get built
+     minimally inside the depending agent, noted.
+  3. Existing-detector inventory (P1): list every current detection class
+     (FVG, liquidity/levels, MSS, displacement, order blocks if any) with
+     file:line and one line on its definition, so Agents 02-04 write
+     ADAPTERS where reuse is sane and avoid duplicate sources of truth.
+  4. License-sweep baseline: grep the repo for "LuxAlgo", "ChartPrime",
+     "Pine", "//@version", "input.color", "box.new" — expect zero hits;
+     record the clean baseline Agent 09 re-runs after all work.
+  5. Read Appendix S in full. For each spec section, note any collision
+     with an existing detector's definition (e.g. existing FVG lacking
+     the displacement requirement) — these become the comparison
+     telemetry items in Agents 02-04, never silent replacements.
+  6. Place THIS document at repo root as ICT_STACK_MASTER_PROMPT_V4.txt;
+     include in this agent's PR.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-01):
+  [ ] Baselines green (tails). [ ] Predecessor inventory recorded.
+  [ ] Existing-detector inventory with file:line per detector.
+  [ ] License-sweep baseline clean (grep output pasted).
+  [ ] Spec-collision list written (or "none").
+  [ ] V4 document committed via merged PR (number + hash).
+
+COMMIT MESSAGE:
+  agent-01-v4: pre-flight — inventories, baselines, license sweep base
+
+AFTER COMPLETION:
+  Ledger, Appendix A-01, branch, commit, PR against Main, squash-merge,
+  verify remote, RETURN TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 02 — ictlib I: DISPLACEMENT, FVG/IFVG, BPR  (SPEC §S1–§S3)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 3–4 hours
+
+CONTEXT:
+  Owns: NEW package com.topstep.trading.ictlib (detections + registry),
+  tests, docs. This is the foundation package: the DetectionRegistry that
+  every later agent renders from and scores from, plus the first three
+  detection families. Implement ONLY from Appendix S. Where the existing
+  FvgDetector's definition differs (likely: no displacement requirement),
+  BOTH run — ictlib for chart/confluence, the existing one for its gates —
+  with a disagreement counter logged per session so the owner can later
+  unify from evidence.
+
+TASKS:
+  1. Package skeleton:
+       - Detection (interface): id, symbol, type, direction, priceTop,
+         priceBottom, createdAtBar/Instant, state (enum per family),
+         stateChangedAt, meta (small map for family-specific fields);
+       - DetectionRegistry (per symbol): bounded lists per type (caps in
+         config, defaults per Appendix S), query API
+         (activeByType, inZone(price), nearestAbove/Below, recent(N)),
+         thread-safe snapshotting for API/chart reads;
+       - IctLibEngine: consumes CLOSED 1m candles from the SAME tap that
+         feeds ChartEngine (one ingest seam — Q2), plus a configurable
+         detection timeframe per family (default: run detections on the
+         1m-aggregated series the spec names; §S sections state each).
+  2. Implement §S1 DisplacementDetector, §S2 FvgDetector2 (name it
+     GapDetector or FairValueGapDetector — avoid colliding with the
+     existing class name), §S3 BprDetector — with full lifecycles
+     (ACTIVE -> TOUCHED -> FILLED/INVERTED etc. exactly as Appendix S
+     defines), consecutive-gap merging, IFVG mode flag, retention caps.
+  3. Comparison telemetry: once per session (and on demand), log
+     "[ICTLIB-DIFF <sym>] fvg: ictlib=N existing=M overlap=K" comparing
+     detections against the existing FvgDetector's output over the same
+     window. No behavior change — measurement only.
+  4. Tests (per family): construction from hand-built candle sequences
+     covering every lifecycle transition; merge behavior; IFVG flag;
+     retention cap; determinism (same feed twice); NO detection on
+     non-displacement gaps (the spec's key upgrade — test it explicitly).
+  5. Docs: QUICK_START gains "THE ICT LIBRARY" section — families,
+     lifecycles, caps, the [ICTLIB-DIFF] line.
+  6. Build + full suite.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-02):
+  [ ] Package + registry + engine with ONE ingest seam (file:line).
+  [ ] §S1-§S3 implemented per spec; displacement-required FVG proven by
+      the explicit negative test (name + result).
+  [ ] Lifecycles + merging + caps tested (summary pasted).
+  [ ] [ICTLIB-DIFF] telemetry present (example line from a test/SIM).
+  [ ] No existing detector modified (git diff --stat scope shown).
+  [ ] License sweep of new code clean. Full suite green. PR merged.
+
+COMMIT MESSAGE:
+  agent-02-v4: ictlib foundation — displacement, FVG/IFVG, BPR with lifecycles
+
+AFTER COMPLETION:
+  Ledger, Appendix A-02, branch, commit, PR, squash-merge, verify, RETURN
+  TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 03 — ictlib II: VOLUME IMBALANCE, OPENING GAPS, LIQUIDITY POOLS (§S4–§S6)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: HIGH          ESTIMATED EFFORT: 3–4 hours
+
+CONTEXT:
+  Owns: three more ictlib families, the LevelEngine adapter, tests, docs.
+  Liquidity pools are the one family where DUPLICATION WOULD BE HARMFUL:
+  the raid pipeline already tracks equal highs/lows as KnownLevels. The
+  spec's clustered-swing pools therefore REGISTER INTO LevelEngine via an
+  adapter (new level source tag "ICTLIB_CLUSTER") instead of living as a
+  parallel truth — one level universe for raids, chart, and confluence.
+
+TASKS:
+  1. Implement §S4 VolumeImbalanceDetector, §S5 OpeningGapDetector
+     (weekly + daily variants keyed on the existing D1 session calendar;
+     if the D1 ladder from V3 is absent, key the daily variant on the
+     18:00 ET rollover the LevelEngine already uses — record which), §S6
+     LiquidityPoolDetector (clustered swings, ATR-scaled tolerance, the
+     two-phase break lifecycle). All with lifecycles, caps, determinism.
+  2. LevelEngine adapter: each confirmed pool registers/updates a
+     KnownLevel (source-tagged); pool sweep state syncs with the level's
+     raided state in ONE direction only (ictlib -> LevelEngine
+     registration; raid detection remains the raid pipeline's job). An
+     integration test proves a clustered pool becomes a raid-able level.
+  3. Tests: cluster formation (>=3 swings within tolerance), tolerance
+     scaling with ATR, two-phase break, VI's exact body/wick geometry
+     (positive + near-miss negatives for EVERY inequality in §S4 — these
+     are easy to get subtly wrong), weekly gap across a holiday Monday
+     (gap keys on next SESSION open, not calendar Monday), caps,
+     determinism.
+  4. Docs: extend "THE ICT LIBRARY" section.
+  5. Build + full suite.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-03):
+  [ ] §S4-§S6 implemented per spec (file:line per family).
+  [ ] Near-miss negative tests for every §S4 inequality (names + results).
+  [ ] LevelEngine adapter + integration test (pool -> raid-able level).
+  [ ] Holiday-Monday opening-gap test passing.
+  [ ] Caps + determinism tested. Full suite green. License sweep clean.
+  [ ] PR merged (number + hash).
+
+COMMIT MESSAGE:
+  agent-03-v4: ictlib II — volume imbalance, opening gaps, liquidity pools
+
+AFTER COMPLETION:
+  Ledger, Appendix A-03, branch, commit, PR, squash-merge, verify, RETURN
+  TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 04 — ictlib III: ORDER BLOCKS + STRUCTURE ENGINE MSS/BOS  (§S7–§S8)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: HIGH          ESTIMATED EFFORT: 3–4 hours
+
+CONTEXT:
+  Owns: the last two ictlib families, tests, docs. The engine already has
+  an MSS detection serving the 2022-model gate (M6). ictlib's structure
+  engine is the CHART/CONFLUENCE-grade one (zigzag over confirmed pivots,
+  MSS on regime flip, BOS on continuation) — the gate's MSS is untouched,
+  and a disagreement counter measures how often the two structure reads
+  differ, exactly like Agent 02 did for FVGs.
+
+TASKS:
+  1. Implement §S7 OrderBlockDetector: swing-confirmation regime, the
+     origin-candle scan (lowest low / highest high between swing and
+     break, body-vs-wick mode flag), BREAKER transition on body-close
+     through the zone, removal on full reclaim, retention caps per side,
+     lifecycle (ACTIVE -> BREAKER -> REMOVED, plus TESTED when price
+     re-enters without breaking).
+  2. Implement §S8 StructureEngine: pivot zigzag (left=len, right=1
+     confirmation), direction regime, MSS on close through the most
+     recent OPPOSITE confirmed swing while regime disagrees, BOS on
+     closes through same-direction swings while regime agrees,
+     deduplication (no BOS at a level already marked), bounded history.
+  3. Disagreement telemetry: "[ICTLIB-DIFF <sym>] mss: ictlib=N gate=M
+     agreeWindow=K" per session.
+  4. Tests: OB origin-candle selection (body and wick modes), breaker
+     flip + removal + TESTED, cap; MSS/BOS on hand-built sequences
+     including whipsaw (regime flip-flop) and the dedup rule;
+     determinism.
+  5. Docs: extend "THE ICT LIBRARY".
+  6. Build + full suite.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-04):
+  [ ] §S7-§S8 per spec (file:line); gate MSS untouched (diff scope).
+  [ ] Breaker lifecycle + origin-scan tests passing (names + results).
+  [ ] Whipsaw + dedup structure tests passing.
+  [ ] [ICTLIB-DIFF] mss line present. Caps + determinism tested.
+  [ ] Full suite green. License sweep clean. PR merged (number + hash).
+
+COMMIT MESSAGE:
+  agent-04-v4: ictlib III — order blocks with breaker lifecycle + MSS/BOS engine
+
+AFTER COMPLETION:
+  Ledger, Appendix A-04, branch, commit, PR, squash-merge, verify, RETURN
+  TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 05 — TREND-SHIFT OTE ANCHORING MODE IN CHARTENGINE  (§S9)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: HIGH          ESTIMATED EFFORT: 2–3 hours
+
+CONTEXT:
+  Owns: ChartEngine (additive mode), config, tests, docs. The V3 audit's
+  standing criticism: the machine draws fibs on micro reversal legs.
+  §S9's anchoring is what a human draws — fibs between the swing low that
+  STARTED the trend leg and the confirmed higher high that SHIFTED
+  structure, with the high anchor EXTENDING as the trend prints new
+  confirmed highs. This ships as a selectable mode; the existing
+  fractal-leg mode stays the default so nothing changes silently.
+
+TASKS:
+  1. Config: chart.anchorMode = FRACTAL_LEG | TREND_SHIFT (default
+     FRACTAL_LEG), per-symbol override chart.anchorMode.<SYM>. Band
+     config chart.oteBand = "0.62,0.79" default (engine convention),
+     overridable — §S9 notes the reference band 0.618-0.786; the engine
+     keeps its constants unless the owner overrides.
+  2. Implement TREND_SHIFT anchoring inside ChartEngine as an alternative
+     leg-selection strategy feeding the SAME OteZoneSnapshot lifecycle
+     (FORMING/ARMED/REACTED/INVALIDATED — zero changes to the lifecycle,
+     the API shape, or consumers): anchors per §S9, anchor-extension
+     resets an un-ARMED zone's fibs, opposite structure shift invalidates,
+     origin-close-through invalidates (existing rule).
+  3. The Bot Chart and /api/chart expose which mode produced the zone
+     (meta field "anchorMode") so the owner can compare modes visually.
+  4. OPTIONAL DUAL-LOG: when a system property chart.anchorCompare=true
+     (default false), compute BOTH modes and log zone-state divergence
+     per completed 30m bar — evidence for choosing a default later.
+  5. Tests: anchor selection on a hand-built trend-shift sequence; anchor
+     extension re-stretching fibs before ARMED and NOT after ARMED;
+     opposite-shift invalidation; FRACTAL_LEG default byte-identical
+     (existing ChartEngine tests pass UNCHANGED); determinism.
+  6. Docs: "TUNING THE BOT CHART" gains the mode + band flags.
+  7. Build + full suite.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-05):
+  [ ] Mode + band config with defaults preserving today (file:line);
+      existing ChartEngine tests pass UNCHANGED (summary).
+  [ ] §S9 anchoring + extension + invalidation tests passing.
+  [ ] anchorMode meta visible via /api/chart (curl pasted).
+  [ ] Dual-log behind default-false flag (file:line).
+  [ ] Full suite green. PR merged (number + hash).
+
+COMMIT MESSAGE:
+  agent-05-v4: trend-shift OTE anchoring mode (§S9), fractal-leg default kept
+
+AFTER COMPLETION:
+  Ledger, Appendix A-05, branch, commit, PR, squash-merge, verify, RETURN
+  TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 06 — BOT CHART OVERLAY PARITY (EVERY DETECTION RENDERED)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: HIGH          ESTIMATED EFFORT: 3–4 hours
+
+CONTEXT:
+  Owns: /api/chart extension, dashboard BotChart, tests, docs. This is the
+  owner's "visualization aspect is done" milestone: the Bot Chart shows
+  what a fully-loaded ICT chart shows — FVG/BPR boxes with break styling,
+  order blocks with breaker recolor, liquidity pool zones with sweep
+  state, volume imbalance markers, weekly/daily opening-gap zones with
+  midlines, MSS/BOS markers, the OTE band with its state badge, and
+  session shading for BOTH the display sessions and the engine's actual
+  trading killzones (distinct labels — P3). Held side-by-side with
+  TopstepX + the reference indicators, the same structures must be
+  visible in the same places.
+
+TASKS:
+  1. Extend /api/chart/{symbol} with a "detections" object: per family,
+     the active (and recently-inactive, capped) detections with type,
+     direction, top/bottom, created bar-time, state, meta. Bounded
+     payload (config caps); one snapshot call, no N+1.
+  2. Dashboard BotChart: render each family as a toggleable layer
+     (defaults: FVG, OB, Liquidity, OTE on; VI, gaps, structure labels
+     on; BPR off unless present). Visual state mapping: ACTIVE solid,
+     TOUCHED/TESTED dashed, FILLED/BREAKER/SWEPT muted + right-edge
+     frozen. Session shading per P3 with a small legend distinguishing
+     "display sessions" from "TRADING killzones".
+  3. UI states: loading / empty / error / COLD banner preserved; layer
+     toggles persist in component state; polling cadence unchanged;
+     payload growth measured (log the JSON size once per fetch in dev
+     mode) and kept under a sane cap via the retention configs.
+  4. End-to-end: against the warm SIM stack, produce evidence (screenshot
+     or precise DOM description) showing at least: one FVG box with a
+     state change, one liquidity pool, one OB, the OTE band with badge,
+     and both shading types.
+  5. npm run build zero TS errors; typed interfaces for the detections
+     payload in src/types (no `any`).
+  6. Docs: dashboard section of QUICK_START updated with the layer list.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-06):
+  [ ] /api/chart detections payload, bounded, typed (curl + interface
+      file:line).
+  [ ] All families rendered with lifecycle styling + toggles (evidence
+      per family from the SIM run).
+  [ ] Dual session shading with legend (evidence).
+  [ ] UI states intact; zero TS errors (build tail).
+  [ ] Payload size measured and under cap (numbers).
+  [ ] PR merged (number + hash).
+
+COMMIT MESSAGE:
+  agent-06-v4: Bot Chart overlay parity — full ICT detection rendering
+
+AFTER COMPLETION:
+  Ledger, Appendix A-06, branch, commit, PR, squash-merge, verify, RETURN
+  TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 07 — CONFLUENCESNAPSHOT SERVICE + [CONFLUENCE] TELEMETRY + API
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 2–3 hours
+
+CONTEXT:
+  Owns: a new ConfluenceService, telemetry, API, tests, docs. This is
+  where "stack up my confluences" becomes a concrete object: one snapshot
+  per symbol per direction, computed on the 15m cadence (and on demand),
+  reading every existing source of truth — it computes NOTHING itself
+  (one source of truth per fact; the service only aggregates).
+
+TASKS:
+  1. ConfluenceSnapshot(symbol, direction, atInstant) with named fields
+     read from their owners:
+       ENGINE FACTS:  inTradingKillzone (KillzoneClock), htfBiasAligned
+       (legacy bias), voteBiasAligned + voteDetail (if V3 present),
+       pdVerdict (if V3 M2b present), recentSweep + raidScore (raid
+       pipeline), machineOteState (stdvote path);
+       ICTLIB FACTS:  activeFvgInDirection, priceInsideFvg, nearestObZone
+       (side, distanceTicks, state), bprPresent, viNearby(distanceTicks),
+       openingGapMagnet (nearest NWOG/NDOG midline distance), poolSweptRecently
+       (bars since), structureState (MSS/BOS direction + bars since);
+       CHART FACTS:   chartOteState + anchorMode (ChartEngine).
+     Each field is TRI-STATE where its source can be cold: true / false /
+     UNKNOWN — UNKNOWN never counts against a direction (ABSTAIN
+     doctrine).
+  2. A weighted score per direction: config-driven weights
+     (confluence.weight.<field>, sane defaults documented in QUICK_START,
+     all weights >= 0), score = sum of weights of TRUE fields, maxScore =
+     sum of weights of non-UNKNOWN fields — expose both so a cold stack
+     is visibly cold rather than falsely low.
+  3. Surfaces: GET /api/confluence/{symbol} returning both directions'
+     snapshots + scores; a compact [CONFLUENCE <sym>] 15m log line
+     ("long 7/11w=0.64 short 3/11w=0.27 top: kz,bias,fvg,ob"); a simple
+     two-column panel on the dashboard Setup tab (field name + ✓/✗/—
+     per direction) — read-only, no gating.
+  4. Tests: aggregation correctness from mocked sources; UNKNOWN
+     arithmetic (excluded from maxScore); weight config; determinism;
+     API serialization.
+  5. Docs: "THE CONFLUENCE STACK" section — every field, its source of
+     truth, its default weight.
+  6. Build engine + api + dashboard.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-07):
+  [ ] Snapshot aggregates ONLY (no recomputation — file:line per field
+      showing the delegated source).
+  [ ] Tri-state UNKNOWN arithmetic tested (names + results).
+  [ ] /api/confluence live (curl pasted); [CONFLUENCE] line (example);
+      Setup-tab panel rendering (evidence).
+  [ ] Weights configurable; defaults documented.
+  [ ] Full suites green. PR merged (number + hash).
+
+COMMIT MESSAGE:
+  agent-07-v4: ConfluenceSnapshot — the stack as one queryable object
+
+AFTER COMPLETION:
+  Ledger, Appendix A-07, branch, commit, PR, squash-merge, verify, RETURN
+  TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 08 — CONFLUENCE PROFILES + PROFILE SIMULATOR + FIRST REPORT
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL — THE "WHY NO TRADE" AGENT     ESTIMATED EFFORT: 3–4 hours
+
+CONTEXT:
+  Owns: profile definitions, the simulator, the validator's profile seam,
+  persistence, the first report, docs. The owner's core complaint — the
+  algorithm does not trade — becomes a measured, ownable decision here.
+  A PROFILE is a named required-confluence set for entries. RISK IS
+  PROFILE-INDEPENDENT (Rollout Doctrine): sizing bounds, DLL/MLL, max
+  contracts, flatten-by, and every PropFirmRiskEngine check apply
+  identically in all profiles, enforced and tested.
+
+  THE PROFILES (initial definitions — tunable via config after landing):
+    STRICT   = today's full M-gate chain, byte-identical. DEFAULT.
+    STANDARD = trading killzone + bias aligned (legacy OR vote if
+               enabled) + recent sweep (raid score >= instrument base,
+               no scalp floor) + (active same-direction FVG from ictlib
+               OR order-block zone touch) + structure agreement (gate MSS
+               OR ictlib MSS/BOS in direction) + OTE band touch (machine
+               leg OR chart zone ARMED/REACTED) + M2b/M8/M9 semantics
+               unchanged.
+    MINIMAL  = trading killzone + recent sweep + structure shift in
+               direction + OTE band touch + M8/M9 unchanged.
+  Every profile keeps: warmup guards, flatten-by, kill switch, risk
+  sizing. Profiles NEVER add entries outside trading killzones.
+
+TASKS:
+  1. Profile seam: in the validator/emission path, introduce ONE seam
+     where the required-gate set is selected by trade.profile = STRICT |
+     STANDARD | MINIMAL (default STRICT). STRICT routes through the
+     existing code path untouched (byte-identical, proven by the existing
+     validator tests passing unchanged). STANDARD/MINIMAL evaluate their
+     sets against ConfluenceSnapshot + the existing gate primitives.
+  2. THE SIMULATOR (always on, all profiles, regardless of active
+     profile): at every emission-evaluation point, evaluate ALL profiles;
+     record for each: satisfied? if yes and the ACTIVE profile did not
+     emit -> a WOULD-TRADE event {timestamp, symbol, direction, profile,
+     blockingGatesOfActiveProfile[], entry, stop, target as the profile
+     would have set them}. Persist per session using the Agent 01
+     persistence pattern (JSONL or DB) — durable across restarts.
+  3. Risk-independence proof: tests that in STANDARD and MINIMAL, an
+     entry violating sizing bounds / DLL headroom / flatten-by window is
+     rejected exactly as in STRICT (parameterized across profiles).
+  4. Telemetry: [PROFILE <sym>] 15m line "active=STRICT wouldTrade:
+     STANDARD=3 MINIMAL=7 (session)"; /api/confluence extended with the
+     simulator counters + last 5 would-trade events per profile.
+  5. FIRST REPORT: run >= 3 warm SIM sessions (different seeds) and
+     commit docs/reports/PROFILE_SIM_01.md: per session per profile —
+     would-trade counts, the top blocking gates of STRICT (ranked by
+     frequency), and 3 conservative observations. Mandatory caveat: SIM
+     validates the PIPELINE; live-observation sessions precede any
+     profile flip. Include the exact flip command and the one-at-a-time
+     rule.
+  6. Docs: "PROFILES & THE SIMULATOR" section + adoption playbook
+     (observe LOG in LIVE for 3-5 sessions; review would-trade events
+     against the Bot Chart; flip to STANDARD first, never straight to
+     MINIMAL; MINIMAL is a diagnostic floor, not a target).
+  7. Build + full suite.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-08):
+  [ ] ONE profile seam; STRICT byte-identical (existing validator tests
+      unchanged — summary pasted; grep shows one seam).
+  [ ] Simulator records would-trade events with blocking-gate lists,
+      persisted durably (round-trip test + file/table evidence).
+  [ ] RISK-INDEPENDENCE tests passing across all three profiles (names +
+      results — this is the load-bearing criterion).
+  [ ] [PROFILE] line + API counters (examples pasted).
+  [ ] PROFILE_SIM_01.md committed with per-session tables, ranked
+      blocking gates, caveat, flip commands.
+  [ ] Full suite green. PR merged (number + hash).
+
+COMMIT MESSAGE:
+  agent-08-v4: confluence profiles + always-on simulator + first report
+
+AFTER COMPLETION:
+  Ledger, Appendix A-08, branch, commit, PR, squash-merge, verify, RETURN
+  TO GOLDEN LOOP STEP 1. Do not stop.
+
+────────────────────────────────────────────────────────────────────────────────
+AGENT 09 — FINAL VERIFICATION & CLOSE-OUT (INCL. LICENSE AUDIT)
+────────────────────────────────────────────────────────────────────────────────
+PRIORITY: CRITICAL          ESTIMATED EFFORT: 60–90 minutes
+
+TASKS:
+  1. Fresh checkout of Main; clean builds of all three modules, all tests.
+  2. LICENSE AUDIT (hard gate): re-run the Agent 01 grep set plus a
+     manual scan of every ictlib file's comments and identifiers for
+     Pine-derived naming or structure. Any hit -> revert the offending
+     code, reimplement from Appendix S, and record the incident. Zero
+     tolerance.
+  3. DEFAULT-BEHAVIOR AUDIT: with no new properties set, prove
+     trade.profile=STRICT, chart.anchorMode=FRACTAL_LEG,
+     chart.anchorCompare=false, and that the existing validator +
+     ChartEngine test suites pass unchanged. Paste the resolved-config
+     startup block.
+  4. END-TO-END WARM RUN (one SIM boot, excerpts pasted): detections
+     visible in /api/chart payload; Bot Chart layers rendering;
+     [ICTLIB-DIFF], [CONFLUENCE], [PROFILE] lines flowing; a would-trade
+     event persisting across a restart; risk-independence spot check
+     (attempt an oversized entry in MINIMAL via test hook -> rejected).
+  5. Appendix A completeness pass; PR audit (9 merged PRs, base Main);
+     safety greps (no credentials; M1-M9 & risk files: additive/telemetry
+     edits only vs pre-Agent-01 baseline).
+  6. FINAL SUMMARY into LEDGER NOTES: agents, PRs, test counts; the two
+     switches and their defaults; where the reports live; the operating
+     line: "Read PROFILE_SIM_01.md, run 3-5 LIVE-observation sessions,
+     compare would-trade events against the Bot Chart, then flip
+     trade.profile=STANDARD — one switch, one week, and never touch
+     MINIMAL as a trading mode without a written reason."
+  7. Final PR; squash-merge.
+
+ACCEPTANCE CRITERIA (evidence in Appendix A-09):
+  [ ] Three clean builds (tails). [ ] License audit clean (outputs).
+  [ ] Default-behavior audit pasted. [ ] End-to-end excerpts pasted
+      (all six artifacts). [ ] Appendix A complete; 9 merged PRs listed.
+  [ ] Safety greps clean. [ ] FINAL SUMMARY written.
+
+COMMIT MESSAGE:
+  agent-09-v4: final verification — ICT stack complete, STRICT default proven
+
+AFTER COMPLETION:
+  This is the ONLY place you may stop — and only with every criterion
+  passed. Otherwise the GOLDEN LOOP applies: back to the failing agent.
+
+================================================================================
+SECTION 5 — APPENDIX S: THE DETECTION SPECIFICATIONS (THE ONLY SOURCE)
+================================================================================
+These specifications describe standard ICT/SMC market concepts as pure
+mathematics over OHLCV candles. They were written independently for this
+project; implement from THIS text only (Licensing Guardrail). Conventions:
+candle i has open o[i], high h[i], low l[i], close c[i]; i is the most
+recently CLOSED candle; i-1 is one bar earlier. body[i] = |c[i]-o[i]|;
+bodyTop[i] = max(o[i],c[i]); bodyBot[i] = min(o[i],c[i]);
+wickTop[i] = h[i]-bodyTop[i]; wickBot[i] = bodyBot[i]-l[i].
+All detections evaluate on candle close. All parameters are config with
+the defaults shown. Default detection timeframe: the 1m feed unless a
+family says otherwise; every family also accepts a configured timeframe
+(run against the aggregated series) — defaults noted per family.
+
+──────────────────────────────
+§S1 — DISPLACEMENT CANDLE
+──────────────────────────────
+Parameters: meanLen=5, wickRatioMax=0.36.
+Definitions:
+  meanBody[i]  = SMA(body, meanLen) evaluated at i.
+  smallWicks[i]= wickTop[i] < body[i]*wickRatioMax
+             AND wickBot[i] < body[i]*wickRatioMax.
+  displacementUp[i]   = body[i] > meanBody[i] AND smallWicks[i] AND c[i]>o[i].
+  displacementDown[i] = body[i] > meanBody[i] AND smallWicks[i] AND c[i]<o[i].
+Semantics: an expansion candle whose body dominates its range and exceeds
+recent average bodies — the energetic move institutional flow leaves
+behind. Emitted as a point detection (no zone), retained last 50.
+State: none (instantaneous). Timeframe default: the strategy's LTF (1m
+feed) AND the 15m aggregate (two registered instances).
+
+──────────────────────────────
+§S2 — FAIR VALUE GAP (FVG) / INVERSE (IFVG)
+──────────────────────────────
+Parameters: mode=FVG|IFVG (default FVG), retainPerSide=10 (chart shows
+fewer; registry keeps 10), timeframe default 1m and 15m instances.
+Detection at close of candle i (the three-candle pattern is i-2, i-1, i):
+  Bullish FVG: displacementUp[i-1] AND l[i] > h[i-2].
+    Zone = [h[i-2], l[i]]  (bottom, top). Created at bar i.
+  Bearish FVG: displacementDown[i-1] AND h[i] < l[i-2].
+    Zone = [h[i], l[i-2]].
+  IFVG mode inverts the gap comparisons (l[i] < h[i-2] / h[i] > l[i-2])
+  producing overlap ("implied") zones; displacement requirement stays.
+Consecutive-gap merge: if a same-direction FVG was created at bar i-1 and
+another qualifies at bar i, EXTEND the existing zone to the union of the
+two zones instead of creating a second detection.
+Lifecycle (bullish; bearish mirrors with highs):
+  ACTIVE  : price has not re-entered the zone.
+  TOUCHED : l[j] < zoneTop for some later bar j (partial fill).
+  FILLED  : l[j] < zoneBottom (full traverse) -> terminal; freeze right
+            edge at bar j.
+State transitions are monotonic (never revert). Retention: cap per side;
+oldest terminal detections evicted first.
+
+──────────────────────────────
+§S3 — BALANCED PRICE RANGE (BPR)
+──────────────────────────────
+Parameters: retainPerSide=5.
+Definition: when the most recent ACTIVE bullish FVG and most recent
+ACTIVE bearish FVG overlap in price, the intersection is a BPR:
+  region = [max(bullBottom, bearBottom_intersect_low), ...] — precisely:
+  low  = max(bullZoneBottom, bearZoneBottom)
+  high = min(bullZoneTop,   bearZoneTop);   valid iff low < high.
+Orientation: BULLISH BPR when the bullish gap sits above the bearish
+gap's bottom with the bullish gap created LATER (upward repricing through
+a prior bearish gap); BEARISH BPR mirrors. If both orderings are
+ambiguous on a given pair, orientation = direction of the LATER-created
+gap.
+Position flag at creation: pos = +1 if close > region.high, -1 if close <
+region.low, else 0 — determines which side invalidates:
+Lifecycle: ACTIVE; TOUCHED when price re-enters the region from the pos
+side; BROKEN (terminal) when price closes fully through to the far side.
+Extend right edge while ACTIVE; freeze on BROKEN.
+
+──────────────────────────────
+§S4 — VOLUME IMBALANCE (VI)
+──────────────────────────────
+Parameters: retain=6, projectBars=3 (display only).
+A body-gap between consecutive candles whose wicks still overlap (a
+visible inefficiency that is not a full opening gap).
+Bullish VI between i-1 and i — ALL must hold:
+  (1) o[i] > c[i-1]          (opens above prior close)
+  (2) c[i] > c[i-1]          (closes above prior close)
+  (3) o[i] > o[i-1]          (opens above prior open)
+  (4) h[i-1] > l[i]          (wicks overlap — not an opening gap)
+  (5) h[i-1] < bodyBot[i]    (prior wick high below current body)
+  Zone = [bodyTop[i-1], bodyBot[i]]  (bottom, top).
+Bearish VI mirrors:
+  o[i] < c[i-1]; c[i] < c[i-1]; o[i] < o[i-1]; l[i-1] < h[i];
+  l[i-1] > bodyTop[i]. Zone = [bodyTop[i], bodyBot[i-1]].
+Lifecycle: ACTIVE; FILLED (terminal) when a later candle's range fully
+covers the zone. Note test guidance: each inequality gets a near-miss
+negative test — these five conditions are the easiest place to introduce
+a silent bug.
+
+──────────────────────────────
+§S5 — OPENING GAPS (WEEKLY / DAILY)
+──────────────────────────────
+Parameters: retainWeekly=3, retainDaily=2.
+Session calendar: the engine's existing trading-day rollover (18:00 ET
+session boundary; weekly = the first session of the trading week, which
+opens Sunday 18:00 ET; if the D1 ladder from V3 exists, use its calendar
+— one calendar, one truth).
+WEEKLY OPENING GAP: zone between the final trade price of the previous
+week's last session (its close) and the first session's open:
+  low = min(prevWeekClose, weekOpen); high = max(...); midline =
+  avg(prevWeekClose, weekOpen). Created at the week-open bar. A holiday-
+  shifted week keys on SESSIONS, not calendar days.
+DAILY OPENING GAP: same construction between previous session close and
+current session open.
+Lifecycle: ACTIVE (extend right); TOUCHED when price enters the zone;
+no terminal state by fill (these act as persistent magnets) — eviction
+is by retention count only (oldest evicted). Midline is part of the
+detection meta (it is the commonly-watched magnet level).
+
+──────────────────────────────
+§S6 — LIQUIDITY POOLS (CLUSTERED EQUAL SWINGS)
+──────────────────────────────
+Parameters: swingLen=5 (left bars; right confirmation=1),
+toleranceDiv=2.5 (tolerance = ATR(10)/toleranceDiv), minCluster=3,
+scanDepth=50, retainPerSide=4.
+Swing points: pivot high at bar p iff h[p] is strictly greater than the
+prior swingLen highs and greater than the 1 following high (confirmed one
+bar later). Pivot low mirrors. Maintain a rolling list of confirmed
+swings (bounded scanDepth).
+Cluster test on each NEW confirmed pivot P (price y):
+  among prior SAME-SIDE swings, walk newest to oldest; stop at the first
+  one farther than tolerance from y ON THE FAR SIDE (cluster must be
+  contiguous in recency); count those within [y-tolerance, y+tolerance].
+  If count (including P) >= minCluster:
+    poolPrice = avg(minClusterPrice, maxClusterPrice);
+    zone = [poolPrice - tolerance, poolPrice + tolerance];
+    anchored at the OLDEST swing in the cluster.
+  If a pool already exists anchored at the same oldest swing, UPDATE its
+  zone instead of creating a duplicate.
+Sides: pools built from swing highs = BUYSIDE liquidity (resting stops
+above); from swing lows = SELLSIDE.
+Lifecycle (buyside; sellside mirrors): ACTIVE; PARTIAL when close >
+zoneBottom... precisely: PARTIAL when close crosses the NEARER boundary
+(bottom for buyside approached from below -> use: brokenLow when close >
+zone.low; brokenHigh when close > zone.high); SWEPT (terminal) when BOTH
+boundaries have been closed through. On PARTIAL, the pool is "being
+raided"; on SWEPT it is consumed.
+INTEGRATION (Agent 03): each pool registers into LevelEngine as an
+equal-high/low KnownLevel tagged ICTLIB_CLUSTER; the raid pipeline treats
+it exactly like its native equal levels.
+
+──────────────────────────────
+§S7 — ORDER BLOCKS WITH BREAKER LIFECYCLE
+──────────────────────────────
+Parameters: swingLen=10, useBody=true (zone from bodies vs full wicks),
+retainPerSide=5.
+Swing regime: maintain the most recent confirmed swing high (top) and
+swing low (btm) using swingLen-bar confirmation; each carries a
+"crossed" flag, initially false.
+Bullish OB creation: on the first close c[i] > top.price with top not
+yet crossed:
+  mark top.crossed; scan bars from top.bar+1 to i-1 for the candle with
+  the LOWEST low-reference (low-ref = bodyBot if useBody else l); the OB
+  zone = [that candle's low-ref, that candle's high-ref] where high-ref =
+  bodyTop if useBody else h; anchored at that candle. (The origin of the
+  move that broke structure.)
+Bearish OB mirrors on first close below an uncrossed btm (scan for the
+HIGHEST high-ref).
+Lifecycle:
+  ACTIVE  : freshly created demand (bullish) / supply (bearish) zone.
+  TESTED  : price trades into the zone without a body-close through it.
+  BREAKER : a body-close through the zone's far edge (bullish OB: min(o,c)
+            < zone.bottom) — polarity flips; the zone becomes resistance
+            (bullish breaker) / support (bearish breaker).
+  REMOVED : (terminal) after BREAKER, a close beyond the zone's near edge
+            in the original direction (bullish: close > zone.top) — the
+            zone is spent.
+Retention per side; terminal evicted first.
+
+──────────────────────────────
+§S8 — STRUCTURE ENGINE (MSS / BOS)
+──────────────────────────────
+Parameters: pivotLeft=5, pivotRight=1, historyCap=200.
+Zigzag: alternate confirmed pivot highs/lows (same confirmation as §S6);
+consecutive same-side pivots keep only the more extreme.
+Regime dir ∈ {-1, 0, +1}, initial 0.
+MSS (shift): close crosses ABOVE the most recent confirmed swing HIGH
+while dir <= 0 -> dir := +1, emit MSS_BULL at that swing's price/bar.
+Mirror for MSS_BEAR (close below most recent swing low while dir >= 0).
+BOS (continuation): while dir == +1, each close above a NEWER confirmed
+swing high emits BOS_BULL — deduplicated: no emission if the level equals
+the previous MSS/BOS level for that side. Mirror bearish.
+Emitted as point detections with price + bar; bounded by historyCap.
+Note: this engine serves the chart and confluence stack. The 2022-model
+gate MSS is a different, stricter construct and remains untouched;
+[ICTLIB-DIFF] measures their divergence.
+
+──────────────────────────────
+§S9 — TREND-SHIFT OTE ANCHORING (ChartEngine alternative mode)
+──────────────────────────────
+Parameters: pivotLen=10 (both sides), band = engine default [0.62, 0.79]
+(config-overridable; the widely-published variant is [0.618, 0.786]).
+Timeframe: the ChartEngine's 30m series (unchanged).
+Swing tracking: confirmed pivot highs/lows with pivotLen bars on each
+side; keep last and previous per side.
+Trend shift:
+  BULL shift: a new confirmed pivot high STRICTLY greater than the
+  previous swing high, while trendState <= 0 -> trendState := +1;
+  anchors: origin = most recent confirmed swing LOW (price+bar),
+  extreme = the new pivot high.
+  BEAR shift mirrors (new pivot low below previous swing low while
+  trendState >= 0; origin = last swing high, extreme = new low).
+Anchor extension: while trendState == +1 and no new shift, each new
+confirmed pivot high ABOVE the current extreme moves the extreme (fibs
+re-stretch). Extension only re-stretches a zone still in FORMING; an
+ARMED/REACTED zone is never silently re-anchored (a tagged band is a
+fact; re-stretching it would rewrite history — instead, a post-ARM
+extension INVALIDATES the old zone and forms a new one).
+Fib convention: identical to the engine's existing one — 0.0 at the
+EXTREME, 1.0 at the ORIGIN; OTE band per config.
+Invalidation: close through the origin (existing rule) OR an opposite
+trend shift.
+Lifecycle: reuse OteState exactly (FORMING/ARMED/REACTED/INVALIDATED/
+EXPIRED) — no new states, no consumer changes.
+
+──────────────────────────────
+§S10 — DISPLAY SESSIONS (CHART SHADING ONLY — NEVER A GATE)
+──────────────────────────────
+  New York        07:00–09:00  America/New_York
+  London Open     07:00–10:00  Europe/London
+  London Close    15:00–17:00  Europe/London
+  Asia            10:00–14:00  Asia/Tokyo
+Rendered as background shading with a legend, alongside (and visually
+distinct from) the engine's TRADING killzones (KillzoneClock). The
+trading gates read KillzoneClock only.
+
+================================================================================
+
+================================================================================
+SECTION 6 — APPENDICES A–J
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX A — PER-AGENT VERIFICATION LOG
+────────────────────────────────────────────────────────────────────────────────
+One block per agent, filled at completion with REAL evidence. Never leave a
+block empty for an agent marked ✅.
+
+··· APPENDIX A-01 — Agent 01: Pre-Flight + Inventories + License Base ···
+  STATUS:            ✅ COMPLETE
+  DATE COMPLETED:    2026-08-12
+  PR NUMBER:         #141 (base Main, state MERGED)
+  COMMIT HASH:       recorded in the Agent 02 doc update (squash hash is
+                     only knowable after this PR merges)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - Baselines green:
+        ENGINE+API (root multi-project, JAVA_HOME=temurin-21):
+          > Task :trading-engine:test
+          > Task :trading-engine:check
+          > Task :trading-engine:build
+          BUILD SUCCESSFUL in 11s
+          17 actionable tasks: 17 executed
+        DASHBOARD (dashboard-frontend, vite 5.4.21):
+          ✓ 914 modules transformed.
+          dist/assets/index-DBvf7VXw.js   798.24 kB │ gzip: 236.29 kB
+          ✓ built in 949ms      (zero TS errors)
+        Tree clean on Main at 38c75ef before any V4 work.
+    - Predecessor inventory (VERIFIED IN CODE, not in ledgers) — ALL PRESENT,
+      so no piece of this document has to be built minimally later:
+        ChartEngine (30m chart-in-memory)  trading-engine/src/main/java/com/
+          topstep/trading/chart/ChartEngine.java:42
+        OteState lifecycle (FORMING/ARMED/REACTED/INVALIDATED/EXPIRED)
+          .../chart/OteState.java:4  — advanceZone at ChartEngine.java:317,
+          getActiveOteZone at ChartEngine.java:160
+        /api/chart endpoint  api-backend/src/main/java/com/topstep/api/
+          controller/ChartStateController.java:30 (@RequestMapping("/api/chart"))
+        Bot Chart tab  dashboard-frontend/src/App.tsx:15 (import) and
+          App.tsx:118 (activeTab === 'botchart')
+        [GATES] 15m telemetry  .../strategy/stdvote/StdvOteRunnerStrategy.java:703
+        Stats persistence pattern = JSONL (NOT a DB) — .../strategy/stdvote/
+          OteAgreementStatsStore.java:64 -> data/ote_agreement_stats.jsonl,
+          override property `ote.stats.file` at :47. Live file exists at
+          data/ote_agreement_stats.jsonl. AGENT 08 WILL FOLLOW THIS PATTERN.
+        SIM warm boot  .../connector/SimWarmBoot.java:33
+        V3 M2b premium/discount  .../strategy/stdvote/PremiumDiscountEvaluator
+          .java:59, mode property `pd.gate.mode` at :62 (default LOG)
+        V3 bias vote  .../strategy/stdvote/BiasVoteEngine.java:45, property
+          `bias.vote.mode` at :48, enum VoteMode{LEGACY,LOG,VOTE} at :60
+        V3 M7b 30m-OTE gate  .../strategy/stdvote/Ote30mConfluenceGate.java:39,
+          property `ote30m.confluence` at :42 (default LOG)
+        Bias hysteresis flag  .../strategy/stdvote/StdvOteStrategy.java:192-194
+          (`bias.hysteresis.enabled`, default false)
+        V3 H4/D1 ladder  .../strategy/BarAggregationManager.java:48-49
+          (H4(240)/D1(1440), session-aware bucketing)
+        ChartEngine ingest call sites (the tap Agent 02 must share):
+          LiveEngineRunner.java:431 (backfill), :676 (live),
+          SimEngineRunner.java:327 (sim)
+    - Existing-detector inventory (P1) with file:line + one-line definition:
+        strategy/FvgDetector.java:16 — naive 3-candle gap (h[i-2] vs l[i]),
+          NO displacement requirement, max-N ring, fill+inversion tracking.
+        strategy/DisplacementDetector.java:34 — ATR-multiple + body/range
+          ratio (default 1.5x, 0.65), NOT the §S1 mean-body/wick-ratio form.
+        strategy/MarketStructureShiftDetector.java:24 — 2022-model MSS
+          serving gate M6; swing-lookback break + displacement strength.
+        strategy/OrderBlockDetector.java:18 — last opposite candle before an
+          impulse; validity/breach flags, no BREAKER/REMOVED lifecycle.
+        strategy/BreakerBlockDetector.java:25 — separate breaker construct.
+        strategy/MitigationBlockDetector.java:19 — mitigation blocks.
+        strategy/LiquidityDetector.java:14 — sweep detection (primary+SMT).
+        strategy/IctStructureDetector.java:14 — BOS/CHoCH helper for the
+          legacy IctHighConfluenceStrategy.
+        strategy/ConsolidationDetector.java:26, strategy/Power3Detector.java:30,
+          strategy/TrendlineDetector.java:25, strategy/VolatilityRegimeDetector
+          .java:16 — context detectors, no §S overlap.
+        chartstate/EqualLevelDetector.java:28 — clustered equal highs/lows,
+          the CLOSEST existing analogue to §S6 pools.
+        chartstate/LevelEngine.java:24 — the ONE level universe (PDH/PDL/
+          PWH/PWL/session/opens); `addEqualLevel(type, price, clusterSize,
+          timestamp)` at LevelEngine.java:434 is the §S6 adapter seam.
+        chartstate/RaidDetector.java:39 — raid pipeline consuming LevelEngine.
+    - License-sweep baseline CLEAN — verbatim output:
+        === LICENSE SWEEP BASELINE ===
+        --- pattern: LuxAlgo
+        --- pattern: ChartPrime
+        --- pattern: //@version
+        --- pattern: input.color
+        --- pattern: box.new
+        --- pattern: Pine (word)
+        === SWEEP END ===
+      (grep -rniI over the whole repo, excluding node_modules/.git/build/logs;
+       zero hits on every pattern. Agent 09 re-runs this exact set.)
+    - Spec-collision list (these become [ICTLIB-DIFF] telemetry, NEVER a
+      silent replacement — anti-pattern C3):
+        §S1 vs strategy/DisplacementDetector.java:34 — DIFFERENT definition.
+          Existing = body/range ratio >= 0.65 AND move >= 1.5x ATR.
+          §S1 = body > SMA(body,5) AND both wicks < 0.36*body. The two will
+          disagree on quiet-but-clean bars (§S1 fires, existing does not) and
+          on huge-but-wicky bars (existing fires, §S1 does not).
+        §S2 vs strategy/FvgDetector.java:16 — the headline collision. The
+          existing detector has NO displacement requirement, so ictlib will
+          report STRICTLY FEWER FVGs. That is Appendix E3/J by design.
+        §S6 vs chartstate/EqualLevelDetector.java:28 — both cluster equal
+          swings. Resolution per Agent 03: ictlib pools REGISTER INTO
+          LevelEngine (one level universe), they do not fork a second truth.
+        §S8 vs strategy/MarketStructureShiftDetector.java:24 — gate MSS is
+          stricter (requires displacement through the level). ictlib's is a
+          pure zigzag-regime read. Divergence measured in Agent 04.
+        §S3/§S4/§S5/§S7/§S9 — NO existing equivalent (BPR, volume imbalance,
+          opening gaps, breaker-lifecycle OBs and trend-shift anchoring are
+          all new to this repo). §S7 partially overlaps OrderBlockDetector's
+          zone idea but not its lifecycle.
+    - V4 document committed via merged PR: this file at repo root,
+      ICT_STACK_MASTER_PROMPT_V4.txt, PR #141.
+  SPEC DECISIONS (where Appendix S was ambiguous and you decided):
+    - none in Agent 01 (no detection code written). Appendix S read in full;
+      ambiguities identified for later agents are logged in their own blocks.
+  Q1/Q2/Q3 ANSWERS (where required):
+    - Q1: baselines re-run at HEAD after the document was added — still green.
+    - Q2: swept the WHOLE repo (not just trading-engine) for the license
+      patterns and for pre-existing "ictlib" naming — zero hits either way,
+      so Agent 02 starts on a genuinely empty package name.
+    - Q3: the failure class this agent guards is "predecessor assumed, not
+      verified". Swept every V2/V3 artifact this document names; all present,
+      so no ⛔ and no minimal-rebuild work is deferred into later agents.
+  ADAPTATIONS / REGRESSIONS / BLOCKED:
+    - Adaptation: builds run with JAVA_HOME=temurin-21 (the machine default
+      JDK is 23, which breaks the Groovy build-script compile — carried
+      forward from the V3 ledger, not a new issue).
+    - Regressions: none. Blocked: none.
+
+··· APPENDIX A-02 — Agent 02: ictlib I (Displacement, FVG/IFVG, BPR) ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  SPEC DECISIONS (where Appendix S was ambiguous and you decided):
+    - (decision + first-principles reason, or "none")
+  Q1/Q2/Q3 ANSWERS (where required):
+    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+  ADAPTATIONS / REGRESSIONS / BLOCKED:
+    - (as in prior documents; "none" where clean)
+
+··· APPENDIX A-03 — Agent 03: ictlib II (VI, Opening Gaps, Liquidity Pools) ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  SPEC DECISIONS (where Appendix S was ambiguous and you decided):
+    - (decision + first-principles reason, or "none")
+  Q1/Q2/Q3 ANSWERS (where required):
+    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+  ADAPTATIONS / REGRESSIONS / BLOCKED:
+    - (as in prior documents; "none" where clean)
+
+··· APPENDIX A-04 — Agent 04: ictlib III (Order Blocks, MSS/BOS) ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  SPEC DECISIONS (where Appendix S was ambiguous and you decided):
+    - (decision + first-principles reason, or "none")
+  Q1/Q2/Q3 ANSWERS (where required):
+    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+  ADAPTATIONS / REGRESSIONS / BLOCKED:
+    - (as in prior documents; "none" where clean)
+
+··· APPENDIX A-05 — Agent 05: Trend-Shift OTE Anchoring Mode ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  SPEC DECISIONS (where Appendix S was ambiguous and you decided):
+    - (decision + first-principles reason, or "none")
+  Q1/Q2/Q3 ANSWERS (where required):
+    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+  ADAPTATIONS / REGRESSIONS / BLOCKED:
+    - (as in prior documents; "none" where clean)
+
+··· APPENDIX A-06 — Agent 06: Bot Chart Overlay Parity ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  SPEC DECISIONS (where Appendix S was ambiguous and you decided):
+    - (decision + first-principles reason, or "none")
+  Q1/Q2/Q3 ANSWERS (where required):
+    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+  ADAPTATIONS / REGRESSIONS / BLOCKED:
+    - (as in prior documents; "none" where clean)
+
+··· APPENDIX A-07 — Agent 07: ConfluenceSnapshot Service ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  SPEC DECISIONS (where Appendix S was ambiguous and you decided):
+    - (decision + first-principles reason, or "none")
+  Q1/Q2/Q3 ANSWERS (where required):
+    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+  ADAPTATIONS / REGRESSIONS / BLOCKED:
+    - (as in prior documents; "none" where clean)
+
+··· APPENDIX A-08 — Agent 08: Profiles + Simulator + First Report ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  SPEC DECISIONS (where Appendix S was ambiguous and you decided):
+    - (decision + first-principles reason, or "none")
+  Q1/Q2/Q3 ANSWERS (where required):
+    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+  ADAPTATIONS / REGRESSIONS / BLOCKED:
+    - (as in prior documents; "none" where clean)
+
+··· APPENDIX A-09 — Agent 09: Final Verification & License Audit ···
+  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
+  DATE COMPLETED:    (YYYY-MM-DD)
+  PR NUMBER:         (#NN, base Main, state MERGED)
+  COMMIT HASH:       (squash-merge commit on Main)
+  EVIDENCE PER ACCEPTANCE CRITERION:
+    - criterion 1:   (file:line / pasted output)
+    - criterion 2:   (file:line / pasted output)
+    - (one line per criterion — every box in the agent)
+  SPEC DECISIONS (where Appendix S was ambiguous and you decided):
+    - (decision + first-principles reason, or "none")
+  Q1/Q2/Q3 ANSWERS (where required):
+    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+  ADAPTATIONS / REGRESSIONS / BLOCKED:
+    - (as in prior documents; "none" where clean)
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX B — ENGINEERING CONVENTIONS (DELTA OVER V2/V3)
+────────────────────────────────────────────────────────────────────────────────
+  B1-B12 of V3 apply verbatim (Java 21, PR-per-agent on Main, logging
+  conventions, javadoc-WHY, bounded concurrency, determinism, ZoneId
+  calendars, risk read-only, secrets in env, ABSTAIN, additive-over-
+  invasive, one seam per switch). Additions:
+  B13. One source of truth per detection family: chart and confluence
+       READ registry state; nothing recomputes a lifecycle elsewhere.
+  B14. Detection classes carry their §S section number in the class
+       javadoc so spec-to-code review is one lookup.
+  B15. New API payload fields are additive and capped; measure payload
+       size once in dev mode before calling Agent 06 done.
+  B16. Names are this repo's own vocabulary. Nothing Lux/Prime-flavored.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX C — ANTI-PATTERNS (STOP IF YOU CATCH YOURSELF)
+────────────────────────────────────────────────────────────────────────────────
+  C1.  Peeking at the Pine sources "just to check". Appendix S is the
+       only source; ambiguity gets a first-principles decision + a note.
+  C2.  Translating drawing logic into detection logic (boxes/labels are
+       display; the registry holds facts; the chart renders facts).
+  C3.  A second FVG/MSS truth silently replacing the gate detectors.
+       Parallel + measured ([ICTLIB-DIFF]) until the OWNER unifies.
+  C4.  Flipping trade.profile or anchorMode yourself. Owner-only.
+  C5.  A profile that touches risk. Sizing/DLL/flatten/kill-switch are
+       identical in all profiles — tested, not assumed.
+  C6.  Blocking on missing data anywhere. ABSTAIN + count.
+  C7.  Unbounded detection lists or unbounded API payloads.
+  C8.  Fixed UTC offsets in session logic.
+  C9.  Pushing to "main". The branch is Main.
+  C10. Marking ✅ with an empty Appendix A block; skipping the PR "until
+       later"; stopping between agents to ask permission.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX D — GLOSSARY + CLI QUICK REFERENCE
+────────────────────────────────────────────────────────────────────────────────
+  GLOSSARY (delta): ictlib = the chart/confluence-grade detection
+  library (§S1-§S10). Registry = per-symbol bounded store of detections
+  with lifecycle states. ConfluenceSnapshot = one aggregated read of
+  every confluence fact per symbol/direction, tri-state (true/false/
+  UNKNOWN). Profile = a named required-confluence set for entries;
+  STRICT = today, byte-identical. Would-trade event = a profile
+  satisfied while the active profile did not emit, with the active
+  profile's blocking gates recorded. Breaker = an order block whose far
+  edge was body-closed through; polarity flips.
+
+  CLI (delta over V3's reference, which still applies):
+    Confluence          curl http://localhost:8080/api/confluence/MNQ
+    Chart + detections  curl http://localhost:8080/api/chart/MNQ?lookback=50
+    Anchor mode         -Dchart.anchorMode=TREND_SHIFT   (default FRACTAL_LEG)
+    Anchor compare      -Dchart.anchorCompare=true       (default false)
+    OTE band            -Dchart.oteBand=0.618,0.786      (default 0.62,0.79)
+    Profile             -Dtrade.profile=STANDARD         (default STRICT)
+    Weights             -Dconfluence.weight.<field>=N
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX E — DESIGN RATIONALE (WHY EACH PIECE IS SHAPED THIS WAY)
+────────────────────────────────────────────────────────────────────────────────
+
+  E1. WHY SPEC-FIRST INSTEAD OF PORTING.
+      Beyond the license: Pine is a rendering language over a chart
+      runtime — boxes, labels, per-bar repaint. A trading engine needs
+      FACTS with lifecycles, queryable at decision time. Appendix S is
+      what the indicators MEAN, stripped of what they DRAW. The Java
+      implementation is therefore simpler, testable (Appendix W), and
+      faster than any transliteration could be.
+
+  E2. WHY ictlib IS PARALLEL, NOT A REPLACEMENT.
+      The gate detectors are tuned to the 2022-model state machine; a
+      hot-swap would change live trading semantics in one PR — exactly
+      what the Rollout Doctrine forbids. Parallel + [ICTLIB-DIFF] gives
+      the owner a measured unification decision later.
+
+  E3. WHY THE DISPLACEMENT REQUIREMENT ON FVGs MATTERS.
+      Naive three-candle gaps fire constantly on quiet tape; requiring a
+      displacement middle candle keeps only gaps left by energetic
+      moves — fewer, better zones. Expect the FVG count to DROP; that is
+      the feature (Troubleshooting entry exists so nobody "fixes" it).
+
+  E4. WHY PROFILES INSTEAD OF LOOSENING GATES.
+      Deleting a gate is unrecoverable context; a profile is a named,
+      reversible, testable configuration with risk pinned outside it.
+      And the always-on simulator means even in STRICT, every session
+      quietly answers "what would STANDARD have done?" — the owner never
+      has to guess what a flip would change.
+
+  E5. WHY MINIMAL EXISTS AT ALL.
+      Not to trade — to diagnose. MINIMAL=0 would-trades proves the
+      problem is upstream (warmth, data, sweep detection), not gate
+      strictness. It bounds the debate with a number.
+
+  E6. WHY TRI-STATE CONFLUENCE FIELDS.
+      A cold source reported as FALSE poisons the score and quietly
+      recreates the starved-input failure class. UNKNOWN excluded from
+      maxScore keeps a cold stack visibly cold and the doctrine intact.
+
+  E7. WHY THE POST-ARM RE-ANCHOR RULE (§S9).
+      A tagged OTE band is a historical fact used for entries; silently
+      re-stretching it after ARM would let the zone "chase" price and
+      make REACTED unfalsifiable. Invalidate-and-reform keeps every zone
+      auditable against the chart.
+
+  E8. WHY POOLS REGISTER INTO LevelEngine.
+      Two level universes means a raid can fire on a level the chart
+      never showed, or vice versa — undebuggable. One universe, source-
+      tagged, keeps raids, chart, and confluence telling one story.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX G — RISK REGISTER FOR THIS DOCUMENT'S CHANGES
+────────────────────────────────────────────────────────────────────────────────
+
+  G-R1. Pine-derived code enters the repo despite the guardrail.
+        Impact: license violation embedded in a commercial system.
+        Mitigation: Appendix S sole-source rule; Agent 01 baseline grep;
+        Agent 09 zero-tolerance audit with revert; C1/C2; B16 naming.
+  G-R2. A profile flip silently loosens a RISK control.
+        Impact: the one unforgivable failure class on a funded account.
+        Mitigation: risk-independence parameterized tests (Agent 08 —
+        load-bearing criterion); Rollout Doctrine text; R4; Agent 09
+        end-to-end oversized-entry rejection check.
+  G-R3. Duplicate detection truths diverge (ictlib FVG vs gate FVG,
+        ictlib MSS vs gate MSS) and the owner trusts the wrong one.
+        Mitigation: parallel-by-design with [ICTLIB-DIFF] measurement;
+        B13 single-source-per-family for chart/confluence; unification
+        is a future owner decision from the diff data, never silent.
+  G-R4. Detection bugs from the §S4/§S6 inequality thickets.
+        Mitigation: Appendix W hand-computed vectors as verbatim tests;
+        near-miss negative mandate; determinism tests.
+  G-R5. API/chart payload bloat degrades the dashboard.
+        Mitigation: retention caps, dev-mode payload size log, B15,
+        Agent 06 acceptance criterion with numbers.
+  G-R6. Simulator counts mislead (SIM-only data driving a live flip).
+        Mitigation: mandatory report caveat; R2's interpretation guide;
+        live-observation prerequisite in R3.
+  G-R7. Session-calendar drift between §S5 gaps, D1 ladder, and
+        LevelEngine rollover (two calendars, subtle off-by-one-session).
+        Mitigation: "one calendar, one truth" mandate (Agent 03 Task 1);
+        holiday-Monday test; troubleshooting entry.
+  G-R8. Post-ARM re-anchoring rewrites OTE history (§S9).
+        Mitigation: explicit invalidate-and-reform rule with a dedicated
+        test (W7's post-ARM assertion).
+  G-R9. gh/branch friction (Main capital M; auth).
+        Mitigation: hardcoded in workflow, C9, ⛔ path.
+  G-R10. Memory growth from nine detection families across symbols.
+        Mitigation: per-family caps (Appendix S), bounded registries,
+        C7; Agent 09 could spot-check heap via startup logs if available.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX H — TRACEABILITY: OWNER'S ASK -> AGENTS
+────────────────────────────────────────────────────────────────────────────────
+  "Build every ICT concept the indicator shows"   -> Agents 02-04 (§S1-§S8)
+  "The visualization aspect is done"              -> Agent 06 (+05 meta)
+  "Use the indicator['s concepts] to stack up my
+   confluences"                                   -> Agent 07 (the stack)
+  "So that trades actually take place"            -> Agent 08 (profiles +
+     simulator: which confluences the tape actually offers, which gate
+     blocks, and an owner-flippable STANDARD profile), grounded by the
+     Rollout Doctrine so the path to more trades is evidence, not hope.
+  "OTE indicator as well"                         -> Agent 05 (§S9 mode).
+  Licensing reality (NC use is commercial use
+   regardless of repo visibility; Pine cannot
+   port anyway)                                   -> Guardrail + Appendix S
+     + Agent 09 audit: same functionality, clean provenance.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX I — CONSOLIDATED TEST MATRIX (GREEN AT AGENT 09)
+────────────────────────────────────────────────────────────────────────────────
+  INHERITED: entire pre-existing suite unchanged (regression floor),
+  incl. V1-V3 chart/backfill/warmup/hysteresis/M2b/vote/ladder tests.
+  AGENT 02: lifecycle transitions per family; displacement-required FVG
+    negative; merge; IFVG; caps; determinism.
+  AGENT 03: §S4 inequality near-miss negatives (5 bull + 5 bear);
+    cluster formation/update; two-phase break; ATR tolerance; holiday
+    Monday gap; LevelEngine adapter integration; caps; determinism.
+  AGENT 04: OB origin scan (body+wick modes); TESTED/BREAKER/REMOVED;
+    MSS/BOS whipsaw + dedup; caps; determinism.
+  AGENT 05: shift anchoring; extension pre-ARM re-stretch; post-ARM
+    extension -> invalidate+new; opposite-shift invalidation; FRACTAL_LEG
+    default unchanged (existing tests pass verbatim); determinism.
+  AGENT 06: typed payload; bounded size; zero TS errors; four UI states.
+  AGENT 07: aggregation-only (mocked sources); UNKNOWN arithmetic;
+    weights; serialization; determinism.
+  AGENT 08: STRICT byte-identical (existing validator tests verbatim);
+    RISK-INDEPENDENCE parameterized across profiles; simulator event
+    recording + persistence round-trip; would-trade blocking-gate lists.
+  ENVIRONMENT NOTE: SIM/npm proofs the environment cannot run become ⛔
+  with the exact local command — never silent, never fabricated.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX J — TROUBLESHOOTING (DELTA)
+────────────────────────────────────────────────────────────────────────────────
+  SYMPTOM: ictlib finds far fewer FVGs than the old detector.
+    CAUSE: the displacement requirement (§S2) — by design. ACTION: read
+    [ICTLIB-DIFF]; the delta is the filter working, not a bug; verify a
+    handful on the Bot Chart.
+  SYMPTOM: Bot Chart cluttered/slow after Agent 06.
+    CAUSE: retention caps too high for the payload. ACTION: lower per-
+    family caps; check the dev-mode payload-size log.
+  SYMPTOM: [PROFILE] shows MINIMAL would-trade = 0 across sessions.
+    CAUSE: upstream starvation (cold chart / no sweeps detected), not
+    strictness. ACTION: warm checks first (/api/chart warm), then the
+    sweep detector's inputs — MINIMAL=0 means the pipeline, not gates.
+  SYMPTOM: STANDARD would-trades cluster outside killzones in the log.
+    CAUSE: a bug — every profile requires the TRADING killzone. ACTION:
+    that is a failing invariant; fixup PR before anything else.
+  SYMPTOM: pools never form though equal highs are visible on the chart.
+    CAUSE: toleranceDiv too high for the instrument's ATR, or minCluster
+    too strict. ACTION: log candidate clusters at debug; tune per symbol.
+  ESCALATION: unresolved symptoms get a dated LEDGER NOTE with evidence
+  and a fixup PR or ⛔ owner action. Real money; nothing stays weird and
+  undocumented.
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX W — WORKED EXAMPLES (HAND-COMPUTED TEST VECTORS FOR APPENDIX S)
+────────────────────────────────────────────────────────────────────────────────
+Each example is a concrete candle sequence with the expected detection.
+Claude Code turns every one of these into a unit test verbatim (values are
+MNQ-scaled; tick 0.25). Candles as (o, h, l, c). meanLen=5, wickRatioMax
+=0.36 unless stated.
+
+W1. DISPLACEMENT (§S1) — POSITIVE:
+    Prior five bodies: 8, 10, 9, 7, 11  -> meanBody = 9.0
+    Candle X = (21000.00, 21016.00, 20999.00, 21015.00)
+      body = 15.0 > 9.0 ✓
+      wickTop = 21016-21015 = 1.0 < 15*0.36=5.4 ✓
+      wickBot = 21000-20999 = 1.0 < 5.4 ✓ ; close>open ✓
+      => displacementUp = TRUE.
+    NEGATIVE (wick fails): same but high = 21022.00 -> wickTop = 7.0 >
+      5.4 => FALSE (an expansion bar with a big rejection wick is not
+      displacement).
+
+W2. FVG (§S2) — POSITIVE BULLISH:
+    i-2 = (20990, 21001, 20988, 21000)
+    i-1 = displacementUp per W1 anchored at (21000 ... 21015)
+    i   = (21015, 21020, 21004, 21018)
+      l[i]=21004 > h[i-2]=21001 ✓ and displacementUp[i-1] ✓
+      => Bullish FVG zone = [21001.00, 21004.00].
+    NEGATIVE (no displacement): identical prices but i-1 body 6.0 <
+      meanBody -> NO detection (the §S2 upgrade over naive 3-candle
+      gaps — this exact pair is the mandatory negative test).
+    LIFECYCLE: later bar with l=21003.50 -> TOUCHED; later bar with
+      l=21000.75 (< 21001) -> FILLED, terminal.
+
+W3. VOLUME IMBALANCE (§S4) — POSITIVE BULLISH:
+    i-1 = (20995, 21003, 20993, 21002)   bodyTop[i-1]=21002, h[i-1]=21003
+    i   = (21005, 21012, 21002.5, 21011) bodyBot[i]=21005
+      (1) 21005 > 21002 ✓  (2) 21011 > 21002 ✓  (3) 21005 > 20995 ✓
+      (4) 21003 > 21002.5 ✓ (wicks overlap)
+      (5) 21003 < 21005 ✓  (prior wick below current body)
+      => VI zone = [21002.00, 21005.00].
+    FIVE NEGATIVES: flip exactly one inequality each —
+      (1') o[i]=21001.5 ; (2') c[i]=21001 ; (3') o[i-1]=21006 ;
+      (4') l[i]=21003.5 (no wick overlap -> that is an opening gap, not
+      VI) ; (5') h[i-1]=21006 (prior wick pierces current body).
+      Each must yield NO detection.
+
+W4. LIQUIDITY POOL (§S6) — POSITIVE BUYSIDE:
+    ATR(10)=8.0, toleranceDiv=2.5 -> tolerance=3.2, minCluster=3.
+    Confirmed swing highs (newest last): 21050.0, 21048.5, 21051.0
+      new pivot P=21051.0: |21050.0-21051.0|=1.0 <= 3.2 ✓,
+      |21048.5-21051.0|=2.5 <= 3.2 ✓ -> cluster size 3 ✓
+      poolPrice = avg(min=21048.5, max=21051.0) = 21049.75
+      zone = [21046.55, 21052.95], anchored at the oldest of the three.
+    NEGATIVE: swing at 21046.0 only (|Δ|=5.0 > 3.2) with one other at
+      21050.0 -> cluster size 2 -> no pool.
+    LIFECYCLE: close 21047.0 (> zone.low) -> PARTIAL; later close
+      21053.5 (> zone.high) -> SWEPT.
+
+W5. ORDER BLOCK (§S7, useBody=true) — POSITIVE BULLISH:
+    Confirmed swing high top = 21030.0 at bar 100, crossed=false.
+    Bars 101..104 bodyBot: 21024, 21018, 21021, 21026; bar 105 closes
+    21032.0 > 21030.0 -> create: origin = bar 102 (lowest bodyBot
+    21018); zone = [21018.0, bodyTop[102]] (say 21023.0).
+    LIFECYCLE: later bar trades l=21020 without body-close below 21018
+    -> TESTED; later bar min(o,c)=21016 -> BREAKER; later close 21024.5
+    (> zone.top) -> REMOVED.
+
+W6. MSS/BOS (§S8):
+    dir=0. Confirmed swing high 21040 exists. Close 21042 -> MSS_BULL at
+    21040, dir=+1. New confirmed swing high 21055; close 21056 ->
+    BOS_BULL at 21055. Another close above 21055 with no NEWER swing ->
+    NO second BOS (dedup). Confirmed swing low 21035; close 21033 ->
+    MSS_BEAR at 21035, dir=-1 (whipsaw case: assert full transition).
+
+W7. TREND-SHIFT OTE (§S9), band [0.62, 0.79]:
+    prevSwingHigh=21050. New confirmed pivot high 21062 (> 21050) while
+    trendState<=0 -> BULL shift; origin = last swing low 21010;
+    extreme = 21062. Fibs: 0.62 -> 21062-52*0.62 = 21029.76;
+    0.705 -> 21025.34; 0.79 -> 21020.92. Zone FORMING.
+    EXTENSION pre-ARM: new pivot high 21070 -> extreme=21070; 0.705
+    recomputes to 21027.70.
+    POST-ARM RULE: after a bar with l=21028.5 (inside band -> ARMED), a
+    further pivot high must NOT re-stretch — it INVALIDATES and forms a
+    fresh FORMING zone (assert both the invalidation and the new zone).
+    INVALIDATION: close 21008 (< origin 21010) -> INVALIDATED.
+
+W8. OPENING GAP (§S5, daily):
+    Session close (17:00 ET) = 21020.0; next session open (18:00 ET) =
+    21031.5 -> NDOG zone [21020.0, 21031.5], midline 21025.75. A later
+    bar with l=21027 -> TOUCHED; the zone never terminates on fill
+    (retention-evicted only).
+
+────────────────────────────────────────────────────────────────────────────────
+APPENDIX R — OWNER'S ROLLOUT RUNBOOK (POST-V4)
+────────────────────────────────────────────────────────────────────────────────
+Claude Code: append to docs/QUICK_START.md (or link) in Agent 09.
+
+  R1. WEEK ONE — LOOK, DON'T TOUCH.
+      Run LIVE-observation (or warm SIM if the market is closed) with
+      everything at defaults. Each day: open the Bot Chart next to
+      TopstepX with the reference indicators loaded; confirm the same
+      FVGs, OBs, pools, and OTE band appear in the same places. Any
+      structural mismatch is a fixup before any flip.
+
+  R2. READ THE THREE NUMBERS DAILY.
+      [PROFILE] would-trade counts (STANDARD, MINIMAL), the ranked
+      blocking gates of STRICT in the report, and [ICTLIB-DIFF]. The
+      story they tell together: MINIMAL=0 -> pipeline problem (warmth,
+      sweeps), not strictness — fix upstream first. STANDARD >> STRICT=0
+      with sane blocking gates -> strictness is the cost; the flip is on
+      the table. STANDARD ≈ 0 too -> the tape genuinely is not offering
+      the choreography; no flag will fix that honestly.
+
+  R3. THE FLIP (when R2 supports it).
+      Review the last 10 STANDARD would-trade events against the Bot
+      Chart: would you have taken them by hand? If most yes:
+        -Dtrade.profile=STANDARD
+      One switch, one week. MINIMAL is a diagnostic floor — trading it
+      requires a written reason in the LEDGER NOTES first.
+
+  R4. WHAT NEVER CHANGES.
+      DLL/MLL, max contracts, flatten-by, sizing bounds, warmup guards,
+      the kill switch, and killzone-only entries hold in every profile.
+      If any would-trade event violates one of those, it is a bug —
+      revert to STRICT and file it. Re-verify Topstep's current written
+      automation policy for the account type before any live flip.
+
+  R5. ANCHOR MODE (separate decision, separate week).
+      Turn on -Dchart.anchorCompare=true for a few sessions; if
+      TREND_SHIFT zones consistently match what you would draw and the
+      FRACTAL_LEG ones do not, flip -Dchart.anchorMode=TREND_SHIFT —
+      alone, on its own week, per the one-switch rule.
+
+================================================================================
+SECTION 7 — CLOSING BANNER
+================================================================================
+
+  You have your orders. Return to the GOLDEN LOOP now:
+
+    STEP 1: open this document.
+    STEP 2: find the first agent that is not ✅ COMPLETE.
+    STEP 3: execute it fully. Evidence, ledger, Appendix A, branch,
+            commit, PR against Main, squash-merge.
+    STEP 4: return to STEP 1.
+
+  Repeat until every agent in the PROGRESS LEDGER is ✅ COMPLETE and
+  Agent 09 has passed with evidence. You do NOT stop and wait between
+  agents.
+
+  The end state, one more time: every ICT concept from the reference
+  behavior implemented cleanly from spec, drawn live on the Bot Chart,
+  stacked into one queryable confluence object, and — the part the owner
+  actually asked for underneath it all — a simulator that names, in
+  numbers, exactly which confluences the tape offers and which gate says
+  no, so that when trades start placing it is because the OWNER chose a
+  profile from evidence, with every risk control still standing exactly
+  where Topstep needs it.
+
+  DO NOT STOP UNTIL EVERY AGENT IS ✅.
+
+================================================================================
+                            END OF MASTER PROMPT V4
+================================================================================
