@@ -608,6 +608,66 @@ dies upstream -> fix upstream fragility first (F3), then REVISIT whether
 
 ---
 
+## TUNING THE BOT CHART — OTE ANCHORING (V4 §S9)
+
+The Bot Chart can draw its OTE fibs two ways. **The default is unchanged from
+pre-V4** and nothing flips without the owner flipping it.
+
+| Mode | How the leg is chosen |
+|------|----------------------|
+| `FRACTAL_LEG` **(default)** | The most recent significant 2-bar fractal leg — whichever of the last confirmed swing high / low came later sets the direction. |
+| `TREND_SHIFT` | §S9: the swing **low that started the trend** to the confirmed higher high that **shifted structure**, with the high anchor **extending** as the trend prints new confirmed highs. What a human actually draws. |
+
+```
+-Dchart.anchorMode=TREND_SHIFT        # global    (default FRACTAL_LEG)
+-Dchart.anchorMode.MNQ=TREND_SHIFT    # one symbol
+-Dchart.oteBand=0.618,0.786           # default   0.62,0.79 (sweet = midpoint)
+-Dchart.anchorCompare=true            # default   false
+```
+
+The resolved values are printed once per instrument at startup and served on
+every `/api/chart/{symbol}` response:
+
+```json
+{ "anchorMode": "FRACTAL_LEG", "oteBand": "0.62,0.79", "anchorCompare": false }
+```
+
+Each zone also carries its own `anchorMode` and band inside the `ote` object,
+so a zone always reports the levels it was *actually* armed on — a config
+change can never retroactively rewrite the fibs of a zone that already exists.
+
+### The post-ARM rule (the part worth understanding)
+
+While a zone is still `FORMING`, a new higher confirmed pivot simply
+**re-stretches** the fibs — no fact has been recorded against the old levels
+yet, so nothing is lost.
+
+Once a zone is `ARMED` or `REACTED`, it is a **historical fact about prices
+that were actually traded**. Extending it would let the band chase price and
+make `REACTED` unfalsifiable. So a post-ARM extension **invalidates** the old
+zone and forms a fresh `FORMING` one on the new anchors. The invalidated zone
+stays queryable so the sequence remains auditable against the chart.
+
+A zone is also invalidated by a close through its origin (the pre-existing
+rule) or by an opposite trend shift.
+
+### `chart.anchorCompare` — deciding from evidence
+
+With the flag on, BOTH modes run. The active mode answers every query; the
+other is a shadow, exposed as `shadowOte` and logged only when the two
+verdicts diverge:
+
+```
+[CHART-ANCHOR MNQ] TREND_SHIFT=FORMING/BULL@21000.0-21200.0 FRACTAL_LEG=FORMING/BEAR@21200.0-21050.0
+```
+
+They frequently **agree** on clean trending tape and diverge when a shallow
+pullback creates a fractal micro-leg that the trend read ignores. Run it for a
+few sessions and flip only if the `TREND_SHIFT` zones consistently match what
+you would have drawn by hand — on its own week, per the one-switch rule.
+
+---
+
 ## THE ICT LIBRARY (`ictlib`) — V4
 
 `trading-engine/src/main/java/com/topstep/trading/ictlib/` is the
