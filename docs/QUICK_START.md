@@ -608,6 +608,68 @@ dies upstream -> fix upstream fragility first (F3), then REVISIT whether
 
 ---
 
+## THE BOT CHART OVERLAY — V4 Agent 06
+
+The Bot Chart now draws what a fully-loaded ICT chart draws. Hold it next to
+TopstepX: the same structures should appear in the same places.
+
+### Layers
+
+| Chip | Family | Default | Drawn as |
+|------|--------|---------|----------|
+| FVG | `fvg` | on | box |
+| Order blocks | `orderBlock` | on | box |
+| Liquidity pools | `liquidityPool` | on | box |
+| Volume imbalance | `volumeImbalance` | on | box |
+| Daily gap (NDOG) | `openingGapDaily` | on | box + midline |
+| Weekly gap (NWOG) | `openingGapWeekly` | on | box + midline |
+| MSS | `mss` | on | marker |
+| BOS | `bos` | on | marker |
+| Displacement | `displacement` | **off** | marker |
+| BPR | `bpr` | **off** | box |
+
+Displacement and BPR start off: both are derived from things already on the
+chart, so they are the first to clutter it. Every chip shows its live count and
+toggles independently.
+
+### Lifecycle → appearance (one mapping, every family)
+
+| State | Appearance |
+|-------|-----------|
+| `ACTIVE`, `POINT` | solid border, extends to the right edge |
+| `TOUCHED`, `TESTED`, `PARTIAL` | dashed border — price has interacted with it |
+| `BREAKER` | dashed, **not** muted — polarity flipped but still a live level |
+| `FILLED`, `BROKEN`, `SWEPT`, `REMOVED` | muted, and the **right edge freezes** at the bar that ended it |
+
+### Session shading — two kinds, deliberately distinct
+
+The pale bands are §S10 **display sessions** (NY, London open, London close,
+Asia, each in its own timezone). The green bands are the engine's real
+**TRADING killzones** from `KillzoneClock` — 09:45–12:30 and 13:45–16:00 ET.
+
+The legend spells this out because confusing the two is how someone ends up
+"explaining" a trade with a window no gate ever consulted. **Only the
+killzones are read by anything that trades.**
+
+### Detection timeframe
+
+The `15m` / `1m` / `all` selector chooses which ictlib series the overlay
+requests. **15m is the default**: on a 30m chart the 1m instances are noise.
+Switch to `1m` for the close side-by-side verification pass.
+
+### Payload
+
+Bounded server-side: every live detection per family plus the 3 most recent
+finished ones, hard-capped at 300 total. If the cap bites, the UI says so
+rather than silently showing a shortened list. Measured on a warm SIM session:
+**~24 KB total, ~8 KB of detections** at 15m — comfortably pollable at 15s.
+Dev builds log the exact size once per fetch.
+
+Tune with `?detections=<1m|15m|all>` and `?detectionCap=<n>`, or lower the
+per-family `ictlib.retain.*` caps.
+
+---
+
 ## TUNING THE BOT CHART — OTE ANCHORING (V4 §S9)
 
 The Bot Chart can draw its OTE fibs two ways. **The default is unchanged from

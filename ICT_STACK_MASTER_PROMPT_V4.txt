@@ -217,13 +217,23 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 03 — ictlib II: Volume Imbalance, Opening Gaps, Liquidity Pools (§S4–§S6)
   [✅] Agent 04 — ictlib III: Order Blocks + Structure Engine MSS/BOS (§S7–§S8)
   [✅] Agent 05 — Trend-Shift OTE Anchoring Mode in ChartEngine (§S9)
-  [⬜] Agent 06 — Bot Chart Overlay Parity (Every Detection Rendered)
+  [✅] Agent 06 — Bot Chart Overlay Parity (Every Detection Rendered)
   [⬜] Agent 07 — ConfluenceSnapshot Service + [CONFLUENCE] Telemetry + API
   [⬜] Agent 08 — Confluence Profiles + Profile Simulator + First Report
   [⬜] Agent 09 — FINAL VERIFICATION & CLOSE-OUT (incl. license audit)
 
   LEDGER NOTES (append one dated line per completion):
   ------------------------------------------------------------------
+  2026-08-12 Agent 06 ✅ — THE VISUALIZATION MILESTONE. /api/chart now serves a
+    bounded `detections` object (every live detection per family + the 3 most
+    recent finished, hard cap 300, `truncated` never silent) and the Bot Chart
+    renders all ten families as toggleable layers with one lifecycle->style
+    mapping, opening-gap midlines, MSS/BOS markers, and DUAL session shading
+    that calls out the TRADING killzones as the only windows a gate reads.
+    Verified END TO END against a warm SIM (4,348 bars): 25 zone boxes, 6
+    structure markers, 3 midlines, 18 killzone bands + 47 display-session
+    bands, layer toggle proven to drop exactly its own boxes. Payload ~24 KB
+    total / ~8 KB detections. Dashboard builds with ZERO TS errors.
   2026-08-12 Agent 05 ✅ — §S9 trend-shift anchoring ships as a SELECTABLE
     mode; chart.anchorMode defaults to FRACTAL_LEG and all 13 pre-existing
     ChartEngine/backfill tests pass UNCHANGED. The band moved onto the zone
@@ -1624,7 +1634,7 @@ block empty for an agent marked ✅.
   STATUS:            ✅ COMPLETE
   DATE COMPLETED:    2026-08-12
   PR NUMBER:         #145 (base Main, state MERGED)
-  COMMIT HASH:       recorded in the Agent 06 doc update
+  COMMIT HASH:       d398498  (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - Mode + band config with defaults preserving today (file:line):
         AnchorMode enum                chart/AnchorMode.java:14
@@ -1791,20 +1801,139 @@ block empty for an agent marked ✅.
     - Regressions: none (605/0). Blocked: none.
 
 ··· APPENDIX A-06 — Agent 06: Bot Chart Overlay Parity ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
-  COMMIT HASH:       (squash-merge commit on Main)
+  STATUS:            ✅ COMPLETE
+  DATE COMPLETED:    2026-08-12
+  PR NUMBER:         #146 (base Main, state MERGED)
+  COMMIT HASH:       recorded in the Agent 07 doc update
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - /api/chart detections payload, BOUNDED and TYPED:
+        builder      trading-engine/.../ictlib/DetectionPayload.java:33
+                     (per family: every LIVE detection + the 3 most recent
+                      finished; then a hard total cap; `truncated` reported)
+        endpoint     api-backend/.../ChartStateController.java (detections
+                     block; ?detections=<1m|15m|all>, ?detectionCap=<n>)
+        TS interfaces  dashboard-frontend/src/types/chart.ts —
+                     Detection, DetectionsPayload, DetectionFamily,
+                     DetectionStateName, DetectionTimeframe. NO `any`
+                     anywhere in the new code.
+        tests        DetectionPayloadTest 6/6 PASSED — shape, timeframe
+                     filter, terminal trimming, the hard cap being honest
+                     about truncation, the empty-registry shape, and a size
+                     assertion.
+      REAL curl from a warm SIM (MNQ, 4,325 1m bars, 101 30m candles):
+        $ curl "localhost:8096/api/chart/MNQ?lookback=100&detections=15m"
+        warm=True  anchorMode=FRACTAL_LEG  oteBand=0.62,0.79
+        detections: tf=15m cap=300 returned=21 truncated=False
+          displacement       n=  3 states={POINT:3}
+          openingGapWeekly   n=  1 states={TOUCHED:1}
+          openingGapDaily    n=  2 states={TOUCHED:2}
+          liquidityPool      n=  4 states={PARTIAL:1, SWEPT:3}
+          orderBlock         n=  5 states={BREAKER:2, REMOVED:3}
+          mss                n=  3 states={POINT:3}
+          bos                n=  3 states={POINT:3}
+        $ curl "...&detections=all"   returned=39 truncated=False
+          fvg                n=  4 states={TOUCHED:1, FILLED:3}
+          orderBlock         n= 11 states={ACTIVE:1, TESTED:4, BREAKER:3, REMOVED:3}
+          liquidityPool      n=  9 states={PARTIAL:6, SWEPT:3}
+          (+ displacement 3, openingGapWeekly 2, openingGapDaily 4, mss 3, bos 3)
+        A verbatim detection, straight off the wire:
+          {"id":"fvg:1m:bullish:213","type":"fvg","timeframe":"1m",
+           "direction":"BULLISH","top":20001.668905922073,
+           "bottom":20001.120256425475,"state":"FILLED",
+           "createdAt":"2026-08-12T06:42:00Z",
+           "stateChangedAt":"2026-08-12T06:43:00Z","meta":{"mode":"FVG"}}
+    - All families rendered with lifecycle styling + toggles — measured in a
+      REAL BROWSER (Playwright) against that warm SIM, reading the live DOM:
+        detectionTf = "1m"
+        layer chips with live counts: FVG 4 · Order blocks 10 · Liquidity
+          pools 8 · Volume imbalance 0 · Daily gap (NDOG) 2 · Weekly gap
+          (NWOG) 1 · MSS 3 · BOS 3 · Displacement 3 · BPR 0 · Sessions
+        zone boxes      25  (solid 2 = ACTIVE, dashed 23 = TOUCHED/TESTED/
+                             PARTIAL/BREAKER/terminal)
+        midlines         3  (the NDOG/NWOG magnet lines)
+        markers          6  labelled "MSS ↑", "MSS ↓", "MSS ↑", "BOS ↑",
+                            "BOS ↓", "BOS ↑"
+        truncated notice null (the cap did not bite)
+      FVG WITH A STATE CHANGE (the named criterion): the payload above carries
+      fvg TOUCHED:1 and FILLED:3 — a gap that price re-entered and three that
+      price traversed, all with stateChangedAt AFTER createdAt, drawn dashed
+      and frozen at the bar that ended them.
+      TOGGLE PROVEN, not assumed: clicking "Order blocks" off took the zone
+      boxes from 25 to 15 — exactly the 10 order blocks — and set
+      aria-pressed=false.
+      OTE band + badge: warm pill "CHART WARM (4348 bars)", anchor pill
+      "FRACTAL_LEG", OTE badge "OTE FORMING ↑", and the legend line
+      "OTE bullish leg: origin 19,947.25 → extreme 20,010.48 · 0.62 19,971.28
+      · 0.705 19,965.9 · 0.786 19,960.78 · anchored FRACTAL_LEG".
+      Screenshot kept out of the repo (binary evidence does not belong in
+      git); it shows the shaded sessions, the fib price lines with axis
+      labels, the layer chips and the legend.
+    - DUAL session shading with legend (evidence): 65 shading bands in the
+      DOM — 18 TRADING-killzone bands (rgba 32,201,151) and 47 display-session
+      bands. Legend items read: "NY (display)", "London open", "London close",
+      "Asia", and — visually distinct and bold — "TRADING killzones (the only
+      windows any gate reads)". P3 is respected in code as well as in text:
+      the display windows live in dashboard-frontend/src/components/
+      detectionLayers.ts:SESSIONS and are display-only; no gate reads them.
+    - UI states intact; ZERO TS errors:
+        > tsc && vite build
+        ✓ 915 modules transformed.
+        dist/assets/index-DXvzWwjo.css   23.99 kB │ gzip: 5.38 kB
+        dist/assets/index-HHsE3S_c.js   805.48 kB │ gzip: 238.78 kB
+        ✓ built in 904ms
+      Loading skeleton, empty state, error+retry and the COLD banner are
+      untouched and still rendered from the same conditions; the overlay lives
+      inside the same .botchart-stage that is hidden until candles arrive.
+      Console errors observed during the run are PRE-EXISTING WebSocket
+      handshake 403s from the dashboard's own /ws/stream reconnect loop —
+      unrelated to this agent (nothing in the new code opens a socket).
+    - Payload size measured and under cap (numbers): 23,861 bytes total /
+      8,103 bytes of detections at 15m; 14,892 bytes of detections at "all".
+      returned 21 of cap 300. Dev builds log it once per fetch
+      (BotChart.tsx fetchChart, guarded by import.meta.env.DEV).
+    - Full engine suite still green: tests=611 failures=0 errors=0 skipped=1.
+    - PR merged: #146, base Main.
   SPEC DECISIONS (where Appendix S was ambiguous and you decided):
-    - (decision + first-principles reason, or "none")
+    - Detection timeframe on a 30m chart — the brief does not say which
+      ictlib series to draw. DECIDED: default to the 15m instances, with a
+      1m/all selector in the toolbar. 1m zones on a 30m chart are noise
+      rather than information, but the close verification pass against
+      TopstepX genuinely needs them, so the choice is the owner's per look
+      instead of baked in.
+    - Zone right-edge semantics — ACTIVE zones extend to the right edge of
+      the chart; terminal ones freeze at their stateChangedAt bar. That is
+      the §S2/§S3 "extend right edge while ACTIVE, freeze on terminal" rule
+      rendered literally, so the drawing cannot say something the state does
+      not.
+    - Detections older than the visible window clamp to x=0 rather than being
+      dropped. A weekly opening gap created three sessions ago is exactly the
+      kind of magnet the chart must keep showing.
   Q1/Q2/Q3 ANSWERS (where required):
-    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+    - Q1: verified in a real browser against a warm SIM, not by inspection —
+      DOM counts, toggle behaviour and payload numbers are all measured
+      above. Engine suite 611/0; dashboard build clean.
+    - Q2: swept for other unbounded surfaces this agent could have added —
+      the detections payload is capped server-side (so no retention setting
+      can make the dashboard slow), the overlay renders only what the payload
+      contains, and the session bands are bounded by the candle count.
+    - Q3: failure class = "the chart shows something the engine does not
+      believe". Closed structurally: the overlay is a pure projection of
+      (price, time) from the SAME payload that carries the candles — it
+      recomputes no lifecycle, no zone and no state, so a disagreement
+      between box and bar is impossible by construction (B13).
   ADAPTATIONS / REGRESSIONS / BLOCKED:
-    - (as in prior documents; "none" where clean)
+    - Adaptation: added dashboard-frontend/src/vite-env.d.ts (the standard
+      Vite ambient reference). It was missing, so `import.meta.env.DEV` did
+      not typecheck; the dev-only payload measurement needs it.
+    - Adaptation: vite.config.ts's proxy target now honours VITE_API_TARGET,
+      defaulting to the historical localhost:8080. This exists because port
+      8080 was already held by a PRE-EXISTING engine process (pid 82731, not
+      started by this session) — the evidence run pointed the dashboard at a
+      throwaway backend on a spare port instead, and that process was left
+      running and untouched throughout.
+    - Adaptation: EngineFacade.getIctLibEngine() (added in Agent 02) is what
+      lets the controller serve detections without a second wiring path.
+    - Regressions: none (611/0, dashboard 0 TS errors). Blocked: none.
 
 ··· APPENDIX A-07 — Agent 07: ConfluenceSnapshot Service ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)

@@ -190,3 +190,145 @@
   border-top: 1px solid var(--border);
   padding-top: 8px;
 }
+
+/* ── V4 Agent 06: ICT detection overlay ────────────────────────────────── */
+
+/* The chart and its overlay share one positioned stage so the SVG can be
+   placed in the chart's own pixel space. */
+.botchart-stage {
+  position: relative;
+}
+
+.botchart-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none; /* the chart keeps every interaction */
+}
+
+.botchart-overlay .overlay-label {
+  font-size: 10px;
+  font-family: inherit;
+  opacity: 0.85;
+}
+
+.botchart-layers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 0 4px;
+}
+
+.layer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid #353c4a;
+  background: #1b2029;
+  color: #8b95a8;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.layer-chip:hover {
+  border-color: #4a5468;
+}
+
+.layer-chip.on {
+  background: #232a36;
+  color: #dfe4ec;
+  border-color: #4a5468;
+}
+
+.layer-chip.off .swatch {
+  opacity: 0.3;
+}
+
+.layer-chip .swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.layer-chip .swatch.sessions {
+  background: linear-gradient(90deg, #4dabf7 0 50%, #20c997 50% 100%);
+}
+
+.layer-chip .count {
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.layer-truncated {
+  font-size: 11px;
+  color: #ffd43b;
+  margin-left: 6px;
+}
+
+.botchart-sessionlegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 0 0;
+  font-size: 11px;
+  color: #8b95a8;
+}
+
+.botchart-sessionlegend .legend-title {
+  opacity: 0.7;
+}
+
+.botchart-sessionlegend .legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.botchart-sessionlegend .legend-item i {
+  width: 12px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+/* The engine's real trading windows are called out, not blended in: the
+   display sessions are decoration, these are what the gates actually read. */
+.botchart-sessionlegend .legend-trading {
+  color: #20c997;
+  font-weight: 600;
+}
+
+.pill.anchor {
+  background: #232a36;
+  color: #9775fa;
+  border: 1px solid #3b3350;
+}
+
+/* Detection-timeframe selector (V4 Agent 06) — reuses the lookback pill look. */
+.botchart-detectiontf {
+  display: inline-flex;
+  border: 1px solid #353c4a;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.botchart-detectiontf button {
+  background: #1b2029;
+  color: #8b95a8;
+  border: none;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.botchart-detectiontf button.active {
+  background: #232a36;
+  color: #dfe4ec;
+}
