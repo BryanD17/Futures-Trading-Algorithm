@@ -373,6 +373,89 @@ public class MandatoryConfluenceValidator {
      *         failed gate id ({@code "M1".."M9"}) as the summary
      */
     public ValidationResult validateStdvOte(com.topstep.trading.strategy.stdvote.SetupContext ctx) {
+        // ═══════════════════════════════════════════════════════════════════
+        // THE PROFILE SEAM (V4 Agent 08) — the ONE place gating is
+        // parameterised. Everything above and below this method is unaware
+        // that profiles exist.
+        //
+        // STRICT is the default and is BYTE-IDENTICAL: it returns the chain's
+        // own result, unmodified, from the same call that always ran. The
+        // chain is evaluated FIRST and EXACTLY ONCE in every profile, which
+        // matters for more than tidiness — M2b and M7b keep LOG-mode counters,
+        // and evaluating them twice would inflate evidence the owner reads to
+        // make a different decision.
+        //
+        // The simulator then judges ALL profiles, always, and records what the
+        // others would have done. It returns void; nothing below reads it.
+        // ═══════════════════════════════════════════════════════════════════
+        ValidationResult strict = validateStdvOteStrict(ctx);
+        com.topstep.trading.trade.TradeProfile active =
+                com.topstep.trading.trade.TradeProfile.active();
+
+        ValidationResult decided = strict;
+        if (active != com.topstep.trading.trade.TradeProfile.STRICT) {
+            com.topstep.trading.confluence.ConfluenceSnapshot snapshot =
+                    com.topstep.trading.trade.ProfileSimulator.snapshotFor(
+                            confluenceService, ctx == null ? null : ctx.symbol, ctx);
+            com.topstep.trading.trade.ProfileDecision d =
+                    com.topstep.trading.trade.ProfileEvaluator.evaluate(
+                            active, ctx, snapshot, failedGateOf(strict));
+            decided = d.satisfied()
+                    ? ValidationResult.pass(java.util.List.of(active + " satisfied"),
+                            active + " profile satisfied")
+                    : ValidationResult.fail(d.blocking(), String.join(",", d.blocking()));
+        }
+
+        recordProfileSimulation(ctx, strict, decided.passed());
+        return decided;
+    }
+
+    /**
+     * The confluence stack, used ONLY to score the non-STRICT profiles and to
+     * feed the simulator. Null → profiles score against an all-UNKNOWN stack,
+     * which is the honest cold read. No gate reads this.
+     */
+    private volatile com.topstep.trading.confluence.ConfluenceService confluenceService;
+
+    /** Inject the confluence stack (V4 Agent 08). */
+    public void setConfluenceService(
+            com.topstep.trading.confluence.ConfluenceService service) {
+        this.confluenceService = service;
+    }
+
+    /** The gate id a failed chain stopped at ({@code "M4"}), or null if it passed. */
+    private static String failedGateOf(ValidationResult result) {
+        if (result == null || result.passed()) return null;
+        return result.getSummary();
+    }
+
+    /**
+     * Always-on measurement: judge every profile and record would-trade events.
+     * Wrapped so a simulator fault can never take down the emission path — a
+     * measurement that can break trading is not worth having.
+     */
+    private void recordProfileSimulation(com.topstep.trading.strategy.stdvote.SetupContext ctx,
+                                         ValidationResult strict, boolean emitted) {
+        if (ctx == null) return;
+        try {
+            com.topstep.trading.confluence.ConfluenceSnapshot snapshot =
+                    com.topstep.trading.trade.ProfileSimulator.snapshotFor(
+                            confluenceService, ctx.symbol, ctx);
+            java.time.Instant at = (confluenceService == null) ? null
+                    : confluenceService.factsFor(ctx.symbol).at();
+            com.topstep.trading.trade.ProfileSimulator.forSymbol(ctx.symbol)
+                    .evaluate(ctx, failedGateOf(strict), emitted, snapshot, at);
+        } catch (RuntimeException e) {
+            System.out.println("[PROFILE] simulator skipped an evaluation: " + e);
+        }
+    }
+
+    /**
+     * The mandatory M1..M9 chain — unchanged from V3, and the definition of
+     * the STRICT profile.
+     */
+    private ValidationResult validateStdvOteStrict(
+            com.topstep.trading.strategy.stdvote.SetupContext ctx) {
         java.util.List<String> confirmations = new java.util.ArrayList<>();
 
         if (ctx == null) {

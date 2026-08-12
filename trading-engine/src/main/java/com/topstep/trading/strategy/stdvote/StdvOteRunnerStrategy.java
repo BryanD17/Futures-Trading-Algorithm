@@ -160,6 +160,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     // Raid scoring (uses CandleSeries + LevelEngine + EqualLevelDetector).
     private final CandleSeries candleSeries;
     private final LevelEngine levelEngine;
+
+    /** The mandatory-gate validator; holds the V4 profile seam. */
+    private final MandatoryConfluenceValidator validator;
     private final EqualLevelDetector equalLevelDetector;
     private final RaidDetector raidDetector;
     private final ChartStateQueryAPI chartState;
@@ -330,6 +333,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     public void setConfluenceService(
             com.topstep.trading.confluence.ConfluenceService service) {
         this.confluenceService = service;
+        // V4 Agent 08: the validator scores the non-STRICT profiles against
+        // this same stack, so both read one set of facts.
+        if (validator != null) validator.setConfluenceService(service);
     }
 
     /** Install the observability-only ChartEngine reference (may be null). */
@@ -444,6 +450,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.oteCalculator = new OteEntryCalculator();
         MandatoryConfluenceValidator validator =
                 new MandatoryConfluenceValidator(null, displacementDetector, chartState);
+        // Kept as a field (V4 Agent 08) so the confluence stack can be handed
+        // to it after construction — the profile seam lives inside it.
+        this.validator = validator;
         // The M7 RR band comes from the ACTIVE RiskLimits' signal band:
         // legacy → topstep50k() carries [2.0, +inf) (identical to the old
         // hardcoded floor); scalp → topstep50kScalp() carries [0.8, 1.5].
@@ -757,6 +766,18 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                         ctx.state == null ? null : ctx.state.name()));
                 System.out.println(cs.logLine(symbol));
             }
+            // V4 Agent 08 — sample every profile against the setup AS IT
+            // STANDS, then print the "why no trade" number. The validator seam
+            // covers real emission attempts; this covers the far more common
+            // case where the funnel never gets that far.
+            com.topstep.trading.trade.ProfileSimulator sim =
+                    com.topstep.trading.trade.ProfileSimulator.forSymbol(symbol);
+            if (cs != null) {
+                sim.evaluate(ctx, ctx.lastGateFailed, false,
+                        com.topstep.trading.trade.ProfileSimulator.snapshotFor(cs, symbol, ctx),
+                        candle.getTimestamp(), false);
+            }
+            System.out.println(sim.logLine());
         }
 
         // 6c. Crash-safe agreement-stats checkpoint every completed 30m bar

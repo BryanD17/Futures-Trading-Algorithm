@@ -219,11 +219,26 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 05 — Trend-Shift OTE Anchoring Mode in ChartEngine (§S9)
   [✅] Agent 06 — Bot Chart Overlay Parity (Every Detection Rendered)
   [✅] Agent 07 — ConfluenceSnapshot Service + [CONFLUENCE] Telemetry + API
-  [⬜] Agent 08 — Confluence Profiles + Profile Simulator + First Report
+  [✅] Agent 08 — Confluence Profiles + Profile Simulator + First Report
   [⬜] Agent 09 — FINAL VERIFICATION & CLOSE-OUT (incl. license audit)
 
   LEDGER NOTES (append one dated line per completion):
   ------------------------------------------------------------------
+  2026-08-12 Agent 08 ✅ — THE "WHY NO TRADE" ANSWER, AND IT IS NOT WHAT THE
+    DOCUMENT ASSUMED. ONE profile seam (MandatoryConfluenceValidator:393);
+    STRICT byte-identical — the 20-test M1..M9 suite and the byte-for-byte
+    legacy golden test pass UNCHANGED. Simulator always on, all profiles, with
+    a rising-edge latch so counts measure OPPORTUNITIES not duration. Three
+    seeded warm SIM sessions (42/7/1337) agree: EVERY profile including
+    MINIMAL would have taken ZERO trades, and emissionEvaluations=0 — the
+    funnel never reaches an emission attempt. Blocking reasons are not gates at
+    all but "expired (200 bars without progress)" and "HTF bias became
+    NEUTRAL". Per Appendix E5 that is a definitive UPSTREAM verdict: flipping
+    trade.profile would change nothing, and the next work is setup expiry and
+    bias stability. Chart warm (4,330 bars), confluence long 9/16 w=0.60 — so
+    it is NOT a warmth problem, which narrows it usefully. Risk-independence:
+    16 parameterised tests incl. a structural one that fails if a profile ever
+    reaches the risk layer. Suite 650/0.
   2026-08-12 Agent 07 ✅ — the stack is one queryable object. 16 fields, each
     naming its OWNER, aggregated tri-state (TRUE/FALSE/UNKNOWN) with UNKNOWN
     excluded from BOTH score and maxScore. Proven live: a cold engine reads
@@ -1947,7 +1962,7 @@ block empty for an agent marked ✅.
   STATUS:            ✅ COMPLETE
   DATE COMPLETED:    2026-08-12
   PR NUMBER:         #147 (base Main, state MERGED)
-  COMMIT HASH:       recorded in the Agent 08 doc update
+  COMMIT HASH:       65e0b5e  (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - Snapshot AGGREGATES ONLY — the owner of every fact, in code:
         confluence/ConfluenceField.java:15 — the enum literally carries an
@@ -2098,20 +2113,152 @@ block empty for an agent marked ✅.
     - Regressions: none (623/0, dashboard 0 TS errors). Blocked: none.
 
 ··· APPENDIX A-08 — Agent 08: Profiles + Simulator + First Report ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
-  COMMIT HASH:       (squash-merge commit on Main)
+  STATUS:            ✅ COMPLETE
+  DATE COMPLETED:    2026-08-12
+  PR NUMBER:         #148 (base Main, state MERGED)
+  COMMIT HASH:       recorded in the Agent 09 doc update
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - ONE PROFILE SEAM; STRICT BYTE-IDENTICAL:
+        seam        validation/MandatoryConfluenceValidator.java:393
+        grep for TradeProfile.active() across trading-engine/src/main returns
+        FIVE hits, and only ONE is in a gating path:
+          trade/TradeProfile.java:41          (the accessor itself)
+          trade/ProfileSimulator.java:97      (measurement)
+          trade/ProfileSimulator.java:147     (the [PROFILE] log line)
+          trade/ProfileSimulator.java:188     (the API map)
+          validation/MandatoryConfluenceValidator.java:393  ← THE SEAM
+        STRICT returns the chain's own result unmodified, from the same call
+        that always ran (validateStdvOteStrict = the verbatim V3 body).
+        EXISTING VALIDATOR TESTS PASS UNCHANGED — not one line edited:
+          MandatoryConfluenceValidator (M1..M9)          tests=20 fail=0
+          MandatoryConfluenceValidator M2b (prem/disc)   tests=6  fail=0
+          MandatoryConfluenceValidator M7 RR band        tests=3  fail=0
+          StdvOteLegacyGoldenTest (byte-for-byte)        tests=2  fail=0
+          StdvOteDeterminismTest (two identical runs)    tests=2  fail=0
+          StdvOteRunnerStrategy smoke                    tests=5  fail=0
+          StdvOteWiringIntegrationTest                   tests=5  fail=0
+          + the scalp/hysteresis/retry suites, all green
+    - SIMULATOR RECORDS WOULD-TRADE EVENTS WITH BLOCKING-GATE LISTS, PERSISTED
+      DURABLY (ProfileSimulatorTest 11/11 PASSED):
+        wouldTradeEventIsRecorded    entry/stop/target/direction/activeProfile
+                                     asserted; target DERIVED from the setup's
+                                     own geometry, never invented
+        persistenceRoundTrip         two events written, counters dropped
+                                     (simulating a restart), both read back
+                                     from JSONL with their blocking lists
+        noEventWhenTheEngineTraded   an emitted trade is not a missed one
+        blockingGatesAreRanked       frequency-ranked — the "why no trade" table
+        satisfiedConditionCountsOnce RISING EDGE: eight samples of one
+                                     persistent condition = ONE would-trade;
+                                     lapse-and-return = two
+        profileLineShape / apiCounters / allProfilesEvaluatedRegardlessOfActive
+                                     / nullStackIsSafe / profileSetsGenuinelyDiffer
+                                     / blockingListsAreComplete
+        Storage: data/profile_sim.jsonl (-Dprofile.sim.file), the same
+        append-only JSONL convention Agent 01 found in OteAgreementStatsStore.
+    - RISK-INDEPENDENCE TESTS PASSING ACROSS ALL THREE PROFILES — the
+      load-bearing criterion (ProfileRiskIndependenceTest, 16/16 PASSED):
+        oversizedEntryRejectedInEveryProfile     @EnumSource × 3
+        undersizedEntryRejectedInEveryProfile    @EnumSource × 3
+        riskPreflightBlocksEveryProfile          @EnumSource × 3
+        noProfileTradesOutsideTheKillzone        @EnumSource × 3
+        riskEngineVerdictIsIdenticalAcrossProfiles — evaluates the SAME
+            oversized order under each profile and asserts the verdicts are
+            byte-identical (allowed|quantity|reason), plus that 500 contracts
+            genuinely do not survive the engine
+        riskLayerCannotSeeAProfile — STRUCTURAL: reflects over
+            PropFirmRiskEngine, RiskLimits, RiskDecision, TradingRiskManager
+            and PhaseAwareRiskCalculator and asserts none accepts or holds a
+            TradeProfile. There is no code path by which a profile could reach
+            the risk layer, and the day someone adds one this goes red.
+    - [PROFILE] LINE + API COUNTERS — REAL output from a warm SIM:
+        [PROFILE MNQ] active=STRICT wouldTrade: STANDARD=0 MINIMAL=0 (session)
+      Emitted on the same 15m tick as [GATES] and [CONFLUENCE].
+      /api/confluence/{symbol} now carries "simulator" (evaluations,
+      emissionEvaluations, per-profile satisfied/wouldTrade/recentEvents, and
+      the ranked blockingGates) plus "profileLine".
+      Live sample, seed 42:
+        MNQ eval=37 emis=0 | STANDARD sat=0 wt=0 | MINIMAL sat=0 wt=0
+            top blocking: expired (200 bars without progress)=37
+        MGC eval=37 emis=0 | STANDARD sat=0 wt=0 | MINIMAL sat=0 wt=0
+            top blocking: HTF bias flip BULLISH -> BEARISH=37
+    - PROFILE_SIM_01.md COMMITTED (docs/reports/, 118 lines) with per-session
+      tables across seeds 42/7/1337, ranked blocking gates, three conservative
+      observations, the mandatory SIM caveat, the exact flip command and the
+      one-switch-one-week rule.
+      THE FINDING, stated plainly because it is not what this document
+      assumed: ACROSS ALL THREE SESSIONS EVERY PROFILE — INCLUDING MINIMAL —
+      WOULD HAVE TAKEN ZERO TRADES, and emissionEvaluations = 0 in every one.
+      The funnel never reaches an emission attempt. The blocking reasons are
+      not mandatory gates at all but funnel-progress failures ("expired (200
+      bars without progress)", "HTF bias became NEUTRAL", "HTF bias flip
+      BULLISH -> BEARISH"). Appendix E5 names this reading exactly: MINIMAL=0
+      proves the problem is UPSTREAM, not strictness — so flipping
+      trade.profile would change NOTHING, and the report says so rather than
+      offering a flip the evidence does not support. It is also NOT a warmth
+      problem: warm=true at 4,330 1m bars with the confluence stack reading
+      long 9/16 w=0.60, which narrows the next investigation to setup
+      progression and bias stability.
+    - Full suite green: trading-engine tests=650 failures=0 errors=0 skipped=1;
+      `./gradlew clean build` SUCCESSFUL; dashboard built (0 TS errors).
+    - PR merged: #148, base Main.
   SPEC DECISIONS (where Appendix S was ambiguous and you decided):
-    - (decision + first-principles reason, or "none")
+    - M2b inside STANDARD, without re-running it. The M2b evaluator keeps
+      LOG-mode counters the owner reads for a DIFFERENT flip; calling it a
+      second time per evaluation would inflate them and corrupt that evidence.
+      DECIDED: derive M2b's verdict from STRICT's own failing gate using the
+      chain's fixed order — failed AT M2b means rejected, failed AFTER means
+      passed, failed BEFORE means never evaluated, which is precisely the
+      ABSTAIN case the doctrine says always passes. No second call, no double
+      counting, no invented answer. Recorded at ProfileEvaluator.java:24.
+    - Periodic sampling. The brief says "at every emission-evaluation point".
+      Implemented — and then measured: the funnel reaches an emission
+      evaluation essentially never (emissionEvaluations = 0 across three
+      sessions), so a simulator that ran ONLY there would have reported zero
+      and explained nothing. DECIDED: also sample every profile on the 15m
+      tick against the setup as it stands, flagged separately
+      (emissionEvaluations vs evaluations) so the two are never confused. This
+      is what makes MINIMAL=0 a meaningful diagnosis rather than an absence of
+      data. Recorded at ProfileSimulator.evaluate's javadoc.
+    - Rising-edge latch. A profile satisfied across twenty consecutive samples
+      is ONE opportunity, not twenty. Without the latch the counters would have
+      measured how LONG a condition persisted and the owner would have flipped
+      a profile on an inflated number. Recorded at ProfileSimulator.java:61.
+    - MINIMAL and M2b. The brief's MINIMAL set lists "M8/M9 unchanged" and does
+      not include M2b, so MINIMAL does not evaluate it. Followed literally
+      rather than "improved", because MINIMAL exists to be a floor.
+    - M1 (instrument) is required by every profile. It is plumbing, not a
+      strategy confluence — there is no spec for an unknown instrument.
   Q1/Q2/Q3 ANSWERS (where required):
-    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+    - Q1: 650-test suite green at HEAD, three live warm SIM sessions run end to
+      end, and the pre-existing validator/golden suites re-run verbatim.
+    - Q2: swept for any OTHER place gating could become profile-dependent —
+      exactly one hit in a gating path (the seam); the other four
+      TradeProfile.active() calls are all measurement or telemetry. Also swept
+      the risk layer for profile references and pinned the absence with a
+      reflective test rather than trusting a grep that could go stale.
+    - Q3: failure class = "a simulator that reports a comfortable number".
+      FOUND AND CORRECTED TWICE. (a) The first run reported evaluations=0 for
+      every symbol — the honest reading was that the funnel never reaches the
+      validator, which the periodic sample now measures instead of hiding.
+      (b) Without the rising-edge latch the same persistent condition would
+      have counted once per sample, turning "one missed setup" into "37 missed
+      setups" — precisely the inflated evidence that would have justified a
+      bad flip. Both are now pinned by tests
+      (satisfiedConditionCountsOnce, emissionEvaluations assertions).
   ADAPTATIONS / REGRESSIONS / BLOCKED:
-    - (as in prior documents; "none" where clean)
+    - Adaptation: StdvOteRunnerStrategy keeps the validator as a field so the
+      confluence stack can be handed to it after construction. The gate chain
+      itself is untouched; the additions are a setter, a publish call and the
+      15m sample inside the existing telemetry block.
+    - Adaptation: ctx.lastGateFailed carries free-text funnel reasons as well
+      as M-gate ids, so the ranked blocking table shows text like "expired (200
+      bars without progress)". That is not noise — it is the most useful thing
+      in this report, and it is what identified the real constraint.
+    - OWNER NOTE (⛔-adjacent, not a blocker): the first report does NOT support
+      a profile flip. The evidence points upstream, at setup expiry and bias
+      stability, and the correct next action is LIVE observation at defaults.
+    - Regressions: none (650/0). Blocked: none.
 
 ··· APPENDIX A-09 — Agent 09: Final Verification & License Audit ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)

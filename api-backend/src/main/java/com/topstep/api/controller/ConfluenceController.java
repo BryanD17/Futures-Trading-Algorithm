@@ -46,6 +46,14 @@ public class ConfluenceController {
         body.put("long", longs.toApiMap());
         body.put("short", shorts.toApiMap());
         body.put("line", service.logLine(sym));
+
+        // V4 Agent 08: the simulator's counters and its most recent
+        // would-trade events per profile. Read-only evidence — this is the
+        // "why no trade" answer in numbers, not a control surface.
+        com.topstep.trading.trade.ProfileSimulator sim =
+                com.topstep.trading.trade.ProfileSimulator.forSymbol(sym);
+        body.put("simulator", sim.toApiMap());
+        body.put("profileLine", sim.logLine());
         return ResponseEntity.ok(body);
     }
 }
