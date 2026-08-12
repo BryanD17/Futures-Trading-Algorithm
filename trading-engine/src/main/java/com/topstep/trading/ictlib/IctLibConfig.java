@@ -39,6 +39,18 @@ public final class IctLibConfig {
     public final int retainGapWeekly;
     public final int retainGapDaily;
 
+    // §S7 order blocks
+    public final int obSwingLen;
+    public final boolean obUseBody;
+    public final int retainObPerSide;
+
+    // §S8 structure
+    public final int structurePivotLeft;
+    public final int structurePivotRight;
+    public final int structureHistoryCap;
+    /** Bars of slack when pairing an ictlib MSS with the gate's, for [ICTLIB-DIFF]. */
+    public final int mssAgreeWindow;
+
     // §S6 liquidity pools
     public final int poolSwingLen;
     public final double poolToleranceDiv;
@@ -56,7 +68,10 @@ public final class IctLibConfig {
                          int retainVolumeImbalance, int viProjectBars,
                          int retainGapWeekly, int retainGapDaily,
                          int poolSwingLen, double poolToleranceDiv, int poolMinCluster,
-                         int poolScanDepth, int retainPoolPerSide, int poolAtrPeriod) {
+                         int poolScanDepth, int retainPoolPerSide, int poolAtrPeriod,
+                         int obSwingLen, boolean obUseBody, int retainObPerSide,
+                         int structurePivotLeft, int structurePivotRight,
+                         int structureHistoryCap, int mssAgreeWindow) {
         this.enabled = enabled;
         this.displacementMeanLen = displacementMeanLen;
         this.displacementWickRatioMax = displacementWickRatioMax;
@@ -74,6 +89,13 @@ public final class IctLibConfig {
         this.poolScanDepth = poolScanDepth;
         this.retainPoolPerSide = retainPoolPerSide;
         this.poolAtrPeriod = poolAtrPeriod;
+        this.obSwingLen = obSwingLen;
+        this.obUseBody = obUseBody;
+        this.retainObPerSide = retainObPerSide;
+        this.structurePivotLeft = structurePivotLeft;
+        this.structurePivotRight = structurePivotRight;
+        this.structureHistoryCap = structureHistoryCap;
+        this.mssAgreeWindow = mssAgreeWindow;
     }
 
     /** Every field, so copy-with helpers cannot silently drop a new parameter. */
@@ -82,7 +104,9 @@ public final class IctLibConfig {
                 retainDisplacement, mode, fvgCap, retainBprPerSide,
                 retainVolumeImbalance, viProjectBars, retainGapWeekly, retainGapDaily,
                 poolSwingLen, tolDiv, poolCluster, poolScanDepth, retainPoolPerSide,
-                poolAtrPeriod);
+                poolAtrPeriod, obSwingLen, obUseBody, retainObPerSide,
+                structurePivotLeft, structurePivotRight, structureHistoryCap,
+                mssAgreeWindow);
     }
 
     /** Appendix S defaults, with system-property overrides applied. */
@@ -104,13 +128,21 @@ public final class IctLibConfig {
                 intProp("ictlib.pool.minCluster", 3),
                 intProp("ictlib.pool.scanDepth", 50),
                 intProp("ictlib.retain.pool", 4),
-                intProp("ictlib.pool.atrPeriod", 10));
+                intProp("ictlib.pool.atrPeriod", 10),
+                intProp("ictlib.ob.swingLen", 10),
+                !"false".equalsIgnoreCase(System.getProperty("ictlib.ob.useBody", "true")),
+                intProp("ictlib.retain.orderBlock", 5),
+                intProp("ictlib.structure.pivotLeft", 5),
+                intProp("ictlib.structure.pivotRight", 1),
+                intProp("ictlib.structure.historyCap", 200),
+                intProp("ictlib.structure.mssAgreeWindow", 5));
     }
 
     /** Spec defaults with no property lookups — the tests' baseline. */
     public static IctLibConfig defaults() {
         return new IctLibConfig(true, 5, 0.36, 50, GapMode.FVG, 10, 5,
-                6, 3, 3, 2, 5, 2.5, 3, 50, 4, 10);
+                6, 3, 3, 2, 5, 2.5, 3, 50, 4, 10,
+                10, true, 5, 5, 1, 200, 5);
     }
 
     /** Copy with a different §S2 mode (used by the IFVG test and by tuning). */
@@ -133,6 +165,17 @@ public final class IctLibConfig {
         return copy(gapMode, retainFvgPerSide, poolMinCluster, div);
     }
 
+    /** Copy with §S7 zones drawn from full wicks instead of bodies. */
+    public IctLibConfig withObUseBody(boolean useBody) {
+        return new IctLibConfig(enabled, displacementMeanLen, displacementWickRatioMax,
+                retainDisplacement, gapMode, retainFvgPerSide, retainBprPerSide,
+                retainVolumeImbalance, viProjectBars, retainGapWeekly, retainGapDaily,
+                poolSwingLen, poolToleranceDiv, poolMinCluster, poolScanDepth,
+                retainPoolPerSide, poolAtrPeriod, obSwingLen, useBody, retainObPerSide,
+                structurePivotLeft, structurePivotRight, structureHistoryCap,
+                mssAgreeWindow);
+    }
+
     /** Retention policy map handed to every {@link DetectionRegistry}. */
     public Map<DetectionType, DetectionRegistry.Retention> retentions() {
         Map<DetectionType, DetectionRegistry.Retention> m = new LinkedHashMap<>();
@@ -150,6 +193,12 @@ public final class IctLibConfig {
                 new DetectionRegistry.Retention(retainGapDaily, false));
         m.put(DetectionType.LIQUIDITY_POOL,
                 new DetectionRegistry.Retention(retainPoolPerSide, true));
+        m.put(DetectionType.ORDER_BLOCK,
+                new DetectionRegistry.Retention(retainObPerSide, true));
+        m.put(DetectionType.MSS,
+                new DetectionRegistry.Retention(structureHistoryCap, false));
+        m.put(DetectionType.BOS,
+                new DetectionRegistry.Retention(structureHistoryCap, false));
         return m;
     }
 
@@ -167,7 +216,13 @@ public final class IctLibConfig {
                 + ",toleranceDiv=" + poolToleranceDiv
                 + ",minCluster=" + poolMinCluster
                 + ",atr=" + poolAtrPeriod
-                + ",retainPerSide=" + retainPoolPerSide + ")";
+                + ",retainPerSide=" + retainPoolPerSide + ")"
+                + " orderBlocks(swingLen=" + obSwingLen
+                + ",useBody=" + obUseBody
+                + ",retainPerSide=" + retainObPerSide + ")"
+                + " structure(pivot=" + structurePivotLeft + "/" + structurePivotRight
+                + ",historyCap=" + structureHistoryCap
+                + ",mssAgreeWindow=" + mssAgreeWindow + ")";
     }
 
     private static int intProp(String key, int def) {

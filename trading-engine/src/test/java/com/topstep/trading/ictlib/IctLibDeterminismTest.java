@@ -23,7 +23,7 @@ class IctLibDeterminismTest {
      * enough expansion bars to produce displacements, gaps and at least one
      * region.
      */
-    private static List<Candle> syntheticFeed(int bars) {
+    static List<Candle> syntheticFeed(int bars) {
         List<Candle> out = new ArrayList<>(bars);
         long state = 42L;
         double price = 21000.0;
@@ -32,10 +32,17 @@ class IctLibDeterminismTest {
             int step = (int) ((state >>> 33) % 41) - 20;      // -20..20 ticks
             double open = price;
             double close = open + step * 0.25;
-            double high = Math.max(open, close) + ((i % 7 == 0) ? 0.25 : 2.0);
-            double low = Math.min(open, close) - ((i % 5 == 0) ? 0.25 : 2.0);
+            // Wicks must vary INDEPENDENTLY of the body. With a fixed wick the
+            // highs of adjacent bars share a term (max of two consecutive
+            // closes), and a pivot high becomes arithmetically impossible — a
+            // degenerate feed that silently exercises none of the swing-based
+            // families. Found the hard way; see IctLibStructureTest.
+            double upWick = 0.25 + ((state >>> 41) % 17) * 0.25;
+            double dnWick = 0.25 + ((state >>> 47) % 17) * 0.25;
             out.add(new Candle(IctLibFixture.SYM,
-                    IctLibFixture.T0.plusSeconds(60L * i), open, high, low, close, 100L));
+                    IctLibFixture.T0.plusSeconds(60L * i), open,
+                    Math.max(open, close) + upWick,
+                    Math.min(open, close) - dnWick, close, 100L));
             price = close;
         }
         return out;
@@ -105,5 +112,21 @@ class IctLibDeterminismTest {
         assertThat(r.count(DetectionType.DISPLACEMENT)).isLessThanOrEqualTo(100);
         assertThat(r.count(DetectionType.FVG)).isLessThanOrEqualTo(40);
         assertThat(r.count(DetectionType.BPR)).isLessThanOrEqualTo(20);
+        assertThat(r.count(DetectionType.VOLUME_IMBALANCE)).isLessThanOrEqualTo(12);
+        assertThat(r.count(DetectionType.LIQUIDITY_POOL)).isLessThanOrEqualTo(16);
+        assertThat(r.count(DetectionType.ORDER_BLOCK)).isLessThanOrEqualTo(20);
+        assertThat(r.count(DetectionType.MSS)).isLessThanOrEqualTo(400);
+        assertThat(r.count(DetectionType.BOS)).isLessThanOrEqualTo(400);
+    }
+
+    @Test
+    @DisplayName("The synthetic feed actually exercises the swing-based families")
+    void feedIsNotDegenerate() {
+        IctLibEngine engine = new IctLibEngine(IctLibConfig.defaults());
+        for (Candle c : syntheticFeed(600)) engine.onCandle(c);
+
+        DetectionRegistry r = engine.registry(IctLibFixture.SYM);
+        assertThat(r.count(DetectionType.MSS)).isGreaterThan(0);
+        assertThat(r.count(DetectionType.ORDER_BLOCK)).isGreaterThan(0);
     }
 }

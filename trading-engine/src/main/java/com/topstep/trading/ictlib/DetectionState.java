@@ -32,6 +32,19 @@ public enum DetectionState {
     /** §S3 — price closed through the region to its far side. Terminal. */
     BROKEN(true),
 
+    /** §S7 — price traded into the zone without a body-close through it. */
+    TESTED(false),
+
+    /**
+     * §S7 — a body-close went through the zone's far edge. The block's polarity
+     * FLIPS: a bullish order block becomes resistance. Not terminal — a breaker
+     * is a live level, just an inverted one.
+     */
+    BREAKER(false),
+
+    /** §S7 — a breaker was reclaimed in the original direction. Spent. Terminal. */
+    REMOVED(true),
+
     /**
      * §S6 — one boundary of a liquidity pool has been closed through: the pool
      * is being raided but is not yet consumed.

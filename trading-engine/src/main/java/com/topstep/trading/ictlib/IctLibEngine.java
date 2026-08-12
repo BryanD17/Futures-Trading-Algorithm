@@ -133,7 +133,9 @@ public final class IctLibEngine {
     /** Emit the [ICTLIB-DIFF] line for every known symbol, on demand. */
     public void logDiffLines() {
         for (String symbol : states.keySet()) {
-            System.out.println(IctLibDiffStats.forSymbol(symbol).logLine());
+            IctLibDiffStats s = IctLibDiffStats.forSymbol(symbol);
+            System.out.println(s.logLine());
+            System.out.println(s.mssLogLine());
         }
     }
 
@@ -172,7 +174,9 @@ public final class IctLibEngine {
                         new BprDetector(),
                         new VolumeImbalanceDetector(config),
                         new OpeningGapDetector(),
-                        new LiquidityPoolDetector(config, adapter)));
+                        new LiquidityPoolDetector(config, adapter),
+                        new OrderBlockDetector(config),
+                        new StructureEngine(config, diff)));
             }
         }
 
@@ -210,6 +214,7 @@ public final class IctLibEngine {
             }
             if (!sd.equals(sessionDate)) {
                 System.out.println(diff.logLine());
+                System.out.println(diff.mssLogLine());
                 diff.resetSession();
                 sessionDate = sd;
             }

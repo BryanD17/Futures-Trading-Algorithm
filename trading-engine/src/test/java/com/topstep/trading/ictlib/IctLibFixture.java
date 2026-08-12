@@ -60,7 +60,9 @@ final class IctLibFixture {
                     new VolumeImbalanceDetector(config),
                     new OpeningGapDetector(),
                     new LiquidityPoolDetector(config,
-                            (sym, pool) -> pools.add(pool)));
+                            (sym, pool) -> pools.add(pool)),
+                    new OrderBlockDetector(config),
+                    new StructureEngine(config, IctLibDiffStats.forSymbol(SYM)));
         }
 
         void push(Candle candle) {
@@ -72,6 +74,14 @@ final class IctLibFixture {
 
         void pushAll(List<Candle> candles) {
             for (Candle candle : candles) push(candle);
+        }
+
+        List<Detection> byTypeAndDirection(DetectionType type, DetectionDirection direction) {
+            List<Detection> out = new ArrayList<>();
+            for (Detection d : registry.byType(type)) {
+                if (d.direction() == direction) out.add(d);
+            }
+            return out;
         }
 
         List<Detection> fvgs(DetectionDirection direction) {

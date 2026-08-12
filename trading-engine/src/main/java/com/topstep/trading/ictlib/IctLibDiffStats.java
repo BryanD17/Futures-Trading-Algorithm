@@ -45,6 +45,10 @@ public final class IctLibDiffStats {
     private long legacyFvg;
     private long overlapFvg;
 
+    private long ictlibMss;
+    private long gateMss;
+    private long agreeMss;
+
     private IctLibDiffStats(String symbol) {
         this.symbol = symbol;
     }
@@ -62,11 +66,26 @@ public final class IctLibDiffStats {
         ictlibFvg = 0;
         legacyFvg = 0;
         overlapFvg = 0;
+        ictlibMss = 0;
+        gateMss = 0;
+        agreeMss = 0;
     }
 
     public synchronized long ictlibFvg() { return ictlibFvg; }
     public synchronized long legacyFvg() { return legacyFvg; }
     public synchronized long overlapFvg() { return overlapFvg; }
+    public synchronized long ictlibMss() { return ictlibMss; }
+    public synchronized long gateMss() { return gateMss; }
+    public synchronized long agreeMss() { return agreeMss; }
+
+    /** §S8 — one structure shift found by ictlib's zigzag regime. */
+    synchronized void recordIctlibMss() { ictlibMss++; }
+
+    /** One structure shift found by the 2022-model gate detector (shadowed). */
+    synchronized void recordGateMss() { gateMss++; }
+
+    /** An ictlib shift paired with a gate shift of the same direction, in window. */
+    synchronized void recordMssAgreement() { agreeMss++; }
 
     synchronized void record(boolean ictlibFired, boolean legacyFired) {
         if (ictlibFired) ictlibFvg++;
@@ -80,9 +99,20 @@ public final class IctLibDiffStats {
                 + " overlap=" + overlapFvg;
     }
 
-    /** The full log line, emitted once per session and on demand. */
+    /** §S8 rollup: how far apart the two structure reads are. */
+    public synchronized String mssRollup() {
+        return "mss: ictlib=" + ictlibMss + " gate=" + gateMss
+                + " agreeWindow=" + agreeMss;
+    }
+
+    /** The §S2 log line, emitted once per session and on demand. */
     public synchronized String logLine() {
         return "[ICTLIB-DIFF " + symbol + "] " + rollup();
+    }
+
+    /** The §S8 log line, emitted alongside {@link #logLine()}. */
+    public synchronized String mssLogLine() {
+        return "[ICTLIB-DIFF " + symbol + "] " + mssRollup();
     }
 
     // ═══════════════════════════════════════════════════════════════════════
