@@ -74,6 +74,41 @@ public final class SimWarmBoot {
         int n = d * MINUTES_PER_DAY;
         Instant start = end.minus(Duration.ofMinutes(n));
 
+        // V4 follow-up: when the SIM is running the scripted tape, the WARM
+        // BOOT must be the same tape. Otherwise history is one market and the
+        // live ticks are another: the HTF analyser spends the whole session
+        // digesting a regime change that never really happened, the bias
+        // oscillates, and setups die on "HTF bias flip" / "became NEUTRAL"
+        // before the funnel can finish. One tape, one market, one bias.
+        if (SimChoreographyTape.enabled()) {
+            SimChoreographyTape tape = new SimChoreographyTape(seed);
+            List<Candle> scripted = new ArrayList<>(n);
+            double price = basePrice;
+            for (int i = 0; i < n; i++) {
+                Candle c = tape.next(symbol, start.plus(Duration.ofMinutes(i)), price);
+                scripted.add(c);
+                price = c.getClose();
+            }
+            // ANCHOR CONTRACT: the final close must equal basePrice, because
+            // the live-sim ticks continue from exactly that price. Without
+            // this the handover prints a gap of however far the scripted tape
+            // happened to travel — a fake overnight move the engine would
+            // faithfully analyse. Shifting the whole series by a constant
+            // preserves every distance in it, so the geometry is untouched.
+            double shift = basePrice - scripted.get(scripted.size() - 1).getClose();
+            if (shift != 0.0) {
+                List<Candle> anchored = new ArrayList<>(scripted.size());
+                for (Candle c : scripted) {
+                    anchored.add(new Candle(c.getSymbol(), c.getTimestamp(),
+                            c.getOpen() + shift, c.getHigh() + shift,
+                            c.getLow() + shift, c.getClose() + shift,
+                            c.getVolume()));
+                }
+                return anchored;
+            }
+            return scripted;
+        }
+
         // Per-symbol seed derivation keeps MNQ/MES/MGC series distinct while
         // remaining deterministic for the same inputs.
         Random rng = new Random(seed ^ (long) symbol.hashCode());

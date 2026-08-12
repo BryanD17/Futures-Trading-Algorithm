@@ -650,6 +650,70 @@ dies upstream -> fix upstream fragility first (F3), then REVISIT whether
 
 ---
 
+## RUNNING SIM SO IT ACTUALLY TRADES (V4 follow-up)
+
+```bash
+java -Dserver.port=8080 -Dsim.backfill.seed=42 \
+     -Dmock.virtualClock=true -Dmock.candleIntervalMs=20 \
+     -Dstdvote.detectorTimeframe=1 \
+     -jar api-backend/build/libs/api-backend-1.0.0-SNAPSHOT.jar
+# then POST /api/control/start?mode=SIM
+```
+
+| Flag | Why |
+|------|-----|
+| `mock.virtualClock=true` | Without it the live SIM stream advances **5 real seconds per candle**, so a ten-minute run produces ten minutes of tape and nothing can develop. |
+| `mock.candleIntervalMs=20` | One virtual minute per 20 ms — a full day of tape in ~30 s. |
+| `stdvote.detectorTimeframe=1` | The scripted act is a **1-minute** fixture. On the 5m default its expansion is averaged away and no FVG survives aggregation. LIVE keeps the 5m default. |
+| `sim.backfill.seed=<n>` | Deterministic tape — the same seed replays the same session. |
+
+Verified on three seeded sessions (42 / 7 / 1337): **14 trades each**, 28 fills,
+8 signals still denied by the risk engine on R:R. See
+`docs/reports/PROFILE_SIM_02.md`.
+
+**This proves the pipeline, not an edge.** The SIM tape is a scripted fixture
+designed to contain the setup.
+
+### The SIM tape
+
+`sim.tape=CHOREOGRAPHY` (default) replays the hand-verified 23-candle act from
+`SyntheticScalpSessionGenerator` inside each killzone — accumulation, an
+equal-lows cluster, sweep + raid, displacement + MSS, an OTE retrace with a
+rejection — and drifts quietly upward between acts so the HTF bias stays stable.
+The warm boot uses the same tape, so history and live ticks are one market.
+
+`sim.tape=RANDOM` restores the old memoryless walk (for tests that want
+unstructured noise). Note that on that tape the funnel cannot assemble a setup:
+it was the reason SIM never traded.
+
+### `[FUNNEL]` — where the funnel dies, as event counts
+
+```
+[FUNNEL MNQ] BIAS_SET=4 MANIP_DONE=5 SWEEP_DONE=6 DISPLACED=0 MSS_CONFIRMED=0
+             OTE_ARMED=0 IN_TRADE=6 | invalidated: expired=9
+             | stalls: SWEEP_DONE:displacement-wrong-direction=38
+```
+
+Emitted on the same 15m tick as `[GATES]`. Stage counts say **where** the funnel
+stops; `stalls` say **what it is stopping on**.
+
+Read this instead of counting `lastGateFailed`, which is **sticky** — it holds
+the last failure until something overwrites it, so counting it measures how long
+a setup sat dead, not how often anything happened. That distinction matters: one
+read of these logs showed "HTF bias became NEUTRAL" 274 times when the real
+number of such invalidations was **one**.
+
+### Re-arm after a dead setup
+
+`stdvOte.rearmOnInvalidated` (default **true**) lets a LEGACY-mode setup that
+died *without trading* arm again, under the same gates the scalp path enforces
+(cooldown, killzone open, no open position, risk frequency limits). `IN_TRADE`
+stays terminal in legacy mode — that is the one-trade discipline and it is
+unchanged. Set the flag false to restore the old one-attempt-per-process
+behaviour.
+
+---
+
 ## PROFILES & THE SIMULATOR — V4 Agent 08
 
 A **profile** is a named required-confluence set for entries.

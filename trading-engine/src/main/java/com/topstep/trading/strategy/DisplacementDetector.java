@@ -181,8 +181,27 @@ public class DisplacementDetector {
             totalMove = body;
         }
 
-        // Confirm displacement
-        if (totalMove >= minDisplacementMove) {
+        // Confirm displacement.
+        //
+        // DEFECT FIX (V4 follow-up): this used to apply `totalMove >=
+        // minDisplacementMove` to the SINGLE-candle case as well. That
+        // compares a BODY against a threshold derived from average RANGE
+        // (avgRange * multiplier), and since body <= range it silently
+        // SUBSUMED the expansion test already performed in isStrongCandle.
+        // The effective bar became body >= 1.5 * avgRange which, with
+        // bodyRatio >= 0.65, demands range >= ~2.3x the 14-bar average range
+        // — nearly double the 1.5x-ATR intent this class documents.
+        //
+        // Measured consequence: the detector fired ONCE or TWICE per entire
+        // SIM session, the SWEEP_DONE -> DISPLACED transition never happened,
+        // and the funnel could not reach an entry.
+        //
+        // A single candle that is both an expansion (range >= avgRange *
+        // multiplier) and body-dominated (bodyRatio >= minBodyRatio) has
+        // already met the definition. The multi-candle branch keeps its own
+        // distance test: a RUN of candles must still cover the ground.
+        boolean confirmed = consecutiveCount < 2 || totalMove >= minDisplacementMove;
+        if (confirmed) {
             // Check for FVG creation (Layer 3 entry model)
             boolean createdFvg = checkForFvgCreation(bullish);
 
