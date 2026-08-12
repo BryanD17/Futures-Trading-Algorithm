@@ -114,14 +114,80 @@ public final class ChartEngine {
         int ss  = Integer.getInteger("chart.swingStrength." + symbol, swingStrength);
         int zeb = Integer.getInteger("chart.zoneExpiryBars." + symbol, zoneExpiryBars);
         configureInstrument(symbol, mlt, ss, zeb);
+        // V4 Agent 05: resolve the anchoring switch ONCE at wiring time and
+        // print it, so Agent 09's default-behaviour audit reads the resolved
+        // value rather than trusting that no property was set.
+        AnchorMode mode = anchorModeFor(symbol);
+        OteBand band = bandFor(symbol);
+        anchorModes.put(symbol, mode);
+        bands.put(symbol, band);
         System.out.println("[CHART CFG " + symbol + "] minLegTicks=" + mlt
-                + " swingStrength=" + ss + " expiryBars=" + zeb);
+                + " swingStrength=" + ss + " expiryBars=" + zeb
+                + " anchorMode=" + mode
+                + " oteBand=" + band.start() + "," + band.end()
+                + (band.isEngineDefault() ? " (engine default)" : " (OVERRIDDEN)")
+                + " anchorCompare=" + anchorCompare);
     }
 
     private InstrumentTuning tuningFor(String symbol) {
         InstrumentTuning t = tunings.get(symbol);
         return (t != null) ? t
                 : new InstrumentTuning(minLegTicks, swingStrength, zoneExpiryBars);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ANCHORING (V4 Agent 05, §S9) — a Rollout-Doctrine switch
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * §S9 pivot width, both sides, on the 30m series. A pivot is therefore
+     * confirmed ten 30m bars (five hours) after it printed — that lag is the
+     * price of never repainting an anchor.
+     */
+    static final int TREND_SHIFT_PIVOT_LEN = 10;
+
+    private final Map<String, AnchorMode> anchorModes = new ConcurrentHashMap<>();
+    private final Map<String, OteBand> bands = new ConcurrentHashMap<>();
+
+    /**
+     * {@code chart.anchorCompare} — when true, BOTH anchoring modes run and
+     * their zone states are logged whenever they diverge. Default FALSE: this
+     * is evidence-gathering for a future owner decision, not a behaviour.
+     */
+    private volatile boolean anchorCompare =
+            Boolean.parseBoolean(System.getProperty("chart.anchorCompare", "false"));
+
+    /** Which leg-selection strategy this symbol uses. Default FRACTAL_LEG. */
+    public AnchorMode anchorModeFor(String symbol) {
+        AnchorMode m = anchorModes.get(symbol);
+        if (m != null) return m;
+        return AnchorMode.parse(System.getProperty("chart.anchorMode." + symbol,
+                System.getProperty("chart.anchorMode", "FRACTAL_LEG")));
+    }
+
+    /** The retracement band this symbol's zones are armed on. */
+    public OteBand bandFor(String symbol) {
+        OteBand b = bands.get(symbol);
+        if (b != null) return b;
+        return OteBand.parse(System.getProperty("chart.oteBand." + symbol,
+                System.getProperty("chart.oteBand", null)));
+    }
+
+    /** True when the dual-mode comparison log is on. */
+    public boolean isAnchorCompareEnabled() {
+        return anchorCompare;
+    }
+
+    /** Programmatic override of the anchoring config for ONE symbol (tests, tuning). */
+    public void configureAnchoring(String symbol, AnchorMode mode, OteBand band) {
+        if (symbol == null) return;
+        if (mode != null) anchorModes.put(symbol, mode);
+        if (band != null) bands.put(symbol, band);
+    }
+
+    /** Programmatic override of the dual-mode comparison log. */
+    public void setAnchorCompare(boolean enabled) {
+        this.anchorCompare = enabled;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -209,6 +275,32 @@ public final class ChartEngine {
                 .isPresent();
     }
 
+    /**
+     * The zone the OTHER anchoring mode would have produced, when
+     * {@code chart.anchorCompare=true}. Empty otherwise — this is evidence,
+     * never a gate input.
+     */
+    public Optional<OteZoneSnapshot> getShadowOteZone(String symbol) {
+        SymbolChart chart = charts.get(symbol);
+        if (chart == null) return Optional.empty();
+        synchronized (chart) {
+            return Optional.ofNullable(chart.shadowZone);
+        }
+    }
+
+    /**
+     * The most recently invalidated PRIMARY zone, if any. §S9's post-ARM rule
+     * replaces a zone rather than re-stretching it, and an invalidation that
+     * leaves no trace is not auditable against the chart.
+     */
+    public Optional<OteZoneSnapshot> getLastInvalidatedZone(String symbol) {
+        SymbolChart chart = charts.get(symbol);
+        if (chart == null) return Optional.empty();
+        synchronized (chart) {
+            return Optional.ofNullable(chart.lastInvalidated);
+        }
+    }
+
     /** Full snapshot for the dashboard: candles + zone + swing anchors. */
     public ChartSnapshot snapshot(String symbol, int lookback30m) {
         SymbolChart chart = charts.get(symbol);
@@ -241,6 +333,22 @@ public final class ChartEngine {
         long oneMinuteCount;
         Instant lastCandleTime;
         int barsSinceZoneCreated;
+
+        // ── V4 Agent 05 ────────────────────────────────────────────────────
+        /** The other mode's zone, kept only when chart.anchorCompare is on. */
+        OteZoneSnapshot shadowZone;
+        int shadowBarsSinceCreated;
+        /** Last primary zone that was invalidated (§S9 post-ARM auditability). */
+        OteZoneSnapshot lastInvalidated;
+        /** Last logged (primary, shadow) state pair — dedup for the compare log. */
+        String lastComparePair;
+
+        // §S9 trend-shift state. Only ever driven by whichever track uses
+        // TREND_SHIFT, so there is exactly one regime, never two competing.
+        Swing tsLastHigh, tsPrevHigh, tsLastLow, tsPrevLow;
+        Swing tsOrigin, tsExtreme;
+        int tsTrend;
+        int tsProcessedPivotIndex = -1;
         // Leg-telemetry dedup: only log a REJECTED/ACCEPTED leg once until
         // the candidate pair changes (tuning telemetry, not per-bar spam —
         // an expired zone redrawn from the SAME leg logs nothing new).
@@ -265,21 +373,100 @@ public final class ChartEngine {
             if (activeZone != null) {
                 activeZone = advanceZone(activeZone, c1m);
             }
+            if (shadowZone != null) {
+                shadowZone = advanceZone(shadowZone, c1m);
+            }
 
             // Recompute swing structure only when a 30m bar completes.
             Candle done30 = completed.get(Timeframe.M30);
             if (done30 != null) {
+                int expiry = tuningFor(symbol).zoneExpiryBars();
                 if (activeZone != null
                         && activeZone.state() == OteState.FORMING
-                        && ++barsSinceZoneCreated > tuningFor(symbol).zoneExpiryBars()) {
+                        && ++barsSinceZoneCreated > expiry) {
                     activeZone = activeZone.withState(OteState.EXPIRED);
                 }
-                rebuildZoneIfNeeded();
+                if (shadowZone != null
+                        && shadowZone.state() == OteState.FORMING
+                        && ++shadowBarsSinceCreated > expiry) {
+                    shadowZone = shadowZone.withState(OteState.EXPIRED);
+                }
+
+                AnchorMode mode = anchorModeFor(symbol);
+                rebuild(mode, true);
+                if (anchorCompare) {
+                    rebuild(mode.other(), false);
+                    logCompare(mode);
+                }
             }
         }
 
-        /** Find the latest significant 30m leg and (re)draw the OTE on it. */
-        void rebuildZoneIfNeeded() {
+        /** Dispatch to the anchoring strategy that owns this track. */
+        void rebuild(AnchorMode mode, boolean primary) {
+            if (mode == AnchorMode.TREND_SHIFT) {
+                rebuildTrendShift(primary);
+            } else {
+                rebuildZoneIfNeeded(primary);
+            }
+        }
+
+        OteZoneSnapshot zoneOf(boolean primary) {
+            return primary ? activeZone : shadowZone;
+        }
+
+        void setZone(boolean primary, OteZoneSnapshot z) {
+            if (primary) {
+                activeZone = z;
+                barsSinceZoneCreated = 0;
+            } else {
+                shadowZone = z;
+                shadowBarsSinceCreated = 0;
+            }
+        }
+
+        /** Record an invalidation before the zone is replaced, so it stays auditable. */
+        void invalidateCurrent(boolean primary, String why) {
+            OteZoneSnapshot z = zoneOf(primary);
+            if (z == null || z.state() == OteState.INVALIDATED
+                    || z.state() == OteState.EXPIRED) return;
+            OteZoneSnapshot dead = z.withState(OteState.INVALIDATED);
+            if (primary) {
+                lastInvalidated = dead;
+                activeZone = dead;
+                System.out.println("[CHART " + symbol + "] zone INVALIDATED (" + why + ")");
+            } else {
+                shadowZone = dead;
+            }
+        }
+
+        /**
+         * One line per completed 30m bar, but only when the two modes' verdicts
+         * actually differ AND the pair changed — the point is divergence
+         * evidence, not a heartbeat.
+         */
+        void logCompare(AnchorMode primaryMode) {
+            String a = describe(activeZone);
+            String b = describe(shadowZone);
+            if (a.equals(b)) return;
+            String pair = a + "|" + b;
+            if (pair.equals(lastComparePair)) return;
+            lastComparePair = pair;
+            System.out.println("[CHART-ANCHOR " + symbol + "] "
+                    + primaryMode + "=" + a + " " + primaryMode.other() + "=" + b);
+        }
+
+        String describe(OteZoneSnapshot z) {
+            if (z == null) return "NONE";
+            return z.state().name() + (z.bullish() ? "/BULL" : "/BEAR")
+                    + "@" + z.legOrigin() + "-" + z.legExtreme();
+        }
+
+        /**
+         * FRACTAL_LEG (pre-V4 behaviour). The body below is unchanged except
+         * that it reads and writes the track it was given, so the same code
+         * serves the primary run and the chart.anchorCompare shadow.
+         */
+        void rebuildZoneIfNeeded(boolean primary) {
             InstrumentTuning tune = tuningFor(symbol);
             int strength = tune.swingStrength();
             List<Candle> series = bars.getCandles(Timeframe.M30);
@@ -314,29 +501,131 @@ public final class ChartEngine {
             }
 
             // Don't replace a still-live zone with the SAME leg.
-            if (activeZone != null
-                    && activeZone.state() != OteState.INVALIDATED
-                    && activeZone.state() != OteState.EXPIRED
-                    && activeZone.legOrigin() == origin.price
-                    && activeZone.legExtreme() == extreme.price) {
+            OteZoneSnapshot live = zoneOf(primary);
+            if (live != null
+                    && live.state() != OteState.INVALIDATED
+                    && live.state() != OteState.EXPIRED
+                    && live.legOrigin() == origin.price
+                    && live.legExtreme() == extreme.price) {
                 return;
             }
 
-            activeZone = OteZoneSnapshot.forLeg(
+            setZone(primary, OteZoneSnapshot.forLeg(
                     symbol, bullishLeg, origin.price, extreme.price,
-                    origin.time, extreme.time);
-            barsSinceZoneCreated = 0;
+                    origin.time, extreme.time,
+                    bandFor(symbol), AnchorMode.FRACTAL_LEG));
             lastRejectedOrigin = Double.NaN;
             lastRejectedExtreme = Double.NaN;
-            if (origin.price != lastAcceptedOrigin
-                    || extreme.price != lastAcceptedExtreme) {
+            if (primary && (origin.price != lastAcceptedOrigin
+                    || extreme.price != lastAcceptedExtreme)) {
                 lastAcceptedOrigin = origin.price;
                 lastAcceptedExtreme = extreme.price;
                 System.out.println("[CHART " + symbol + "] leg ACCEPTED origin="
                         + origin.price + " extreme=" + extreme.price
                         + " size=" + legTicks + "t -> OTE drawn (0.62="
-                        + activeZone.oteStart() + ", 0.705=" + activeZone.oteSweet() + ")");
+                        + zoneOf(primary).oteStart() + ", 0.705="
+                        + zoneOf(primary).oteSweet() + ")");
             }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // §S9 — TREND_SHIFT ANCHORING
+        // ═══════════════════════════════════════════════════════════════════
+
+        /**
+         * Anchors the fibs where a human would: from the swing low that STARTED
+         * the leg to the confirmed higher high that SHIFTED structure, with the
+         * extreme extending as the trend prints new confirmed highs.
+         *
+         * <p>Pivots are confirmed with {@link #TREND_SHIFT_PIVOT_LEN} bars on
+         * BOTH sides, so an anchor never repaints; the candidate bar is always
+         * exactly that far behind the newest confirmed 30m bar, and each index
+         * is processed once.
+         */
+        void rebuildTrendShift(boolean primary) {
+            List<Candle> series = bars.getCandles(Timeframe.M30);
+            int p = series.size() - 1 - TREND_SHIFT_PIVOT_LEN;
+            if (p < TREND_SHIFT_PIVOT_LEN) return;
+            if (p <= tsProcessedPivotIndex) return;
+            tsProcessedPivotIndex = p;
+
+            Candle c = series.get(p);
+            if (isPivot(series, p, true, TREND_SHIFT_PIVOT_LEN)) {
+                onTrendPivot(primary, new Swing(p, c.getHigh(), c.getTimestamp()), true);
+            }
+            if (isPivot(series, p, false, TREND_SHIFT_PIVOT_LEN)) {
+                onTrendPivot(primary, new Swing(p, c.getLow(), c.getTimestamp()), false);
+            }
+        }
+
+        private void onTrendPivot(boolean primary, Swing sw, boolean high) {
+            Swing previous = high ? tsLastHigh : tsLastLow;
+            if (high) {
+                tsPrevHigh = tsLastHigh;
+                tsLastHigh = sw;
+            } else {
+                tsPrevLow = tsLastLow;
+                tsLastLow = sw;
+            }
+
+            boolean shift = previous != null
+                    && (high ? sw.price > previous.price : sw.price < previous.price)
+                    && (high ? tsTrend <= 0 : tsTrend >= 0);
+
+            if (shift) {
+                Swing origin = high ? tsLastLow : tsLastHigh;
+                // ABSTAIN: a shift with no opposite swing yet has no origin to
+                // anchor to. Record the regime, draw nothing (doctrine C6).
+                tsTrend = high ? 1 : -1;
+                if (origin == null) return;
+                tsOrigin = origin;
+                tsExtreme = sw;
+                invalidateCurrent(primary, "opposite trend shift");
+                setZone(primary, newTrendZone(high));
+                return;
+            }
+
+            boolean extends_ = (high ? tsTrend == 1 : tsTrend == -1)
+                    && tsExtreme != null
+                    && (high ? sw.price > tsExtreme.price : sw.price < tsExtreme.price);
+            if (!extends_ || tsOrigin == null) return;
+
+            tsExtreme = sw;
+            OteZoneSnapshot z = zoneOf(primary);
+            if (z == null || z.state() == OteState.FORMING
+                    || z.state() == OteState.EXPIRED
+                    || z.state() == OteState.INVALIDATED) {
+                // Still forming (or gone): re-stretching is free — no fact has
+                // been recorded against the old fibs yet.
+                setZone(primary, newTrendZone(high));
+            } else {
+                // ARMED or REACTED: those are HISTORICAL FACTS about prices that
+                // were actually traded. Re-stretching would let the zone chase
+                // price and make REACTED unfalsifiable (Appendix E7), so the old
+                // zone is invalidated and a fresh one forms on the new anchors.
+                invalidateCurrent(primary, "post-ARM anchor extension");
+                setZone(primary, newTrendZone(high));
+            }
+        }
+
+        private OteZoneSnapshot newTrendZone(boolean bullish) {
+            return OteZoneSnapshot.forLeg(symbol, bullish,
+                    tsOrigin.price, tsExtreme.price, tsOrigin.time, tsExtreme.time,
+                    bandFor(symbol), AnchorMode.TREND_SHIFT);
+        }
+
+        /** Confirmed pivot: strictly more extreme than {@code len} bars each side. */
+        private boolean isPivot(List<Candle> s, int i, boolean high, int len) {
+            double v = high ? s.get(i).getHigh() : s.get(i).getLow();
+            for (int k = 1; k <= len; k++) {
+                int l = i - k;
+                int r = i + k;
+                if (l < 0 || r >= s.size()) return false;
+                double lv = high ? s.get(l).getHigh() : s.get(l).getLow();
+                double rv = high ? s.get(r).getHigh() : s.get(r).getLow();
+                if (high ? !(v > lv && v > rv) : !(v < lv && v < rv)) return false;
+            }
+            return true;
         }
 
         /** Progress FORMING → ARMED → REACTED → INVALIDATED on each 1m bar. */
@@ -359,15 +648,15 @@ public final class ChartEngine {
             if (z.state() == OteState.FORMING) {
                 // ARMED: price traded into the 0.62–0.79 band.
                 boolean tagged = z.bullish()
-                        ? c.getLow() <= z.fib(OTE_START)
-                        : c.getHigh() >= z.fib(OTE_START);
+                        ? c.getLow() <= z.oteStart()
+                        : c.getHigh() >= z.oteStart();
                 if (tagged) return z.withState(OteState.ARMED).withTagTime(c.getTimestamp());
             } else if (z.state() == OteState.ARMED) {
                 // REACTED: a close back on the extreme-side of the 0.62 line
                 // after the tag = the rejection you see on the screenshot.
                 boolean rejected = z.bullish()
-                        ? c.getClose() > z.fib(OTE_START)
-                        : c.getClose() < z.fib(OTE_START);
+                        ? c.getClose() > z.oteStart()
+                        : c.getClose() < z.oteStart();
                 if (rejected) return z.withState(OteState.REACTED);
             }
             return z;

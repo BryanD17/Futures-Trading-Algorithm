@@ -216,7 +216,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 02 — ictlib I: Displacement, FVG/IFVG, BPR (spec §S1–§S3)
   [✅] Agent 03 — ictlib II: Volume Imbalance, Opening Gaps, Liquidity Pools (§S4–§S6)
   [✅] Agent 04 — ictlib III: Order Blocks + Structure Engine MSS/BOS (§S7–§S8)
-  [⬜] Agent 05 — Trend-Shift OTE Anchoring Mode in ChartEngine (§S9)
+  [✅] Agent 05 — Trend-Shift OTE Anchoring Mode in ChartEngine (§S9)
   [⬜] Agent 06 — Bot Chart Overlay Parity (Every Detection Rendered)
   [⬜] Agent 07 — ConfluenceSnapshot Service + [CONFLUENCE] Telemetry + API
   [⬜] Agent 08 — Confluence Profiles + Profile Simulator + First Report
@@ -224,6 +224,17 @@ SECTION 2 — PROGRESS LEDGER
 
   LEDGER NOTES (append one dated line per completion):
   ------------------------------------------------------------------
+  2026-08-12 Agent 05 ✅ — §S9 trend-shift anchoring ships as a SELECTABLE
+    mode; chart.anchorMode defaults to FRACTAL_LEG and all 13 pre-existing
+    ChartEngine/backfill tests pass UNCHANGED. The band moved onto the zone
+    (chart.oteBand), so a config change can never retroactively rewrite the
+    fibs of a zone that already exists. Post-ARM extension invalidates and
+    reforms rather than re-stretching (Appendix E7), with the dead zone kept
+    queryable so the sequence stays auditable. Curl-verified defaults:
+    anchorMode=FRACTAL_LEG oteBand=0.62,0.79 anchorCompare=false. Full suite
+    605/0. NOTE: port 8080 is occupied by a PRE-EXISTING engine process
+    (pid 82731, not started by this session) — API evidence was gathered on
+    spare ports and that process was left untouched.
   2026-08-12 Agent 04 ✅ — ictlib complete: §S7 order blocks (origin scan in
     body AND wick modes, ACTIVE->TESTED->BREAKER->REMOVED) and §S8 MSS/BOS over
     a zigzag regime, with a SHADOW of the real gate detector for measurement.
@@ -1487,7 +1498,7 @@ block empty for an agent marked ✅.
   STATUS:            ✅ COMPLETE
   DATE COMPLETED:    2026-08-12
   PR NUMBER:         #144 (base Main, state MERGED)
-  COMMIT HASH:       recorded in the Agent 05 doc update
+  COMMIT HASH:       d2a3316  (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - §S7-§S8 per spec (file:line):
         §S7  ictlib/OrderBlockDetector.java:46 (origin scan :97,
@@ -1610,20 +1621,174 @@ block empty for an agent marked ✅.
     - Regressions: none (595/0). Blocked: none.
 
 ··· APPENDIX A-05 — Agent 05: Trend-Shift OTE Anchoring Mode ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
-  COMMIT HASH:       (squash-merge commit on Main)
+  STATUS:            ✅ COMPLETE
+  DATE COMPLETED:    2026-08-12
+  PR NUMBER:         #145 (base Main, state MERGED)
+  COMMIT HASH:       recorded in the Agent 06 doc update
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - Mode + band config with defaults preserving today (file:line):
+        AnchorMode enum                chart/AnchorMode.java:14
+        OteBand (start/sweet/end)      chart/OteBand.java:17
+        chart.anchorMode resolution    chart/ChartEngine.java:161
+          (per-symbol chart.anchorMode.<SYM> first, then the global, then
+           FRACTAL_LEG — so an unset property yields the pre-V4 behaviour)
+        chart.oteBand resolution       chart/ChartEngine.java:169
+        chart.anchorCompare            chart/ChartEngine.java:157 (default false)
+        programmatic override          chart/ChartEngine.java:182
+        resolved config logged once per instrument in
+        applySystemPropertyTuning, including "(engine default)" vs
+        "(OVERRIDDEN)" for the band — Agent 09's audit reads a resolved
+        value, not the absence of a property.
+      EXISTING CHARTENGINE TESTS PASS UNCHANGED (not one line edited):
+        ChartEngineDeterminismTest             tests=1 fail=0 err=0
+        ChartEngineInvalidationAndExpiryTest   tests=3 fail=0 err=0
+        ChartEngineOteLifecycleTest            tests=2 fail=0 err=0
+        ChartEnginePerInstrumentTuningTest     tests=2 fail=0 err=0
+        HistoricalBackfillTest                 tests=5 fail=0 err=0
+      The validator suites are likewise untouched and green
+      (StdvOteValidatorPdGateTest 6/6, StdvOteValidatorRrBandTest 3/3).
+    - §S9 anchoring + extension + invalidation tests PASSING
+      (ChartEngineTrendShiftTest, 10/10). Every 30m bar is fed as THIRTY 1m
+      candles through the real ingest path, because the lifecycle advances on
+      1m bars while anchors only move on confirmed 30m pivots — testing them
+      apart would not exercise the post-ARM rule at all:
+        shiftAnchoring                      BULL shift anchors origin at the
+                                            swing LOW that started the leg
+                                            (21000) and extreme at the new
+                                            structure-shifting high (21200);
+                                            anchorMode=TREND_SHIFT; 0.62 lands
+                                            at 21076.0, 0.705 at 21059.0
+        extensionBeforeArmRestretches       extreme moves 21200 -> 21260, origin
+                                            unchanged, still FORMING, and
+                                            getLastInvalidatedZone is EMPTY —
+                                            a pre-ARM re-stretch rewrites
+                                            nothing
+        extensionAfterArmInvalidatesAndReforms
+                                            after the band is tagged, a higher
+                                            pivot INVALIDATES the old zone (its
+                                            21200 anchors preserved on the dead
+                                            zone) and forms a fresh FORMING zone
+                                            at 21260 with taggedAt == null
+        oppositeShiftInvalidates            a pivot low below the previous swing
+                                            low flips the regime: old zone
+                                            INVALIDATED, new bearish zone
+                                            anchored 21200 -> 20950
+        closeThroughOriginStillInvalidates  the pre-existing rule is intact
+        fractalLegRemainsTheDefault         a fresh engine reports FRACTAL_LEG,
+                                            the engine-default band and
+                                            compare=false, and its zones are
+                                            tagged FRACTAL_LEG
+        bandIsConfigurableAndCarried        0.618/0.786 -> sweet 0.702, oteStart
+                                            recomputed, bandRatios in the API
+                                            map; malformed/absent/inverted specs
+                                            fall back instead of throwing
+        anchorCompareRunsBothModes          both tracks run; they AGREE on clean
+                                            trending tape and DIVERGE once a
+                                            shallow dip creates a fractal
+                                            micro-leg (trend-shift holds
+                                            21000->21200 bullish while the
+                                            fractal shadow flips to
+                                            21200->21050 bearish)
+        determinism                         same feed twice -> equal zone record
+        abstainsWithoutAnOrigin             a shift with no opposite swing yet
+                                            draws NOTHING rather than inventing
+                                            an anchor (doctrine C6)
+    - anchorMode meta visible via /api/chart — REAL curl output.
+      DEFAULTS (no properties set):
+        $ curl -s "http://localhost:8098/api/chart/MNQ?lookback=50"
+        {
+          "symbol": "MNQ",
+          "timeframe": "30m",
+          "ote": null,
+          "anchorMode": "FRACTAL_LEG",
+          "oteBand": "0.62,0.79",
+          "anchorCompare": false,
+          "shadowOte": null,
+          "warm": false
+        }
+      FLIPPED (jar run with -Dchart.anchorMode=TREND_SHIFT
+               -Dchart.oteBand=0.618,0.786 -Dchart.anchorCompare=true):
+        $ curl -s "http://localhost:8097/api/chart/MNQ?lookback=50"
+        {
+          "symbol": "MNQ",
+          "anchorMode": "TREND_SHIFT",
+          "oteBand": "0.618,0.786",
+          "anchorCompare": true,
+          "ote": null,
+          "shadowOte": null
+        }
+      Per-zone meta rides inside the "ote" object via
+      OteZoneSnapshot.toApiMap (anchorMode, bandStart/Sweet/End, bandRatios).
+      Controller: api-backend/.../ChartStateController.java:112-122.
+      ENVIRONMENT NOTE: port 8080 was already held by a PRE-EXISTING java
+      process (pid 82731) that this session did not start — per the V3 ledger
+      this is the owner's LIVE practice-account engine. It was left running
+      and untouched; the evidence above was taken on spare ports, and the
+      three instances this session started were stopped afterwards.
+    - Dual-log behind a default-false flag:
+        flag            chart/ChartEngine.java:157 (default false)
+        shadow rebuild  chart/ChartEngine.java (ingest: rebuild(mode.other(), false))
+        divergence log  chart/ChartEngine.java:447 — logs ONLY when the two
+                        verdicts differ AND the pair changed, so it is
+                        divergence evidence rather than a per-bar heartbeat.
+    - Full suite green: trading-engine tests=605 failures=0 errors=0 skipped=1;
+      `./gradlew clean build` BUILD SUCCESSFUL; api-backend boot jar builds and
+      serves.
+    - PR merged: #145, base Main.
   SPEC DECISIONS (where Appendix S was ambiguous and you decided):
-    - (decision + first-principles reason, or "none")
+    - §S9 band "sweet" ratio — the spec gives only start and end. DECIDED: the
+      sweet spot is the MIDPOINT. That reproduces the engine's existing 0.705
+      from 0.62/0.79 exactly (so the default is provably unchanged) and yields
+      0.702 for the published 0.618/0.786 variant. Recorded at OteBand.java:33.
+    - §S9 post-ARM re-anchor — the spec says the extension "INVALIDATES the old
+      zone and forms a new one" without naming the new zone's origin. DECIDED:
+      the new zone keeps the TREND'S origin and takes the new extreme — i.e.
+      exactly the anchors the extension would have produced. Any other origin
+      would silently redefine the leg the trend is being measured on.
+    - §S9 vs minLegTicks — the fractal path rejects legs below chart.minLegTicks.
+      DECIDED: TREND_SHIFT does NOT apply that filter. Its legs are already
+      qualified by a structure shift confirmed with ten bars on each side,
+      which is a far stronger significance test than a tick count; layering the
+      tick floor on top would drop valid trend legs on low-volatility
+      instruments.
+    - Where the band lives — NOT a spec ambiguity but a design call worth
+      recording: the band became a COMPONENT OF THE ZONE rather than engine
+      state. A zone that was tagged under one band must keep reporting the
+      levels it was actually tagged on; reading a mutable band at render time
+      would let a config change rewrite the fibs of zones that already exist —
+      the same history-rewriting the post-ARM rule exists to prevent (E7).
+      Backwards compatibility is total: the pre-V4 8-argument OteZoneSnapshot
+      constructor still exists and defaults band + anchorMode, which is why no
+      existing consumer or test needed a single edit.
   Q1/Q2/Q3 ANSWERS (where required):
-    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+    - Q1: full clean build + 605-test suite green at HEAD; the pre-existing
+      ChartEngine suite re-run verbatim and green.
+    - Q2: swept for other readers of the OTE band constants that would have
+      forked from a configured band — ChartEngine.advanceZone was the only one
+      (now reads z.oteStart(), behaviour-identical on the default band), and
+      OteZoneSnapshot's own accessors now read the zone's band. OTE_START /
+      OTE_SWEET / OTE_END remain public constants so no external consumer
+      breaks. Also swept for other OteZoneSnapshot construction sites before
+      changing the record: exactly one outside the chart package
+      (Ote30mVerdictPipelineTest:141), which compiles unchanged thanks to the
+      retained 8-argument constructor.
+    - Q3: failure class = "a test that silently never reaches the code it
+      names". FOUND: the 30m aggregator finalises a bar when the NEXT window
+      opens, not when the last minute of a window closes — so a sequence that
+      ended exactly on a bar boundary left the final bar in progress, the
+      confirmed-pivot index sat one bar short, and NO trend-shift zone was ever
+      created. Seven tests failed identically, which is what surfaced it. Fixed
+      with an explicit flush() in the fixture and documented there so the next
+      person building a 30m sequence does not lose an hour to it.
   ADAPTATIONS / REGRESSIONS / BLOCKED:
-    - (as in prior documents; "none" where clean)
+    - Adaptation: SymbolChart now carries a primary and a shadow zone track.
+      The FRACTAL_LEG body is unchanged apart from reading/writing the track it
+      is handed, which is what lets one implementation serve both the live run
+      and the compare shadow without a second copy of the logic to drift.
+    - Adaptation: getLastInvalidatedZone was added because §S9's
+      invalidate-and-reform would otherwise be unobservable — an invalidation
+      that leaves no trace cannot be audited against the chart.
+    - Regressions: none (605/0). Blocked: none.
 
 ··· APPENDIX A-06 — Agent 06: Bot Chart Overlay Parity ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)

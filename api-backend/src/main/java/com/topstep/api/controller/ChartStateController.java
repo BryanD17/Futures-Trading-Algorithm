@@ -109,6 +109,17 @@ public class ChartStateController {
         body.put("timeframe", "30m");
         body.put("candles30m", candles);
         body.put("ote", snap.activeOte() == null ? null : snap.activeOte().toApiMap());
+        // V4 Agent 05: the resolved anchoring switch, ALWAYS present — even
+        // with no live zone the owner must be able to see which mode is armed
+        // and on which band, without grepping the startup log.
+        com.topstep.trading.chart.ChartEngine ce = engine.getChartEngine();
+        String sym = symbol.toUpperCase();
+        body.put("anchorMode", ce.anchorModeFor(sym).name());
+        com.topstep.trading.chart.OteBand band = ce.bandFor(sym);
+        body.put("oteBand", band.start() + "," + band.end());
+        body.put("anchorCompare", ce.isAnchorCompareEnabled());
+        body.put("shadowOte", ce.getShadowOteZone(sym)
+                .map(com.topstep.trading.chart.OteZoneSnapshot::toApiMap).orElse(null));
         body.put("barsIngested1m", snap.oneMinuteBarsIngested());
         body.put("lastCandleTime",
                 snap.lastCandleTime() == null ? null : snap.lastCandleTime().toString());
