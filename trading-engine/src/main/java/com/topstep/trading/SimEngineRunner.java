@@ -168,7 +168,19 @@ public class SimEngineRunner {
                             .getProfile(s).getTickSize());
         }
         if (multiEngine != null) {
-            multiEngine.setCandleTap(chartEngine::onCandle);
+            // DEFECT FIX (V4 follow-up): in multi-instrument mode the engine
+            // subscribes symbols ITSELF, so onMarketData never runs for
+            // MNQ/MGC and the EXECUTION ENGINE never saw a candle. Its fills,
+            // stops and targets are all driven by onNewCandle, so a resting
+            // limit order could never fill: signals were approved, orders were
+            // submitted, and nothing ever happened. The tap is the only place
+            // every candle passes through in this mode, so the execution
+            // engine has to hang off it too.
+            multiEngine.setCandleTap(candle -> {
+                chartEngine.onCandle(candle);
+                strategyContext.setCurrentTime(candle.getTimestamp());
+                executionEngine.onNewCandle(candle);
+            });
             multiEngine.setChartEngine(chartEngine);
             multiEngine.setIctLibEngine(ictLibEngine);
             multiEngine.setConfluenceService(confluenceService);

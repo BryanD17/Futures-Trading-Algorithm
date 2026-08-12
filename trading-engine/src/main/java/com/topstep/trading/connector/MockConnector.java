@@ -51,6 +51,15 @@ public class MockConnector implements TradingConnector {
      */
     private final Map<String, Instant> lastEmittedTs = new ConcurrentHashMap<>();
 
+    /**
+     * SIM-only scripted tape (V4 follow-up). Non-null unless
+     * {@code -Dsim.tape=RANDOM} restores the historical random walk.
+     */
+    private final SimChoreographyTape choreography =
+            SimChoreographyTape.enabled()
+                    ? new SimChoreographyTape(SimWarmBoot.configuredSeed())
+                    : null;
+
     private boolean connected;
     private final Map<String, MarketDataListener> marketDataListeners;
     private final Map<String, OrderListener> orderListeners;
@@ -238,16 +247,18 @@ public class MockConnector implements TradingConnector {
         try {
             double basePrice = currentPrices.getOrDefault(symbol, 5000.0);
 
-            // Random walk with small increments
+            // Random walk with small increments. NOTE (V4 follow-up): this
+            // memoryless walk cannot produce the sweep -> displacement ->
+            // MSS -> retrace sequence the engine trades, so on it the funnel
+            // stalls at SWEEP_DONE forever and the SIM validates nothing.
+            // sim.tape=CHOREOGRAPHY (the default) replaces it below; RANDOM
+            // restores this walk for tests that want unstructured noise.
             double priceChange = (random.nextDouble() - 0.5) * 10.0;
             double open = basePrice;
             double close = basePrice + priceChange;
             double high = Math.max(open, close) + random.nextDouble() * 5.0;
             double low = Math.min(open, close) - random.nextDouble() * 5.0;
             long volume = 1000 + random.nextInt(9000);
-
-            // Update current price
-            currentPrices.put(symbol, close);
 
             Instant ts;
             if (VIRTUAL_CLOCK) {
@@ -268,6 +279,18 @@ public class MockConnector implements TradingConnector {
                 return;
             }
             lastEmittedTs.put(symbol, ts);
+
+            // V4 follow-up: the scripted ICT tape. It owns the whole candle
+            // (open through volume) so the phases stay internally consistent.
+            if (choreography != null) {
+                Candle scripted = choreography.next(symbol, ts, open);
+                currentPrices.put(symbol, scripted.getClose());
+                listener.onCandle(scripted);
+                return;
+            }
+
+            // Update current price (RANDOM tape only).
+            currentPrices.put(symbol, close);
 
             Candle candle = new Candle(
                     symbol,

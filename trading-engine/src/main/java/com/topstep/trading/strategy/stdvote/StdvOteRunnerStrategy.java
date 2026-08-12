@@ -178,6 +178,15 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private final RiskLimits activeRiskLimits;
     /** Re-arm cooldown length in feed bars ({@code scalp.rearmCooldownBars}). */
     private final int rearmCooldownBars;
+
+    /**
+     * {@code stdvOte.rearmOnInvalidated} — DEFAULT TRUE. Lets a LEGACY-mode
+     * setup that died without trading arm again, under the same gates the
+     * scalp re-arm already enforces (cooldown, killzone open, no open
+     * position, risk frequency limits). Set false to restore the pre-fix
+     * one-attempt-per-process behaviour.
+     */
+    private final boolean rearmOnInvalidated;
     /** London prime window (ET) gating MGC scalp entries. */
     private final LocalTime londonPrimeStartEt;
     private final LocalTime londonPrimeEndEt;
@@ -487,6 +496,19 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.scalpMode = ScalpConfig.isEnabled();
         this.liquidityTargets = new LiquidityTargetIdentifier(symbol, levelEngine);
         this.rearmCooldownBars = ScalpConfig.rearmCooldownBars();
+        // DEFECT FIX (V4 follow-up): in LEGACY mode the re-arm engine never
+        // ran, so an INVALIDATED setup was terminal for the LIFE OF THE
+        // PROCESS — one dead setup per symbol and the engine was finished for
+        // the day. Measured on SIM: 5 state transitions in an entire run, then
+        // 265 consecutive samples sitting in INVALIDATED.
+        //
+        // "One-move discipline" is meant to bound TRADES, not ATTEMPTS. A
+        // setup that died without trading has consumed no risk and used no
+        // trade allowance, so refusing to look again is not discipline, it is
+        // a stall. IN_TRADE stays terminal in legacy mode — that part IS the
+        // discipline and is unchanged.
+        this.rearmOnInvalidated = !"false".equalsIgnoreCase(
+                System.getProperty("stdvOte.rearmOnInvalidated", "true"));
         this.londonPrimeStartEt = ScalpConfig.londonPrimeStartEt();
         this.londonPrimeEndEt = ScalpConfig.londonPrimeEndEt();
         this.allSessions = ScalpConfig.allSessions();
@@ -562,6 +584,17 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             return;
         }
         lastPrimaryTimestamp = now;
+
+        // Funnel census (V4 follow-up): snapshot the setup state BEFORE ANY of
+        // this candle's processing — including core.onCandle's expiry check,
+        // which is where most invalidations actually happen. Bracketing only
+        // the later funnel steps was the first version of this and it reported
+        // zeros while the state was visibly changing: the transitions were
+        // firing outside the bracket. Measure the whole candle or measure
+        // nothing.
+        final SetupState funnelStateBefore = core.getSetupContext().state;
+        final FunnelTelemetry funnel = FunnelTelemetry.forSymbol(symbol);
+        funnel.rollSessionIfNeeded(now);
 
         // 1a. Aggregate FIRST so the entry-anatomy detectors below can be
         // fed completed higher-timeframe candles (field fix 2026-07-09).
@@ -664,6 +697,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // IN_TRADE / INVALIDATED stay terminal (one-move discipline).
         if (scalpMode) {
             processScalpRearm(ctx, context, inKillzone);
+        } else if (rearmOnInvalidated) {
+            processLegacyRearm(ctx, context, inKillzone);
         }
 
         // 6. HTF bias hook — completed HTF bar close ONLY. V2 Agent 04:
@@ -778,6 +813,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                         candle.getTimestamp(), false);
             }
             System.out.println(sim.logLine());
+            System.out.println(funnel.logLine());
         }
 
         // 6c. Crash-safe agreement-stats checkpoint every completed 30m bar
@@ -862,6 +898,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 }
             }
         }
+
+        // Funnel census: one EVENT per real transition, with the reason when
+        // the setup died. Measurement only.
+        funnel.recordTransition(funnelStateBefore, ctx.state, ctx.lastGateFailed);
 
         // Remember the state for INVALIDATED-transition detection (SA4).
         lastSeenState = ctx.state;
@@ -954,6 +994,34 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         }
     }
 
+    /**
+     * LEGACY-mode re-arm (V4 follow-up defect fix). Only an INVALIDATED setup
+     * — one that died WITHOUT trading — is re-armed; IN_TRADE remains terminal
+     * so the one-trade-per-window discipline is untouched.
+     *
+     * <p>Every other gate is the scalp engine's, reused rather than
+     * reimplemented: the cooldown, an open killzone, no open position on the
+     * symbol, and the PropFirmRiskEngine frequency limits. A re-arm can
+     * therefore never create a trade the risk engine would have refused.
+     */
+    private void processLegacyRearm(SetupContext ctx, StrategyContext context,
+                                    boolean inKillzone) {
+        if (ctx.state == SetupState.INVALIDATED && rearmCooldownRemaining < 0) {
+            rearmCooldownRemaining = rearmCooldownBars;
+            System.out.println("[" + symbol + "] setup invalidated ("
+                    + ctx.lastGateFailed + ") — re-arm in " + rearmCooldownBars + " bars");
+            return;
+        }
+        if (rearmCooldownRemaining > 0) {
+            rearmCooldownRemaining--;
+        } else if (rearmCooldownRemaining == 0
+                && ctx.state == SetupState.INVALIDATED
+                && canRearm(ctx, context, inKillzone)) {
+            rearmCooldownRemaining = -1;
+            rearm(ctx);
+        }
+    }
+
     /** All re-arm gates outside the cooldown itself. */
     private boolean canRearm(SetupContext ctx, StrategyContext context, boolean inKillzone) {
         boolean terminal = ctx.state == SetupState.INVALIDATED
@@ -1000,7 +1068,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         if (lastBias != MarketBias.NEUTRAL) {
             core.recordHtfBias(lastBias);
         }
-        System.out.println("[" + symbol + "] SCALP: re-armed for next setup"
+        System.out.println("[" + symbol + "] " + (scalpMode ? "SCALP: " : "")
+                + "re-armed for next setup"
                 + " (state=" + ctx.state + ", bias=" + lastBias + ")");
     }
 
@@ -1270,13 +1339,25 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     }
 
     private void tryRecordDisplacement() {
+        FunnelTelemetry funnel = FunnelTelemetry.forSymbol(symbol);
         boolean bullish = (lastBias == MarketBias.BULLISH);
-        if (!displacementDetector.hasRecentDisplacement(5, bullish)) return;
+        if (!displacementDetector.hasRecentDisplacement(5, bullish)) {
+            // Distinguish "no displacement at all" from "one, but the wrong
+            // way" — they call for completely different fixes.
+            funnel.recordStall("SWEEP_DONE",
+                    displacementDetector.hasRecentDisplacement(5)
+                            ? "displacement-wrong-direction" : "no-recent-displacement");
+            return;
+        }
         DisplacementDetector.Displacement d = displacementDetector.getLastDisplacement();
-        if (d == null) return;
+        if (d == null) {
+            funnel.recordStall("SWEEP_DONE", "no-displacement-object");
+            return;
+        }
 
         // Idempotency: never consume the same displacement event twice.
         if (d.getTimestamp() != null && d.getTimestamp().equals(lastConsumedDisplacementTs)) {
+            funnel.recordStall("SWEEP_DONE", "displacement-already-consumed");
             return;
         }
 
@@ -1291,7 +1372,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         } else {
             fvg = pickFvgFor(bullish);
         }
-        if (fvg == null) return;
+        if (fvg == null) {
+            funnel.recordStall("SWEEP_DONE", "no-fvg-for-displacement");
+            return;
+        }
         core.recordDisplacement(fvg);
         if (core.getSetupContext().state == SetupState.DISPLACED) {
             lastConsumedDisplacementTs = d.getTimestamp();
@@ -1339,7 +1423,11 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     }
 
     private void tryArmOte(Candle candle) {
-        if (!impulseTracker.isArmed()) return;
+        FunnelTelemetry funnel = FunnelTelemetry.forSymbol(symbol);
+        if (!impulseTracker.isArmed()) {
+            funnel.recordStall("MSS_CONFIRMED", "impulse-not-armed");
+            return;
+        }
         // M7 PD-array candidates (2026-07-27 funnel fix): the spec accepts
         // ANY PD array inside the band, so the core may fall back from the
         // displacement's own FVG to the newest in-zone unfilled FVG.
@@ -1350,7 +1438,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             core.invalidate("impulse origin violated before OTE entry");
             return;
         }
-        if (!impulseTracker.hasValidLeg()) return;
+        if (!impulseTracker.hasValidLeg()) {
+            funnel.recordStall("MSS_CONFIRMED", "no-valid-impulse-leg");
+            return;
+        }
 
         // Reaction is derived from observable price action — a rejection
         // wick at the OTE zone — never a hardcoded literal.
@@ -1358,6 +1449,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 candle, spec.tickSize(), reactionWickTicks);
         core.recordOteImpulse(impulseTracker.impulseLow(), impulseTracker.impulseHigh(),
                 spec.tickSize(), reactionConfirmed);
+        if (core.getSetupContext().state != SetupState.OTE_ARMED) {
+            funnel.recordStall("MSS_CONFIRMED",
+                    reactionConfirmed ? "ote-not-armed-after-reaction" : "no-reaction-at-band");
+        }
     }
 
     private void tryEmitOrder(StrategyContext context) {

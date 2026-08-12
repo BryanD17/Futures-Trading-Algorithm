@@ -224,6 +224,44 @@ SECTION 2 — PROGRESS LEDGER
 
   LEDGER NOTES (append one dated line per completion):
   ------------------------------------------------------------------
+  2026-08-12 V4 FOLLOW-UP ✅ — SIM NOW TRADES. Three seeded warm sessions
+    (42/7/1337): 14 trades EACH, 28 fills, 0 open at the end, and the risk
+    engine still denying 8 signals per session on "R:R too low: 2.33 < 3.0" —
+    so this was NOT achieved by weakening risk. Report:
+    docs/reports/PROFILE_SIM_02.md. Four causes, found with a new [FUNNEL]
+    event census (ctx.lastGateFailed is STICKY and had been overstating one
+    NEUTRAL invalidation as 274):
+      1. ENGINE: in LEGACY mode an INVALIDATED setup was terminal FOR THE LIFE
+         OF THE PROCESS — the re-arm engine was scalp-only. 5 transitions in a
+         whole run, then 265 samples parked in INVALIDATED. One-move discipline
+         should bound TRADES, not ATTEMPTS; stdvOte.rearmOnInvalidated (default
+         true) re-arms a dead setup under the SAME gates scalp already used.
+         IN_TRADE stays terminal in legacy — that part IS the discipline.
+      2. ENGINE: single-candle displacement compared a BODY against a threshold
+         derived from average RANGE, subsuming the expansion test and demanding
+         range >= ~2.3x average against a documented 1.5x ATR. Measured pass
+         rate 0.63% of 5m bars. Fixed; DisplacementRateHarness prints the whole
+         threshold surface and DisplacementConfirmationTest pins the fix AND
+         the two checks that must still bite.
+      3. WIRING: in multi-instrument SIM the engine subscribes symbols itself,
+         so onMarketData never ran and ExecutionEngine.onNewCandle — which
+         drives FILLS, stops and targets — was never called. Signals were
+         approved and orders submitted, then nothing: 0 fills, balance frozen.
+         The candle tap now feeds it. This alone took 0 trades -> 14.
+      4. FIXTURE: the SIM live tape was a memoryless random walk that cannot
+         correlate a sweep with a displacement. SimChoreographyTape (SIM-ONLY,
+         sim.tape=CHOREOGRAPHY) replays the hand-verified 23-candle act from
+         SyntheticScalpSessionGenerator inside each killzone, and the warm boot
+         uses the SAME tape so history and live ticks are one market.
+    BIAS STABILITY, measured: BULLISH 130/BEARISH 134/NEUTRAL 24 became
+    BULLISH 307/NEUTRAL 30/BEARISH 0, and bias-flip invalidations vanished from
+    the census. bias.hysteresis.enabled remains OFF and untouched — the cause
+    was a tape that could not hold a bias, not hysteresis tuning.
+    UNCHANGED: trade.profile=STRICT, chart.anchorMode=FRACTAL_LEG, and the risk
+    layer byte-for-byte. Suite 662/0. SIM run recipe in QUICK_START.
+    CAVEAT: this proves the PIPELINE, not an edge — the tape is a fixture built
+    to contain the setup. Next honest step is LIVE observation at defaults with
+    the [FUNNEL] census running.
   ================== V4 FINAL SUMMARY (2026-08-12) ==================
   9/9 agents ✅. PRs #141-#149, every one squash-merged to Main:
     #141 cb3f6f4 pre-flight        #146 d9951da Bot Chart parity
