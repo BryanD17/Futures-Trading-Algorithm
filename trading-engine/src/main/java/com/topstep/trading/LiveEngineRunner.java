@@ -144,6 +144,13 @@ public class LiveEngineRunner {
     private final com.topstep.trading.chart.ChartEngine chartEngine =
             new com.topstep.trading.chart.ChartEngine();
 
+    // V4 Agent 02 — the ICT detection library, hung off the chart's candle tap
+    // so it provably reads the same bars the Bot Chart draws (ONE ingest seam).
+    // Observation-grade: it feeds the chart overlay, the confluence snapshot
+    // and the profile simulator, and gates nothing.
+    private final com.topstep.trading.ictlib.IctLibEngine ictLibEngine =
+            com.topstep.trading.ictlib.IctLibEngine.attachTo(chartEngine);
+
     // Killzone clock for stale order checking
     private final KillzoneClock killzoneClock = new KillzoneClock();
 
@@ -576,6 +583,7 @@ public class LiveEngineRunner {
             );
             EngineFacade.getInstance().setLiveRunner(this);
             EngineFacade.getInstance().setChartEngine(chartEngine);
+            EngineFacade.getInstance().setIctLibEngine(ictLibEngine);
 
             // Start the appropriate engine mode. STDV+OTE multi-instrument
             // wins if enabled; otherwise legacy multi-instrument; otherwise

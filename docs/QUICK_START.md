@@ -605,3 +605,91 @@ dies upstream -> fix upstream fragility first (F3), then REVISIT whether
 - [ ] Risk panel: DLL/MLL/flatten-by unchanged and correct for the account
 - [ ] Topstep's CURRENT written automation policy re-checked (eval vs funded)
 - [ ] Kill switch reachable and tested this week
+
+---
+
+## THE ICT LIBRARY (`ictlib`) — V4
+
+`trading-engine/src/main/java/com/topstep/trading/ictlib/` is the
+**chart/confluence-grade** detection library added by V4. It implements
+Appendix S of `ICT_STACK_MASTER_PROMPT_V4.txt` from spec, and it runs
+**beside** the gate detectors rather than replacing them.
+
+Read that sentence twice, because it is the whole design: the detectors that
+feed the M1–M9 entry gates are tuned to the 2022-model state machine and are
+**untouched**. `ictlib` exists so the Bot Chart can draw what a fully-loaded
+ICT chart draws, so the confluence stack has one queryable source per fact,
+and so the owner can later unify the two truths **from measured evidence**.
+
+### Where it plugs in
+
+One ingest seam. `ChartEngine.setCandleTap(...)` — `ictlib` reads the exact
+same closed 1m candles the Bot Chart draws, on both the backfill and the live
+path, so a detection can never disagree with the candles beneath it:
+
+```
+LiveEngineRunner / SimEngineRunner
+   └─ chartEngine.onCandle(candle)          (backfill + live, one path)
+        └─ candleTap  ──►  IctLibEngine.onCandle(candle)
+                              ├─ 1m  series ─┐
+                              └─ 15m series ─┴─► family detectors ─► DetectionRegistry
+```
+
+### Families (Agent 02)
+
+| § | Family | Timeframes | Lifecycle | Retention |
+|---|--------|-----------|-----------|-----------|
+| S1 | `DISPLACEMENT` | 1m, 15m | `POINT` (instantaneous) | last 50 |
+| S2 | `FVG` (or IFVG) | 1m, 15m | `ACTIVE → TOUCHED → FILLED` | 10 per side |
+| S3 | `BPR` | 1m, 15m | `ACTIVE → TOUCHED → BROKEN` | 5 per side |
+
+Transitions are **monotonic** — a filled gap never un-fills — and each family's
+detector is the only writer of its state. The chart and the confluence stack
+*read* these states; nothing recomputes them.
+
+Every list is capped. Nothing in `ictlib` grows per candle without a bound.
+
+### The one behavioural difference that matters
+
+```
+legacy FvgDetector : bullish gap  ⇔  l[i] > h[i-2]
+ictlib §S2         : bullish gap  ⇔  l[i] > h[i-2]  AND  displacementUp[i-1]
+```
+
+**`ictlib` will report far fewer FVGs than the legacy detector. That is the
+feature, not a bug.** A naive three-candle gap fires constantly on quiet tape;
+requiring the middle candle to be a displacement keeps only the gaps an
+energetic move actually left behind.
+
+### `[ICTLIB-DIFF]` — the measurement
+
+Once per session (and on demand via `IctLibEngine.logDiffLines()`):
+
+```
+[ICTLIB-DIFF MNQ] fvg: ictlib=7 existing=92 overlap=7
+```
+
+- `ictlib` — gaps the §S2 rule found this session (1m + 15m).
+- `existing` — gaps the legacy rule would have found over the same bars.
+- `overlap` — an **invariant check**: in FVG mode §S2 is the legacy rule *plus*
+  a displacement requirement, so every ictlib gap must also be a legacy gap and
+  `overlap` must equal `ictlib`. If it ever does not, either the mode is IFVG
+  (where the gap comparison inverts) or something has drifted.
+
+A big `existing`/small `ictlib` is the filter working. Verify a handful on the
+Bot Chart before concluding anything else.
+
+### Tuning knobs
+
+| Property | Default | Meaning |
+|----------|---------|---------|
+| `ictlib.enabled` | `true` | Master switch. Observation-only: it gates nothing, so leaving it on changes no live trading behaviour. |
+| `ictlib.displacement.meanLen` | `5` | §S1 body-SMA length (over the bars *preceding* the candle). |
+| `ictlib.displacement.wickRatioMax` | `0.36` | §S1 max wick as a fraction of body. |
+| `ictlib.retain.displacement` | `50` | §S1 retention. |
+| `ictlib.fvg.mode` | `FVG` | `FVG` or `IFVG` (inverted/overlap read). |
+| `ictlib.retain.fvg` | `10` | §S2 retention **per side**. |
+| `ictlib.retain.bpr` | `5` | §S3 retention **per side**. |
+
+The resolved config is printed once at start:
+`[ICTLIB] ictlib enabled=true displacement(meanLen=5,...) gaps(mode=FVG,...)`.

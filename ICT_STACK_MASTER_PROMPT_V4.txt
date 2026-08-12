@@ -213,7 +213,7 @@ SECTION 2 — PROGRESS LEDGER
   Status:  ⬜ NOT STARTED   🔄 IN PROGRESS   ✅ COMPLETE   ⛔ BLOCKED
 
   [✅] Agent 01 — Pre-Flight: Predecessor State + Baselines + License Sweep Base
-  [⬜] Agent 02 — ictlib I: Displacement, FVG/IFVG, BPR (spec §S1–§S3)
+  [✅] Agent 02 — ictlib I: Displacement, FVG/IFVG, BPR (spec §S1–§S3)
   [⬜] Agent 03 — ictlib II: Volume Imbalance, Opening Gaps, Liquidity Pools (§S4–§S6)
   [⬜] Agent 04 — ictlib III: Order Blocks + Structure Engine MSS/BOS (§S7–§S8)
   [⬜] Agent 05 — Trend-Shift OTE Anchoring Mode in ChartEngine (§S9)
@@ -224,6 +224,13 @@ SECTION 2 — PROGRESS LEDGER
 
   LEDGER NOTES (append one dated line per completion):
   ------------------------------------------------------------------
+  2026-08-12 Agent 02 ✅ — ictlib package born (16 classes) behind ONE ingest
+    seam (ChartEngine.setCandleTap). §S1/§S2/§S3 implemented from spec with
+    monotonic lifecycles, consecutive-gap merge, IFVG flag and per-family
+    retention caps. 32 new tests, suite 544/0 failures. Measured on synthetic
+    tape: [ICTLIB-DIFF MNQ] fvg: ictlib=7 existing=92 overlap=7 — the
+    displacement requirement is doing exactly what Appendix E3 predicted.
+    ZERO changes to strategy/ chartstate/ validation/ risk/.
   2026-08-12 Agent 01 ✅ — three baselines GREEN at 38c75ef; every V1/V2/V3
     predecessor this document depends on verified PRESENT in code (nothing
     to build minimally later); 15 existing detection classes inventoried;
@@ -1012,8 +1019,7 @@ block empty for an agent marked ✅.
   STATUS:            ✅ COMPLETE
   DATE COMPLETED:    2026-08-12
   PR NUMBER:         #141 (base Main, state MERGED)
-  COMMIT HASH:       recorded in the Agent 02 doc update (squash hash is
-                     only knowable after this PR merges)
+  COMMIT HASH:       cb3f6f4  (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - Baselines green:
         ENGINE+API (root multi-project, JAVA_HOME=temurin-21):
@@ -1131,20 +1137,170 @@ block empty for an agent marked ✅.
     - Regressions: none. Blocked: none.
 
 ··· APPENDIX A-02 — Agent 02: ictlib I (Displacement, FVG/IFVG, BPR) ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
-  COMMIT HASH:       (squash-merge commit on Main)
+  STATUS:            ✅ COMPLETE
+  DATE COMPLETED:    2026-08-12
+  PR NUMBER:         #142 (base Main, state MERGED)
+  COMMIT HASH:       recorded in the Agent 03 doc update
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - Package + registry + engine with ONE ingest seam:
+        package  trading-engine/src/main/java/com/topstep/trading/ictlib/
+                 (16 classes; see the file list at the end of this block)
+        Detection (interface)          ictlib/Detection.java:16
+        MutableDetection (writer-side) ictlib/MutableDetection.java:16
+        DetectionSnapshot (immutable)  ictlib/DetectionSnapshot.java:11
+        DetectionRegistry (bounded)    ictlib/DetectionRegistry.java:27
+        IctLibEngine                   ictlib/IctLibEngine.java:46
+        THE SEAM — ChartEngine.setCandleTap  chart/ChartEngine.java:141
+                   consumed at              chart/ChartEngine.java:161
+                   attached ONCE per runner via IctLibEngine.attachTo:
+                     ictlib/IctLibEngine.java:71
+                     SimEngineRunner.java:85
+                     LiveEngineRunner.java:152
+        Q2 note: ChartEngine.onCandle is the SINGLE funnel every 1m candle
+        already passes through (backfill LiveEngineRunner.java:438,
+        live :684, sim :335), which is why the tap — not a second
+        market-data subscription — is the correct seam: a detection can
+        never disagree with the candles drawn beneath it.
+    - §S1-§S3 implemented per spec:
+        §S1 DisplacementRule           ictlib/DisplacementRule.java:31
+            DisplacementScanner        ictlib/DisplacementScanner.java:15
+        §S2 FairValueGapDetector       ictlib/FairValueGapDetector.java:37
+            (named to avoid colliding with strategy/FvgDetector.java:16,
+             which is untouched)
+        §S3 BprDetector                ictlib/BprDetector.java:40
+    - DISPLACEMENT-REQUIRED FVG proven by the explicit negative test:
+        IctLibFvgTest#noDisplacementNoGap — "MANDATORY NEGATIVE: identical
+        prices, i-1 body 6.0 (no displacement) -> NO gap". It asserts BOTH
+        halves of Appendix W2's negative: the legacy rule DOES fire on those
+        bars (IctLibDiffStats.legacyBullishGap == true) and §S2 refuses them
+        (registry empty). PASSED.
+    - Lifecycles + merging + caps tested — ictlib suite 32/32 PASSED:
+        IctLibDisplacementTest            tests=4 fail=0 err=0
+        IctLibFvgTest                     tests=7 fail=0 err=0
+        IctLibBprTest                     tests=6 fail=0 err=0
+        IctLibRegistryTest                tests=7 fail=0 err=0
+        IctLibDeterminismTest             tests=4 fail=0 err=0
+        IctLibDiffStatsTest               tests=4 fail=0 err=0
+      Named coverage: W1 positive + W1 wick negative + bearish mirror +
+      cold ABSTAIN; W2 positive + the mandatory negative + TOUCHED->FILLED
+      with a monotonicity assertion + "creation bar never touches its own
+      gap" + consecutive-gap merge (one detection, zone widened to the
+      union, meta merged=true) + IFVG mode (and the same bars producing
+      NOTHING in FVG mode) + bearish mirror lifecycle; BPR intersection
+      arithmetic + orientation from the later gap + pos=+1/-1 lifecycles +
+      pair dedup + disjoint gaps + "a TOUCHED gap does not pair";
+      registry per-side caps + TERMINAL-FIRST eviction + oldest-fallback +
+      deterministic ids + query API + detached snapshots + default bound;
+      determinism (two engines, 240 bars, byte-identical fingerprints) +
+      both timeframes registered + partial candles ignored + caps holding
+      over a 2000-bar feed.
+    - [ICTLIB-DIFF] telemetry present — REAL lines captured from the
+      determinism test's SIM-shaped feed (test-results XML system-out):
+        [ICTLIB-DIFF MNQ] fvg: ictlib=7 existing=92 overlap=7
+        [ICTLIB-DIFF MNQ] fvg: ictlib=6 existing=174 overlap=6
+      Emitted once per CME session (keyed on candle time via
+      TradingSessionCalendar.sessionDate, never the wall clock) at
+      IctLibEngine.java:180, and on demand via
+      IctLibEngine.logDiffLines() (:110). overlap == ictlib on both lines,
+      which is the §S2-is-a-strict-subset invariant holding.
+    - No existing detector modified — git diff --stat HEAD scoped to
+      strategy/, chartstate/, validation/, risk/ returns EMPTY. Full scope
+      of this PR:
+        docs/QUICK_START.md                  | 88 +++++++++
+        .../topstep/trading/EngineFacade.java | 27 ++++
+        .../trading/LiveEngineRunner.java     |  8 ++
+        .../trading/SimEngineRunner.java      |  8 ++
+        .../topstep/trading/chart/ChartEngine.java | 26 ++++
+        + 16 new ictlib classes and 6 new test classes
+      EngineFacade/runner edits are pure wiring (register + drop the
+      library beside the ChartEngine); ChartEngine's edit is the additive
+      tap. No gate, no validator, no risk file is touched.
+    - License sweep of new code CLEAN:
+        grep over *.java/*.ts/*.tsx for LuxAlgo | ChartPrime | //@version |
+        input.color | box.new  ->  0 hits
+        grep -w for "Pine"                     ->  0 hits
+      NOTE FOR AGENT 09: a repo-wide sweep DOES report hits, and all of
+      them are inside ICT_STACK_MASTER_PROMPT_V4.txt itself — the
+      licensing-guardrail prose naming the two reference indicators. That
+      is the document describing the rule, not code violating it. The
+      source-only sweep above is the one that matters.
+    - Full suite green: trading-engine tests=544 failures=0 errors=0
+      skipped=1 across 107 test classes; `./gradlew clean build`
+      BUILD SUCCESSFUL (17 actionable tasks). Dashboard untouched this
+      agent.
+    - PR merged: #142, base Main.
   SPEC DECISIONS (where Appendix S was ambiguous and you decided):
-    - (decision + first-principles reason, or "none")
+    - §S1 "SMA(body, meanLen) evaluated at i" — does the mean INCLUDE bar i?
+      DECIDED: it EXCLUDES i. Appendix W1 settles it numerically ("prior five
+      bodies: 8, 10, 9, 7, 11 -> meanBody = 9.0", then compares candle X's
+      body of 15 to it). First principles agree: including i would let a big
+      body inflate the very average it must beat, which is not what "exceeds
+      recent average bodies" can mean. Recorded at DisplacementRule.java:20.
+    - §S2 IFVG zone geometry — the spec inverts the comparison but never
+      restates the zone. DECIDED: both modes build the zone from the SAME two
+      levels (h[i-2] and l[i] for a bullish read), bottom = min, top = max.
+      In FVG mode that reproduces the spec's [h[i-2], l[i]] exactly; in IFVG
+      mode it yields the overlap region the spec describes. One formula
+      cannot drift from itself. Recorded at FairValueGapDetector.java:30.
+    - §S3 orientation — the spec gives a geometric rule AND an explicit
+      ambiguity fallback ("direction of the LATER-created gap"). DECIDED: use
+      the fallback as the single rule; the later gap is the one doing the
+      repricing, and the two rules agree wherever the geometric one decides
+      anything. Recorded at BprDetector.java:20.
+    - §S3 pos = 0 (price INSIDE the region at creation) — the spec derives the
+      invalidating side from pos but does not define the far side for pos = 0.
+      DECIDED: fall back to the orientation (a bullish BPR dies on a close
+      below its low, a bearish one above its high), and start such a detection
+      at TOUCHED because price is already inside it. Recorded at
+      BprDetector.java:28.
+    - §S3 timeframe — unspecified. DECIDED: BPR runs on every timeframe its
+      gaps run on and pairs ONLY same-timeframe gaps. Mixing a 1m gap with a
+      15m gap would produce a region neither series can invalidate. Recorded
+      at IctLibEngine.java:37.
+    - §S3 "most recent ACTIVE" gap — DECIDED literally: state == ACTIVE, not
+      merely non-terminal. A gap price has already traded back into is being
+      spent, and pairing it would draw regions around half-consumed
+      imbalances. Test: IctLibBprTest#touchedGapDoesNotPair.
+    - METHOD DECISION (not a spec ambiguity) — the [ICTLIB-DIFF] comparison
+      MIRRORS the legacy rule (IctLibDiffStats.java:123-130) instead of
+      running a shadow strategy.FvgDetector, because that class prints a line
+      per gap and a 5-day backfill would emit tens of thousands of them. The
+      mirror is PINNED to the real class by
+      IctLibDiffStatsTest#mirrorMatchesLegacyFvgDetector, which replays 120
+      bars through both and asserts identical counts — so drift fails a test
+      instead of quietly making the diff meaningless.
   Q1/Q2/Q3 ANSWERS (where required):
-    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+    - Q1: full clean build + 544-test suite green at HEAD with the library
+      wired into both runners; the ictlib suite passes on a rerun.
+    - Q2: swept for OTHER ingest points that would fork the tape — the three
+      ChartEngine.onCandle call sites (LiveEngineRunner:431/439/684,
+      SimEngineRunner:335) all funnel through the ONE method the tap hangs
+      off, so there is no second seam to keep in sync. Also swept for other
+      unbounded collections in the new package: every list is either the
+      capped registry, the 300-bar TimeframeSeries window, or the bounded
+      256-entry BPR pair set (BprDetector.java:47).
+    - Q3: failure class = "a detection library that silently becomes a second
+      trading truth". Triggers found and closed: (a) nothing in ictlib is
+      readable by a gate — the package has no reference from strategy/ or
+      validation/; (b) the diff mirror could drift from the real detector, so
+      it is pinned by a test; (c) a widened (merged) gap could have been
+      permanently excluded from BPR pairing by an over-eager dedup set — found
+      while writing the tests and fixed by retiring a pair only when it
+      actually produces a region (BprDetector.java:118).
   ADAPTATIONS / REGRESSIONS / BLOCKED:
-    - (as in prior documents; "none" where clean)
+    - Adaptation: ictlib re-derives its own 15m series from the 1m stream
+      using the repo's existing clock-aligned BarAggregationManager rather
+      than borrowing the strategy's instance — it must not be able to perturb
+      the aggregator the gates read. Bounded at 400 bars.
+    - Adaptation: EngineFacade now carries the IctLibEngine beside the
+      ChartEngine (registered by both runners, dropped on stop) so the API can
+      serve detections in Agent 06 without a second wiring path.
+    - Regressions: none (544/0). Blocked: none.
+      ictlib file list: BprDetector, Detection, DetectionDirection,
+      DetectionRegistry, DetectionSnapshot, DetectionState, DetectionType,
+      DisplacementRule, DisplacementScanner, FairValueGapDetector,
+      FamilyDetector, IctLibConfig, IctLibDiffStats, IctLibEngine,
+      MutableDetection, TimeframeSeries.
 
 ··· APPENDIX A-03 — Agent 03: ictlib II (VI, Opening Gaps, Liquidity Pools) ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)
