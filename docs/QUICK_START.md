@@ -560,6 +560,48 @@ candle-for-candle before trusting any signal.
   `dashboard-frontend/src/services/setupApi.ts`
 - Design / architecture: `docs/architecture/STDV_OTE_MODEL.md`
 
+## OWNER'S ROLLOUT RUNBOOK (POST-V4)
+
+**R1. WEEK ONE — LOOK, DON'T TOUCH.** Run at defaults (`STRICT`,
+`FRACTAL_LEG`). Each day open the Bot Chart next to TopstepX with the reference
+indicators loaded and confirm the same FVGs, order blocks, pools and OTE band
+appear in the same places. Any structural mismatch is a fixup before any flip.
+
+**R2. READ THE THREE NUMBERS DAILY.** `[PROFILE]` would-trade counts,
+`STRICT`'s ranked blocking gates, and `[ICTLIB-DIFF]`. What they mean together:
+
+- `MINIMAL = 0` → **upstream problem** (warmth, sweeps, funnel progression),
+  not strictness. No flag fixes it. **This is what the first report found.**
+- `STANDARD >> STRICT = 0` with sane blocking gates → strictness is the cost;
+  a flip is on the table.
+- `STANDARD ≈ 0` too → the tape genuinely is not offering the choreography. No
+  flag fixes that honestly either.
+
+**R3. THE FLIP (only when R2 supports it).** Review the last 10 `STANDARD`
+would-trade events against the Bot Chart. Would you have taken them by hand? If
+most yes: `-Dtrade.profile=STANDARD`. One switch, one week. `MINIMAL` is a
+diagnostic floor — trading it needs a written reason in the V4 LEDGER NOTES
+first.
+
+**R4. WHAT NEVER CHANGES.** DLL/MLL, max contracts, flatten-by, sizing bounds,
+warmup guards, the kill switch and killzone-only entries hold in **every**
+profile. If any would-trade event ever violates one of those, it is a bug —
+revert to `STRICT` and file it. Re-verify Topstep's current written automation
+policy for the account type before any live flip.
+
+**R5. ANCHOR MODE — a separate decision, on its own week.** Run
+`-Dchart.anchorCompare=true` for a few sessions. If `TREND_SHIFT` zones
+consistently match what you would have drawn and `FRACTAL_LEG` ones do not,
+flip `-Dchart.anchorMode=TREND_SHIFT` — alone, per the one-switch rule.
+
+### Where V4 stands today
+
+The first profile report (`docs/reports/PROFILE_SIM_01.md`) found **zero
+would-trade events in every profile across three sessions**, with the funnel
+never reaching an emission attempt. Per R2 that is an upstream verdict: **do not
+flip anything yet.** Run LIVE observation at defaults; the next work is setup
+expiry and bias stability.
+
 ## OWNER'S OPERATING RUNBOOK (POST-V2)
 
 ### F1. Start of day (SIM or LIVE)

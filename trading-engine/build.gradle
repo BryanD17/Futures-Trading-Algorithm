@@ -52,6 +52,8 @@ tasks.named('test') {
     // change nothing.
     ['funnel.data.dir', 'funnel.symbol', 'scalpMode.enabled', 'scalp.minRaidScore',
      'bias.hysteresis.enabled', 'bias.neutralGraceBars',
+     'trade.profile', 'profile.sim.file', 'chart.anchorMode', 'chart.oteBand',
+     'chart.anchorCompare',
      'stdvote.detectorTimeframe', 'stdvOte.setupExpiryBars',
      'stdvOte.oteWindowBars', 'stdvOte.mssFreshBars',
      'stdvote.displacement.atrMult', 'stdvote.displacement.bodyPct'].each { p ->

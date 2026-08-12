@@ -220,10 +220,51 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 06 — Bot Chart Overlay Parity (Every Detection Rendered)
   [✅] Agent 07 — ConfluenceSnapshot Service + [CONFLUENCE] Telemetry + API
   [✅] Agent 08 — Confluence Profiles + Profile Simulator + First Report
-  [⬜] Agent 09 — FINAL VERIFICATION & CLOSE-OUT (incl. license audit)
+  [✅] Agent 09 — FINAL VERIFICATION & CLOSE-OUT (incl. license audit)
 
   LEDGER NOTES (append one dated line per completion):
   ------------------------------------------------------------------
+  ================== V4 FINAL SUMMARY (2026-08-12) ==================
+  9/9 agents ✅. PRs #141-#149, every one squash-merged to Main:
+    #141 cb3f6f4 pre-flight        #146 d9951da Bot Chart parity
+    #142 ff1a2c6 ictlib I          #147 65e0b5e ConfluenceSnapshot
+    #143 8f1ae81 ictlib II         #148 13adab7 profiles + simulator
+    #144 d2a3316 ictlib III        #149 (this)  final verification
+    #145 d398498 trend-shift OTE
+  Tests: 650 in trading-engine, 0 failures, 1 skipped, 118 classes — verified
+  from a FRESH CLONE of Main. Dashboard builds with 0 TS errors. V4 added ~200
+  tests over the V3 baseline of ~450.
+
+  THE TWO SWITCHES, BOTH AT THEIR DEFAULTS AND PROVEN SO:
+    trade.profile      = STRICT       (byte-identical to pre-V4 emission)
+    chart.anchorMode   = FRACTAL_LEG  (chart.oteBand 0.62,0.79, compare=false)
+  Risk files: ZERO lines changed since 38c75ef. The validator gained 83 lines
+  and deleted NONE — the M1..M9 chain is byte-for-byte intact.
+
+  WHERE THE REPORTS LIVE:
+    docs/reports/PROFILE_SIM_01.md   — the first profile report
+    docs/QUICK_START.md              — THE ICT LIBRARY / THE BOT CHART OVERLAY /
+                                       THE CONFLUENCE STACK / PROFILES & THE
+                                       SIMULATOR / TUNING THE BOT CHART
+    data/profile_sim.jsonl           — would-trade events (durable)
+
+  THE OPERATING LINE — but read the caveat under it first:
+  "Read PROFILE_SIM_01.md, run 3-5 LIVE-observation sessions, compare
+   would-trade events against the Bot Chart, then flip trade.profile=STANDARD
+   — one switch, one week, and never touch MINIMAL as a trading mode without
+   a written reason."
+
+  ⚠️ THE CAVEAT THAT OVERRIDES IT TODAY: the first report does NOT support a
+  flip. Across three seeded warm SIM sessions EVERY profile including MINIMAL
+  would have taken ZERO trades, and the funnel never once reached an emission
+  attempt. The blocking reasons are not gates — they are "expired (200 bars
+  without progress)" and "HTF bias became NEUTRAL". Per Appendix E5 that is an
+  UPSTREAM verdict: flipping trade.profile would change nothing. The chart is
+  warm and the confluence stack reads long 9/16 w=0.60, so it is not a data
+  problem either. THE NEXT WORK IS SETUP EXPIRY AND BIAS STABILITY, and the
+  simulator will keep measuring it every session without anything being
+  flipped. Run LIVE observation at defaults and re-read the three numbers.
+  ==================================================================
   2026-08-12 Agent 08 ✅ — THE "WHY NO TRADE" ANSWER, AND IT IS NOT WHAT THE
     DOCUMENT ASSUMED. ONE profile seam (MandatoryConfluenceValidator:393);
     STRICT byte-identical — the 20-test M1..M9 suite and the byte-for-byte
@@ -2116,7 +2157,7 @@ block empty for an agent marked ✅.
   STATUS:            ✅ COMPLETE
   DATE COMPLETED:    2026-08-12
   PR NUMBER:         #148 (base Main, state MERGED)
-  COMMIT HASH:       recorded in the Agent 09 doc update
+  COMMIT HASH:       13adab7  (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - ONE PROFILE SEAM; STRICT BYTE-IDENTICAL:
         seam        validation/MandatoryConfluenceValidator.java:393
@@ -2261,20 +2302,166 @@ block empty for an agent marked ✅.
     - Regressions: none (650/0). Blocked: none.
 
 ··· APPENDIX A-09 — Agent 09: Final Verification & License Audit ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
-  COMMIT HASH:       (squash-merge commit on Main)
+  STATUS:            ✅ COMPLETE
+  DATE COMPLETED:    2026-08-12
+  PR NUMBER:         #149 (base Main, state MERGED)
+  COMMIT HASH:       the squash-merge of #149 (self-referential; see the PR)
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - THREE CLEAN BUILDS FROM A FRESH CLONE of Main (not the working tree —
+      `git clone --branch Main` into a scratch dir):
+        ENGINE + API:  BUILD SUCCESSFUL in 5s
+                       17 actionable tasks: 15 executed, 2 up-to-date
+        SUITE:         tests=650 failures=0 errors=0 skipped=1
+                       across 118 test classes
+        DASHBOARD:     npm install && npm run build → ✓ built in 858ms,
+                       ZERO TS errors
+    - LICENSE AUDIT CLEAN (hard gate). Agent 01's grep set re-run:
+        LuxAlgo      0 hits in *.java/*.ts/*.tsx
+        ChartPrime   0 hits
+        //@version   0 hits
+        input.color  0 hits
+        box.new      0 hits
+        Pine (word)  0 hits
+      Repo-wide, the ONLY file matching any pattern is
+      ICT_STACK_MASTER_PROMPT_V4.txt itself — the licensing-guardrail prose
+      naming the two reference indicators. That is the document stating the
+      rule, not code breaking it.
+      MANUAL SCAN of all 24 ictlib files: identifiers are this repo's own
+      vocabulary (DetectionRegistry, TimeframeSeries, SwingPivots,
+      LiquidityPoolDetector, OpeningGapDetector, StructureEngine…), and a grep
+      for Pine runtime idioms that a port could not avoid —
+      box.*/label.*/line.*/plot*/ta.*/array.*/request.*, bar_index, barstate,
+      syminfo, `na =` — returns NOTHING. Every family cites its §S section in
+      its class javadoc (B14), which is the positive evidence that the source
+      was the spec.
+    - DEFAULT-BEHAVIOR AUDIT with NO properties set, read off a running engine
+      rather than from the source:
+        $ curl -s localhost:8094/api/chart/MNQ
+             chart.anchorMode    = FRACTAL_LEG
+             chart.oteBand       = 0.62,0.79
+             chart.anchorCompare = False
+        $ curl -s localhost:8094/api/confluence/MNQ
+             trade.profile       = STRICT
+             profileLine         = [PROFILE MNQ] active=STRICT wouldTrade:
+                                   STANDARD=0 MINIMAL=0 (session)
+      RESOLVED-CONFIG STARTUP BLOCK, verbatim from the engine log:
+        [CHART CFG MNQ] minLegTicks=40 swingStrength=2 expiryBars=32
+          anchorMode=FRACTAL_LEG oteBand=0.62,0.79 (engine default)
+          anchorCompare=false
+        [CHART CFG MES] … identical
+        [CHART CFG MGC] … identical
+        [ICTLIB] ictlib enabled=true
+          displacement(meanLen=5,wickRatioMax=0.36,retain=50)
+          gaps(mode=FVG,retainPerSide=10) bpr(retainPerSide=5) vi(retain=6)
+          gaps(weekly=3,daily=2)
+          pools(swingLen=5,toleranceDiv=2.5,minCluster=3,atr=10,retainPerSide=4)
+          orderBlocks(swingLen=10,useBody=true,retainPerSide=5)
+          structure(pivot=5/1,historyCap=200,mssAgreeWindow=5)
+      Every Appendix S default is the spec's default. The pre-existing
+      validator and ChartEngine suites pass UNCHANGED (M1..M9 20/20, M2b 6/6,
+      M7 RR band 3/3, legacy golden 2/2, ChartEngine 8/8, backfill 5/5).
+    - END-TO-END WARM RUN (one SIM boot, MNQ warm at 4,323 1m bars) — all six
+      artifacts:
+      (1) DETECTIONS IN /api/chart:
+          detections returned=41 cap=300 truncated=False, payload 31,526 bytes
+          families: displacement 3, fvg 4, openingGapWeekly 2,
+                    openingGapDaily 4, liquidityPool 12, orderBlock 10,
+                    mss 3, bos 3
+      (2) BOT CHART LAYERS RENDERING (real browser, live DOM):
+          layer chips: FVG 0 · Order blocks 5 · Liquidity pools 4 · Volume
+            imbalance 0 · Daily gap (NDOG) 2 · Weekly gap (NWOG) 1 · MSS 3 ·
+            BOS 3 · Displacement 3 · BPR 0 · Sessions
+          12 zone boxes, 6 structure markers, 3 gap midlines,
+          65 session bands of which 18 are TRADING killzones
+          pills: "CHART WARM (4338 bars)", "FRACTAL_LEG", "OTE FORMING ↑"
+          legend: "TRADING killzones (the only windows any gate reads)"
+      (3) [ICTLIB-DIFF] flowing:
+          [ICTLIB-DIFF MES] fvg: ictlib=148 existing=235 overlap=148
+          [ICTLIB-DIFF MES] mss: ictlib=56 gate=269 agreeWindow=32
+      (4) [CONFLUENCE] flowing:
+          [CONFLUENCE MGC] long 9/16w=0.60 short 10/16w=0.67
+            top: inTradingKillzone,recentSweep,activeFvgInDirection,htfBiasAligned
+      (5) [PROFILE] flowing:
+          [PROFILE MGC] active=STRICT wouldTrade: STANDARD=0 MINIMAL=0 (session)
+          …and [GATES] unchanged beside them, so nothing regressed.
+      (6) A WOULD-TRADE EVENT PERSISTING ACROSS A RESTART — proven with TWO
+          SEPARATE JVMs, not one process pretending:
+            PROCESS A (jshell, JVM #1): evaluated a setup, in-memory
+              wouldTrade(MINIMAL)=1, then EXITED. On disk:
+              {"timestamp":"2026-08-11T14:00:00Z","symbol":"MNQ",
+               "direction":"LONG","profile":"MINIMAL","activeProfile":"STRICT",
+               "blockingGates":["M2"],"entry":20929.5,"stop":20890.0,
+               "target":21048.0,"rr":3.0,"sizeRequest":5}
+            PROCESS B (jshell, JVM #2, fresh):
+              in-memory wouldTrade(MINIMAL)=0   ← nothing carried over
+              loaded 1 persisted event from disk, fields intact
+          NOTE (honest): the SIM sessions themselves produced NO would-trade
+          events, because no profile was ever satisfied — that is the Agent 08
+          finding, not a gap in the mechanism. The event above was written
+          through the same code path the engine uses, and read back by a
+          genuinely separate process.
+      RISK-INDEPENDENCE SPOT CHECK with MINIMAL ACTUALLY ACTIVE:
+          $ ./gradlew :trading-engine:test \
+              --tests ProfileRiskIndependenceTest -Dtrade.profile=MINIMAL
+          tests=16 failures=0 errors=0
+          The oversized-entry rejection holds with MINIMAL as the live profile,
+          not merely as a parameter.
+    - APPENDIX A COMPLETE — programmatic check of all nine blocks:
+        A-01 ✅ #141 · A-02 ✅ #142 · A-03 ✅ #143 · A-04 ✅ #144 ·
+        A-05 ✅ #145 · A-06 ✅ #146 · A-07 ✅ #147 · A-08 ✅ #148 · A-09 ✅ #149
+        No block still contains the "(file:line / pasted output)" placeholder.
+      9 MERGED PRs, every one based on Main (capital M):
+        #141 cb3f6f4 · #142 ff1a2c6 · #143 8f1ae81 · #144 d2a3316 ·
+        #145 d398498 · #146 d9951da · #147 65e0b5e · #148 13adab7 · #149 (this)
+    - SAFETY GREPS CLEAN:
+        Credentials: the pattern matched exactly one line —
+        PremiumDiscountEvaluator.java:245
+        `pendingGateEventToken = "WOULD-BLOCK-" + side` — a telemetry token,
+        not a secret. No credential literal exists in source; credentials come
+        from env vars as before.
+        M1-M9 + RISK vs the pre-V4 baseline 38c75ef:
+          trading-engine/.../risk/                   0 files changed
+          .../validation/MandatoryConfluenceValidator.java  83 insertions(+),
+                                                            0 deletions
+        Additive only. Not one line of the mandatory chain was removed or
+        rewritten, which is what "STRICT is byte-identical" means in practice.
+    - FINAL SUMMARY written into LEDGER NOTES above.
   SPEC DECISIONS (where Appendix S was ambiguous and you decided):
-    - (decision + first-principles reason, or "none")
+    - none in Agent 09 (verification only). Every §S decision is recorded in
+      the agent block that made it: §S1 SMA exclusivity and §S2/§S3 geometry in
+      A-02; §S6 contiguity, direction encoding and §S5 week/zero-width rules in
+      A-03; §S7 confirmation width and origin-scan truncation in A-04; §S9 band
+      midpoint and post-ARM re-anchor in A-05.
   Q1/Q2/Q3 ANSWERS (where required):
-    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+    - Q1: everything above was re-run at HEAD from a FRESH CLONE, and the
+      end-to-end artifacts come from a live engine, not from reading code.
+    - Q2: swept for the failure classes this document exists to prevent —
+      Pine-derived code (0 hits, plus an idiom scan), a profile reaching the
+      risk layer (0, pinned reflectively), a second gating seam (1 hit, the
+      intended one), gate/risk files edited (risk 0 lines, validator additive
+      only), and unbounded growth (every ictlib family capped, the API payload
+      capped server-side, the BPR pair set and structure history bounded).
+    - Q3: the standing trigger for the whole V4 effort — "the algorithm does
+      not trade" — has been MEASURED rather than assumed, and the measurement
+      contradicts the document's own premise. V4 assumed strictness was the
+      cost; the simulator shows the funnel never reaches the gates at all.
+      That is filed as the operating caveat in LEDGER NOTES and as the closing
+      section of PROFILE_SIM_01.md, with the next investigation named (setup
+      expiry, bias stability) rather than left as a feeling.
   ADAPTATIONS / REGRESSIONS / BLOCKED:
-    - (as in prior documents; "none" where clean)
+    - Adaptation: trading-engine/build.gradle now forwards trade.profile,
+      profile.sim.file, chart.anchorMode, chart.oteBand and chart.anchorCompare
+      into the test JVM, using the same list the file already maintained for
+      the V3 diagnosis flags. That is what let the risk spot check run with
+      MINIMAL genuinely active.
+    - ENVIRONMENT NOTE (carried through every agent): port 8080 is held by a
+      PRE-EXISTING java process (pid 82731) that this session did not start —
+      per the V3 ledger, the owner's LIVE practice-account engine. It was left
+      running and untouched. All API evidence was gathered on spare ports
+      (8091-8099) and every instance this session started was stopped again.
+      That process is still running the PRE-V4 jar; it will not pick up any of
+      this work until the owner restarts it.
+    - Regressions: none. Blocked: none.
 
 ────────────────────────────────────────────────────────────────────────────────
 APPENDIX B — ENGINEERING CONVENTIONS (DELTA OVER V2/V3)
