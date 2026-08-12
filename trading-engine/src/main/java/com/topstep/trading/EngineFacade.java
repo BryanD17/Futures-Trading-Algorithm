@@ -160,6 +160,27 @@ public class EngineFacade {
         return ictLibEngine;
     }
 
+    /**
+     * The confluence stack (V4 Agent 07). Read-only aggregation of every
+     * source; it gates nothing. Registered by the runners and dropped with the
+     * rest so the API never serves a stopped engine's stale reads.
+     */
+    private com.topstep.trading.confluence.ConfluenceService confluenceService;
+
+    /** Register the running engine's confluence service (called by the runners). */
+    public synchronized void setConfluenceService(
+            com.topstep.trading.confluence.ConfluenceService service) {
+        this.confluenceService = service;
+    }
+
+    /** Never null — an unwired service answers UNKNOWN for everything. */
+    public synchronized com.topstep.trading.confluence.ConfluenceService getConfluenceService() {
+        if (confluenceService == null) {
+            confluenceService = new com.topstep.trading.confluence.ConfluenceService();
+        }
+        return confluenceService;
+    }
+
     // ==================== Control Operations ====================
 
     /**
@@ -339,6 +360,7 @@ public class EngineFacade {
         // — the dashboard's COLD banner depends on this being truthful.
         chartEngine = null;
         ictLibEngine = null;
+        confluenceService = null;
     }
 
     /**
@@ -597,6 +619,7 @@ public class EngineFacade {
         liveRunner = null;
         chartEngine = null;
         ictLibEngine = null;
+        confluenceService = null;
     }
 
     /**
