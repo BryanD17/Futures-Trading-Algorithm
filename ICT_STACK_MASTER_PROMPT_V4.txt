@@ -218,12 +218,20 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 04 — ictlib III: Order Blocks + Structure Engine MSS/BOS (§S7–§S8)
   [✅] Agent 05 — Trend-Shift OTE Anchoring Mode in ChartEngine (§S9)
   [✅] Agent 06 — Bot Chart Overlay Parity (Every Detection Rendered)
-  [⬜] Agent 07 — ConfluenceSnapshot Service + [CONFLUENCE] Telemetry + API
+  [✅] Agent 07 — ConfluenceSnapshot Service + [CONFLUENCE] Telemetry + API
   [⬜] Agent 08 — Confluence Profiles + Profile Simulator + First Report
   [⬜] Agent 09 — FINAL VERIFICATION & CLOSE-OUT (incl. license audit)
 
   LEDGER NOTES (append one dated line per completion):
   ------------------------------------------------------------------
+  2026-08-12 Agent 07 ✅ — the stack is one queryable object. 16 fields, each
+    naming its OWNER, aggregated tri-state (TRUE/FALSE/UNKNOWN) with UNKNOWN
+    excluded from BOTH score and maxScore. Proven live: a cold engine reads
+    `long 0/0w=0.00` with all 16 fields "—" (visibly cold, not falsely low);
+    a warm SIM reads `long 8/16w=0.53 short 8/16w=0.53` with real per-field
+    detail ("BREAKER demand 10 ticks away", "openingGapDaily midline 20002.35,
+    9 ticks away"). [CONFLUENCE] emits on the SAME 15m tick as [GATES].
+    /api/confluence + a Setup-tab panel. Gates NOTHING. Suite 623/0.
   2026-08-12 Agent 06 ✅ — THE VISUALIZATION MILESTONE. /api/chart now serves a
     bounded `detections` object (every live detection per family + the 3 most
     recent finished, hard cap 300, `truncated` never silent) and the Bot Chart
@@ -1804,7 +1812,7 @@ block empty for an agent marked ✅.
   STATUS:            ✅ COMPLETE
   DATE COMPLETED:    2026-08-12
   PR NUMBER:         #146 (base Main, state MERGED)
-  COMMIT HASH:       recorded in the Agent 07 doc update
+  COMMIT HASH:       d9951da  (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - /api/chart detections payload, BOUNDED and TYPED:
         builder      trading-engine/.../ictlib/DetectionPayload.java:33
@@ -1936,20 +1944,158 @@ block empty for an agent marked ✅.
     - Regressions: none (611/0, dashboard 0 TS errors). Blocked: none.
 
 ··· APPENDIX A-07 — Agent 07: ConfluenceSnapshot Service ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
-  COMMIT HASH:       (squash-merge commit on Main)
+  STATUS:            ✅ COMPLETE
+  DATE COMPLETED:    2026-08-12
+  PR NUMBER:         #147 (base Main, state MERGED)
+  COMMIT HASH:       recorded in the Agent 08 doc update
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - Snapshot AGGREGATES ONLY — the owner of every fact, in code:
+        confluence/ConfluenceField.java:15 — the enum literally carries an
+        owner() string per field, so "one source of truth per fact" is a
+        property of the type rather than a promise in a comment:
+          inTradingKillzone    -> KillzoneClock                        w=3
+          htfBiasAligned       -> HtfTrendAnalyzer (legacy bias)       w=2
+          voteBiasAligned      -> BiasVoteEngine (V3 3-of-4)           w=2
+          pdVerdict            -> PremiumDiscountEvaluator (M2b)       w=1
+          recentSweep          -> RaidDetector / raid pipeline         w=3
+          raidScore            -> RaidQualityScorer                    w=2
+          machineOteState      -> StdvOte state machine                w=2
+          activeFvgInDirection -> ictlib §S2 registry                  w=2
+          priceInsideFvg       -> ictlib §S2 registry                  w=2
+          nearestObZone        -> ictlib §S7 registry                  w=2
+          bprPresent           -> ictlib §S3 registry                  w=1
+          viNearby             -> ictlib §S4 registry                  w=1
+          openingGapMagnet     -> ictlib §S5 registry                  w=1
+          poolSweptRecently    -> ictlib §S6 registry                  w=2
+          structureState       -> ictlib §S8 StructureEngine           w=2
+          chartOteState        -> ChartEngine 30m zone                 w=2
+        HOW the delegation is enforced structurally: engine facts are not
+        read out of the strategy at all — the strategy PUBLISHES them
+        (confluence/EngineFacts.java:33, published at
+        StdvOteRunnerStrategy.java:744 on the completed-15m tick), ictlib
+        facts are read from the registry's STORED lifecycle state, and the
+        chart fact from ChartEngine.getActiveOteZone. The service has no
+        detector, no bias logic and no lifecycle of its own.
+        Service: confluence/ConfluenceService.java:36.
+    - TRI-STATE UNKNOWN ARITHMETIC tested (ConfluenceServiceTest 12/12 PASSED):
+        coldStackIsVisiblyCold          all 16 UNKNOWN -> score 0, maxScore 0,
+                                        ratio 0.00 and NOT NaN
+        unknownIsExcludedFromBothSides  the load-bearing one: one TRUE alone
+                                        scores 3/3 (ratio 1.00); the SAME
+                                        single TRUE beside one FALSE scores
+                                        3/5 — proving UNKNOWN changes the
+                                        DENOMINATOR, not just the numerator
+        biasAlignment                   direction-aware; NEUTRAL is a real
+                                        FALSE, never UNKNOWN
+        raidScoreFloor                  compared to the floor, raw score
+                                        reported in the detail
+        ictLibFactsComeFromTheRegistry  600-bar feed -> fields answerable
+        coldIctLibAbstains              an unfed registry gives UNKNOWN for
+                                        every ICT field while engine facts
+                                        still count — the stack is not silenced
+        chartFactAbstainsWhenUnwired    no engine, and an engine with no zone,
+                                        both UNKNOWN
+        weightsAreConfigurable          weight 0 removes influence but KEEPS
+                                        the field visible; junk falls back
+        logLineShape / apiSerialisation / determinism / directionsAreIndependent
+      Arithmetic seam: ConfluenceService.java:100 (`if (!v.isKnown()) continue;`)
+      — one line, both accumulators, so score and maxScore cannot drift apart.
+    - /api/confluence LIVE — REAL curl, both states.
+      COLD (engine not started):
+        $ curl -s localhost:8095/api/confluence/MNQ
+        line: [CONFLUENCE MNQ] long 0/0w=0.00 short 0/0w=0.00 top:
+          LONG  score=0.0 max=0.0 ratio=0.00 true=0/0 of 16
+          SHORT score=0.0 max=0.0 ratio=0.00 true=0/0 of 16
+          fields: inTradingKillzone=— htfBiasAligned=— voteBiasAligned=—
+                  pdVerdict=— recentSweep=— raidScore=— machineOteState=—
+                  activeFvgInDirection=— priceInsideFvg=— nearestObZone=—
+                  bprPresent=— viNearby=— openingGapMagnet=—
+                  poolSweptRecently=— structureState=— chartOteState=—
+        THAT is the doctrine working: 0/0, not 0/16.
+      WARM (SIM running):
+        line: [CONFLUENCE MNQ] long 8/16w=0.53 short 8/16w=0.53
+              top: inTradingKillzone,recentSweep,activeFvgInDirection,nearestObZone
+          LONG  score=16.0 max=30.0 ratio=0.53 true=8/16
+          SHORT score=16.0 max=30.0 ratio=0.53 true=8/16
+          FIELD                    LONG   SHORT  w     DETAIL (long)
+          inTradingKillzone        ✓      ✓      3.0   KillzoneClock
+          htfBiasAligned           ✗      ✗      2.0   NEUTRAL
+          voteBiasAligned          ✗      ✗      2.0   vote=NEUTRAL(2/0/2) agree=true
+          pdVerdict                ✓      ✓      1.0   pd=PREMIUM(R1)
+          recentSweep              ✓      ✓      3.0   raid pipeline
+          raidScore                ✓      ✓      2.0   5/10 (floor 5)
+          machineOteState          ✗      ✗      2.0   INVALIDATED
+          activeFvgInDirection     ✓      ✗      2.0   1 active bullish gap(s)
+          priceInsideFvg           ✗      ✗      2.0   price outside every active gap
+          nearestObZone            ✓      ✓      2.0   BREAKER demand 10 ticks away
+          bprPresent               ✗      ✗      1.0   none active
+          viNearby                 ✗      ✗      1.0   none active this side
+          openingGapMagnet         ✓      ✓      1.0   openingGapDaily midline 20002.35, 9 ticks away
+          poolSweptRecently        ✓      ✓      2.0   SWEPT at 2026-08-12T07:01:18.436856Z
+          structureState           ✗      ✓      2.0   MSS BEARISH at 2026-08-12T07:01:08.431797Z
+          chartOteState            ✗      ✗      2.0   FORMING/BULL FRACTAL_LEG
+      Controller: api-backend/.../ConfluenceController.java:29.
+    - [CONFLUENCE] line flowing in the LIVE engine log, on the same 15m tick
+      as [GATES] so the two always describe the same instant:
+        [CONFLUENCE MGC] long 8/16w=0.50 short 9/16w=0.57 top: recentSweep,activeFvgInDirection,htfBiasAligned,nearestObZone
+        [CONFLUENCE MGC] long 9/16w=0.57 short 9/16w=0.57 top: recentSweep,activeFvgInDirection,nearestObZone,poolSweptRecently
+        [CONFLUENCE MGC] long 9/16w=0.60 short 10/16w=0.67 top: inTradingKillzone,recentSweep,activeFvgInDirection,htfBiasAligned
+      …beside its [GATES] partner from the same run:
+        [GATES MGC] state=INVALIDATED bias=BEARISH lastGateFailed=HTF bias became NEUTRAL kzActive=true chart30mOte=FORMING/BEAR pd=PREMIUM(R1) vote=NEUTRAL(1/2/1) agree=false ...
+      …and the Agent 02/04 diff lines still flowing in the same session:
+        [ICTLIB-DIFF MES] fvg: ictlib=149 existing=234 overlap=149
+        [ICTLIB-DIFF MES] mss: ictlib=58 gate=270 agreeWindow=33
+      Emission site: StdvOteRunnerStrategy.java:744; line builder
+      ConfluenceService.java:300.
+    - Setup-tab panel rendering: dashboard-frontend/src/components/
+      ConfluencePanel.tsx, mounted at SetupPanel.tsx:143. Two directional
+      columns of ✓/✗/—, each row titled with its owning component, both score
+      and maxScore shown, and an explicit note that "—" means the source could
+      not answer and that the panel gates nothing. Dashboard build clean:
+        ✓ 917 modules transformed. dist/assets/index-C38RfNtJ.js 808.29 kB
+        ✓ built in 855ms   (zero TS errors)
+    - Weights configurable; defaults documented in QUICK_START's "THE
+      CONFLUENCE STACK" table (field, owner, default weight), plus
+      confluence.nearTicks / raidScoreFloor / recentMinutes.
+    - Full suites green: trading-engine tests=623 failures=0 errors=0
+      skipped=1; `./gradlew clean build` + `:api-backend:bootJar` SUCCESSFUL;
+      dashboard 0 TS errors. License sweep source-only: 0 hits.
+    - PR merged: #147, base Main.
   SPEC DECISIONS (where Appendix S was ambiguous and you decided):
-    - (decision + first-principles reason, or "none")
+    - Not an Appendix S section, so no §S ambiguity. Three design calls worth
+      recording:
+      (1) Engine facts are PUSHED by the strategy rather than PULLED by the
+          service. Pulling would mean the service reaching into strategy
+          internals and re-deriving what a gate already decided — the exact
+          second-truth problem V4 forbids. Pushing a small immutable record
+          keeps the aggregator honest by construction.
+      (2) null means UNKNOWN, everywhere (EngineFacts is entirely nullable).
+          There is no way to accidentally report a cold source as a negative,
+          because the type has no boolean to be wrong with.
+      (3) raidScore and the proximity fields compare against a CONFIGURED
+          threshold rather than reporting a raw number. That is a presentation
+          decision, not a recomputation — the raw value is always carried in
+          the field's detail string, so nothing is hidden.
   Q1/Q2/Q3 ANSWERS (where required):
-    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+    - Q1: verified against a running engine, not by inspection — cold and warm
+      curl payloads above, live [CONFLUENCE] lines from the engine log, suite
+      623/0.
+    - Q2: swept for any path by which the confluence stack could influence
+      trading. It is referenced ONLY by the API controller, the runners'
+      wiring and the strategy's publish call; no validator, gate or sizing
+      path reads it. StdvOteRunnerStrategy's edit is a setter plus a publish
+      inside the existing telemetry block — the gate chain is untouched.
+    - Q3: failure class = "a score that looks confident while its inputs are
+      cold". Closed by the tri-state design and pinned by
+      unknownIsExcludedFromBothSides, which asserts the DENOMINATOR moves —
+      a test that would fail if someone "simplified" UNKNOWN to false. The
+      live cold read (0/0, sixteen dashes) is the same property observed end
+      to end.
   ADAPTATIONS / REGRESSIONS / BLOCKED:
-    - (as in prior documents; "none" where clean)
+    - Adaptation: EngineFacade now carries the ConfluenceService beside the
+      ChartEngine and IctLibEngine, registered by both runners and dropped on
+      stop, so the API never serves a stopped engine's stale reads.
+    - Regressions: none (623/0, dashboard 0 TS errors). Blocked: none.
 
 ··· APPENDIX A-08 — Agent 08: Profiles + Simulator + First Report ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)

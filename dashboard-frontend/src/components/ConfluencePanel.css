@@ -1,0 +1,166 @@
+/* THE CONFLUENCE STACK (V4 Agent 07) — read-only, two columns, tri-state. */
+
+.setup-card.confluence {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.confluence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.confluence-symbols {
+  display: inline-flex;
+  border: 1px solid #353c4a;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.confluence-symbols button {
+  background: #1b2029;
+  color: #8b95a8;
+  border: none;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.confluence-symbols button.active {
+  background: #232a36;
+  color: #dfe4ec;
+}
+
+.confluence-scores {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.confluence-score {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #1b2029;
+  border: 1px solid #2a3140;
+}
+
+.confluence-score .label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+}
+
+.confluence-score.long .label { color: #20c997; }
+.confluence-score.short .label { color: #fa5252; }
+
+.confluence-score .value {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  color: #dfe4ec;
+}
+
+.confluence-score .weighted,
+.confluence-score .top {
+  font-size: 11px;
+  color: #8b95a8;
+}
+
+.confluence-score .bar {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: #2a3140;
+  overflow: hidden;
+}
+
+.confluence-score .bar i {
+  display: block;
+  height: 100%;
+  background: #4dabf7;
+}
+
+.confluence-score.long .bar i { background: #20c997; }
+.confluence-score.short .bar i { background: #fa5252; }
+
+.confluence-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.confluence-table th,
+.confluence-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid #232a36;
+  text-align: left;
+}
+
+.confluence-table thead th {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: #8b95a8;
+  text-transform: uppercase;
+}
+
+.confluence-table tbody th {
+  font-weight: 500;
+  color: #dfe4ec;
+  display: flex;
+  flex-direction: column;
+}
+
+.confluence-table tbody th .detail {
+  font-size: 10px;
+  color: #6d7686;
+  font-weight: 400;
+}
+
+.confluence-table td.dir,
+.confluence-table th.dir {
+  text-align: center;
+  width: 52px;
+  font-size: 14px;
+}
+
+.confluence-table td.w,
+.confluence-table th.w {
+  text-align: right;
+  width: 34px;
+  color: #6d7686;
+  font-variant-numeric: tabular-nums;
+}
+
+.confluence-table .v-true { color: #20c997; }
+.confluence-table .v-false { color: #fa5252; opacity: 0.75; }
+/* UNKNOWN is deliberately quiet: it is an absence of information, not a no. */
+.confluence-table .v-unknown { color: #6d7686; }
+
+.confluence-note {
+  font-size: 11px;
+  color: #8b95a8;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.confluence-line {
+  display: block;
+  font-size: 11px;
+  color: #8b95a8;
+  background: #14181f;
+  border-radius: 4px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.confluence-error,
+.confluence-empty {
+  font-size: 12px;
+  color: #8b95a8;
+}

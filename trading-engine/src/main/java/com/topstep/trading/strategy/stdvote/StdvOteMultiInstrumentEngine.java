@@ -224,6 +224,17 @@ public final class StdvOteMultiInstrumentEngine {
     }
 
     /**
+     * Hand the confluence stack to every per-symbol strategy so each one
+     * publishes the engine facts it already computes (V4 Agent 07).
+     */
+    public void setConfluenceService(
+            com.topstep.trading.confluence.ConfluenceService service) {
+        for (StdvOteRunnerStrategy s : strategies.values()) {
+            s.setConfluenceService(service);
+        }
+    }
+
+    /**
      * Stop routing. Unsubscribes market data and shuts strategies down.
      * Open positions managed by the execution engine are NOT closed here.
      */

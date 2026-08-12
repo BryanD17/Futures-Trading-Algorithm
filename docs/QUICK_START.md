@@ -608,6 +608,78 @@ dies upstream -> fix upstream fragility first (F3), then REVISIT whether
 
 ---
 
+## THE CONFLUENCE STACK — V4 Agent 07
+
+`GET /api/confluence/{symbol}` returns **one snapshot per direction**: every
+confluence fact the engine can answer, with its owner, its weight and a
+human-readable detail. The same object drives the `[CONFLUENCE]` log line and
+the panel on the Setup tab.
+
+It **aggregates only**. Bias, sweeps, zones and lifecycles are computed by the
+components that own them; this service records their answers and does the
+arithmetic. Nothing here gates a trade.
+
+### The fields and who owns each one
+
+| Field | Owner | Default weight |
+|-------|-------|----------------|
+| `inTradingKillzone` | `KillzoneClock` | 3 |
+| `htfBiasAligned` | `HtfTrendAnalyzer` (legacy bias) | 2 |
+| `voteBiasAligned` | `BiasVoteEngine` (V3 3-of-4) | 2 |
+| `pdVerdict` | `PremiumDiscountEvaluator` (M2b) | 1 |
+| `recentSweep` | `RaidDetector` / raid pipeline | 3 |
+| `raidScore` | `RaidQualityScorer` (≥ floor) | 2 |
+| `machineOteState` | StdvOte state machine | 2 |
+| `activeFvgInDirection` | ictlib §S2 registry | 2 |
+| `priceInsideFvg` | ictlib §S2 registry | 2 |
+| `nearestObZone` | ictlib §S7 registry | 2 |
+| `bprPresent` | ictlib §S3 registry | 1 |
+| `viNearby` | ictlib §S4 registry | 1 |
+| `openingGapMagnet` | ictlib §S5 registry | 1 |
+| `poolSweptRecently` | ictlib §S6 registry | 2 |
+| `structureState` | ictlib §S8 `StructureEngine` | 2 |
+| `chartOteState` | `ChartEngine` 30m zone | 2 |
+
+Override any weight with `-Dconfluence.weight.<field>=N` (must be ≥ 0; a weight
+of 0 keeps the field visible but stops it moving the score).
+
+### Tri-state: why `—` is not a small `✗`
+
+Each field is `TRUE` / `FALSE` / `UNKNOWN`. **UNKNOWN means the source could
+not answer** — cold, not warmed, not running — and is excluded from *both* the
+score and the maximum:
+
+```
+score    = Σ weight(field) where field is TRUE
+maxScore = Σ weight(field) where field is NOT UNKNOWN
+```
+
+A cold engine therefore reads `long 0/0w=0.00` rather than `0/16`, which is the
+difference between "nothing is known yet" and "nothing is true". Reporting a
+cold source as `false` is exactly how the starved-input failure class comes
+back (Appendix E6).
+
+### The telemetry line
+
+Emitted on the same 15m tick as `[GATES]`, so the two always describe the same
+instant:
+
+```
+[CONFLUENCE MNQ] long 8/16w=0.53 short 8/16w=0.53 top: inTradingKillzone,recentSweep,activeFvgInDirection,nearestObZone
+```
+
+`top:` lists the heaviest TRUE fields of whichever direction scores higher.
+
+### Other knobs
+
+| Property | Default | Meaning |
+|----------|---------|---------|
+| `confluence.nearTicks` | `40` | How close a zone must be to count as "at" price. |
+| `confluence.raidScoreFloor` | `5` | Raid score at or above which `raidScore` reads TRUE. |
+| `confluence.recentMinutes` | `120` | How recent a pool sweep / structure event still counts. |
+
+---
+
 ## THE BOT CHART OVERLAY — V4 Agent 06
 
 The Bot Chart now draws what a fully-loaded ICT chart draws. Hold it next to

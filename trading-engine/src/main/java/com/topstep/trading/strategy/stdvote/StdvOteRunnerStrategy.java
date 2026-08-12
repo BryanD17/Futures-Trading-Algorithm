@@ -320,6 +320,18 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         if (engine != null) engine.attachLevelEngine(symbol, levelEngine);
     }
 
+    /**
+     * The confluence stack (V4 Agent 07). Null = not wired, and everything
+     * simply goes unpublished — no gate reads this, so nothing changes.
+     */
+    private volatile com.topstep.trading.confluence.ConfluenceService confluenceService;
+
+    /** Install the confluence stack (may be null). */
+    public void setConfluenceService(
+            com.topstep.trading.confluence.ConfluenceService service) {
+        this.confluenceService = service;
+    }
+
     /** Install the observability-only ChartEngine reference (may be null). */
     public void setChartEngine(com.topstep.trading.chart.ChartEngine engine) {
         this.chartEngine = engine;
@@ -723,6 +735,28 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                     + " " + biasVoteEngine.gatesToken()
                     + " " + ote30mGate.gatesToken()
                     + " " + stats.rollup());
+
+            // V4 Agent 07 — publish the facts this bar already computed and
+            // emit the [CONFLUENCE] rollup on the SAME cadence as [GATES], so
+            // the two lines always describe the same instant.
+            com.topstep.trading.confluence.ConfluenceService cs = confluenceService;
+            if (cs != null) {
+                cs.publish(symbol, new com.topstep.trading.confluence.EngineFacts(
+                        candle.getTimestamp(),
+                        candle.getClose(),
+                        killzoneActive,
+                        ctx.htfBias,
+                        biasVoteEngine.mode() == BiasVoteEngine.VoteMode.LEGACY
+                                ? null : lastBias,
+                        biasVoteEngine.gatesToken(),
+                        pdEvaluator.gateCheck(candle.getClose(),
+                                ctx.htfBias == MarketBias.BULLISH).passed(),
+                        pdEvaluator.gatesToken(candle.getClose()),
+                        ctx.sweep != null,
+                        ctx.raidScore,
+                        ctx.state == null ? null : ctx.state.name()));
+                System.out.println(cs.logLine(symbol));
+            }
         }
 
         // 6c. Crash-safe agreement-stats checkpoint every completed 30m bar

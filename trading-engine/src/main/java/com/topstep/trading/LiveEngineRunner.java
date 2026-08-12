@@ -151,6 +151,12 @@ public class LiveEngineRunner {
     private final com.topstep.trading.ictlib.IctLibEngine ictLibEngine =
             com.topstep.trading.ictlib.IctLibEngine.attachTo(chartEngine);
 
+    // V4 Agent 07 — the confluence stack. Pure aggregation over the chart,
+    // the ICT library and the facts the strategy publishes each bar; it
+    // gates nothing.
+    private final com.topstep.trading.confluence.ConfluenceService confluenceService =
+            new com.topstep.trading.confluence.ConfluenceService();
+
     // Killzone clock for stale order checking
     private final KillzoneClock killzoneClock = new KillzoneClock();
 
@@ -427,6 +433,13 @@ public class LiveEngineRunner {
             // -Dchart.minLegTicks.<SYM> etc.; defaults preserved, logged.
             chartEngine.applySystemPropertyTuning(s);
         }
+        confluenceService.setChartEngine(chartEngine);
+        confluenceService.setIctLibEngine(ictLibEngine);
+        for (String s : new String[] {"MNQ", "MES", "MGC"}) {
+            confluenceService.registerInstrument(s,
+                    com.topstep.trading.strategy.InstrumentCharacteristics
+                            .getProfile(s).getTickSize());
+        }
         // In STDV+OTE multi-instrument mode the engine subscribes symbols
         // ITSELF (connector → dispatchCandle) — onMarketData never sees those
         // candles. The candle tap is therefore the funnel that keeps the
@@ -439,9 +452,11 @@ public class LiveEngineRunner {
             });
             stdvOteMultiEngine.setChartEngine(chartEngine);
             stdvOteMultiEngine.setIctLibEngine(ictLibEngine);
+            stdvOteMultiEngine.setConfluenceService(confluenceService);
         } else if (strategy instanceof com.topstep.trading.strategy.stdvote.StdvOteRunnerStrategy sors) {
             sors.setChartEngine(chartEngine);
             sors.setIctLibEngine(ictLibEngine);
+            sors.setConfluenceService(confluenceService);
         }
 
         // === Convex Payoff Optimization: Initialize lifecycle-aware risk components ===
@@ -586,6 +601,7 @@ public class LiveEngineRunner {
             EngineFacade.getInstance().setLiveRunner(this);
             EngineFacade.getInstance().setChartEngine(chartEngine);
             EngineFacade.getInstance().setIctLibEngine(ictLibEngine);
+            EngineFacade.getInstance().setConfluenceService(confluenceService);
 
             // Start the appropriate engine mode. STDV+OTE multi-instrument
             // wins if enabled; otherwise legacy multi-instrument; otherwise

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import ConfluencePanel from './ConfluencePanel';
 import './SetupPanel.css';
 import { SetupApi } from '../services/setupApi';
 import { ChartApi } from '../services/chartApi';
@@ -136,6 +137,10 @@ export default function SetupPanel() {
           {snapshot.state === 'IN_TRADE' || snapshot.state === 'MANAGING' || snapshot.state === 'DONE' ? (
             <PlanBlock snapshot={snapshot} precision={precision} />
           ) : null}
+
+          {/* V4 Agent 07 — the confluence stack. Read-only: it reports what is
+              true right now, and nothing on it gates a trade. */}
+          <ConfluencePanel />
         </>
       )}
     </div>

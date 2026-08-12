@@ -84,6 +84,12 @@ public class SimEngineRunner {
     private final com.topstep.trading.ictlib.IctLibEngine ictLibEngine =
             com.topstep.trading.ictlib.IctLibEngine.attachTo(chartEngine);
 
+    // V4 Agent 07 — the confluence stack. Pure aggregation over the chart,
+    // the ICT library and the facts the strategy publishes each bar; it
+    // gates nothing.
+    private final com.topstep.trading.confluence.ConfluenceService confluenceService =
+            new com.topstep.trading.confluence.ConfluenceService();
+
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
     private final CountDownLatch shutdownLatch = new CountDownLatch(1);
@@ -154,13 +160,22 @@ public class SimEngineRunner {
             // -Dchart.minLegTicks.<SYM> etc.; defaults preserved, logged.
             chartEngine.applySystemPropertyTuning(s);
         }
+        confluenceService.setChartEngine(chartEngine);
+        confluenceService.setIctLibEngine(ictLibEngine);
+        for (String s : new String[] {"MNQ", "MES", "MGC"}) {
+            confluenceService.registerInstrument(s,
+                    com.topstep.trading.strategy.InstrumentCharacteristics
+                            .getProfile(s).getTickSize());
+        }
         if (multiEngine != null) {
             multiEngine.setCandleTap(chartEngine::onCandle);
             multiEngine.setChartEngine(chartEngine);
             multiEngine.setIctLibEngine(ictLibEngine);
+            multiEngine.setConfluenceService(confluenceService);
         } else if (strategy instanceof com.topstep.trading.strategy.stdvote.StdvOteRunnerStrategy sors) {
             sors.setChartEngine(chartEngine);
             sors.setIctLibEngine(ictLibEngine);
+            sors.setConfluenceService(confluenceService);
         }
 
         // Subscribe to strategy signals
@@ -210,6 +225,7 @@ public class SimEngineRunner {
             EngineFacade.getInstance().setSimRunner(this);
             EngineFacade.getInstance().setChartEngine(chartEngine);
             EngineFacade.getInstance().setIctLibEngine(ictLibEngine);
+            EngineFacade.getInstance().setConfluenceService(confluenceService);
 
             // Subscribe to market data. Multi-instrument mode owns its own
             // subscriptions for all active + SMT-only symbols; single-symbol
