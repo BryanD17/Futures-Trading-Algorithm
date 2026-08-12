@@ -1,5 +1,9 @@
 import axios from 'axios';
-import type { BotChartResponse, ChartSymbol } from '../types/chart';
+import type {
+  BotChartResponse,
+  ChartSymbol,
+  DetectionTimeframe,
+} from '../types/chart';
 
 const api = axios.create({
   baseURL: '/api/chart',
@@ -13,9 +17,13 @@ export const ChartApi = {
    * Unknown/cold symbols return an honest empty shape (warm=false), never
    * a 500 — callers must branch on `warm` and `candles30m.length`.
    */
-  async getChart(symbol: ChartSymbol, lookback: number): Promise<BotChartResponse> {
+  async getChart(
+    symbol: ChartSymbol,
+    lookback: number,
+    detections: DetectionTimeframe = '15m',
+  ): Promise<BotChartResponse> {
     const r = await api.get<BotChartResponse>(`/${symbol}`, {
-      params: { lookback },
+      params: { lookback, detections },
     });
     return r.data;
   },

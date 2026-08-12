@@ -41,7 +41,9 @@ public class ChartStateController {
     public ResponseEntity<Map<String, Object>> chart(
             @PathVariable String symbol,
             @RequestParam(defaultValue = "100") int lookback,
-            @RequestParam(defaultValue = "30m") String tf) {
+            @RequestParam(defaultValue = "30m") String tf,
+            @RequestParam(name = "detections", required = false) String detectionsTf,
+            @RequestParam(name = "detectionCap", required = false) Integer detectionCap) {
 
         int safeLookback = Math.min(Math.max(lookback, 1), 2000);
 
@@ -130,6 +132,20 @@ public class ChartStateController {
         // counters (read-only evidence stream — nothing gates on these).
         body.put("oteStats", com.topstep.trading.strategy.stdvote
                 .OteAgreementStats.forSymbol(snap.symbol()).toApiMap());
+
+        // V4 Agent 06: the ICT detection overlay, BOUNDED. Default timeframe is
+        // 15m — on a 30m chart the 1m instances are noise, not information —
+        // and the cap is enforced server-side so the dashboard cannot be made
+        // slow by a retention setting (risk G-R5).
+        int cap = (detectionCap == null)
+                ? com.topstep.trading.ictlib.DetectionPayload.DEFAULT_CAP
+                : Math.min(Math.max(detectionCap, 1), 2000);
+        String dtf = (detectionsTf == null || detectionsTf.isBlank())
+                ? com.topstep.trading.ictlib.DetectionPayload.DEFAULT_TIMEFRAME
+                : detectionsTf;
+        body.put("detections", com.topstep.trading.ictlib.DetectionPayload.build(
+                engine.getIctLibEngine().registry(sym), dtf, cap,
+                com.topstep.trading.ictlib.DetectionPayload.DEFAULT_RECENT_TERMINAL));
 
         return ResponseEntity.ok(body);
     }
