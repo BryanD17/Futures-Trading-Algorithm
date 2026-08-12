@@ -697,6 +697,42 @@ is the maintenance break and belongs to no session. A new trading **week** is
 detected by comparing the *session* dates' Mondays, so a holiday-shifted open
 keys on the first session that actually trades, never on the calendar Monday.
 
+### Families (Agent 04)
+
+| § | Family | Lifecycle | Retention |
+|---|--------|-----------|-----------|
+| S7 | `ORDER_BLOCK` | `ACTIVE → TESTED → BREAKER → REMOVED` | 5 per side |
+| S8 | `MSS` | `POINT` | 200 |
+| S8 | `BOS` | `POINT` | 200 |
+
+An order block is the **origin of the move that broke structure** — the lowest
+(bullish) candle between the swing and the break — not "the last opposite
+candle", which is only the same bar sometimes. `BREAKER` is *not* terminal: a
+block whose far edge was body-closed through flips polarity and keeps working
+as a level in the opposite direction until it is reclaimed (`REMOVED`).
+
+`MSS` is the regime **flip**; `BOS` is continuation while the regime agrees,
+deduplicated so only a genuinely *newer* swing level emits one.
+
+### `[ICTLIB-DIFF] mss` — the second measurement
+
+ictlib's structure engine is a pure zigzag regime. The 2022-model gate (M6)
+uses `MarketStructureShiftDetector`, which additionally demands displacement
+through the level and prior opposite structure. **The gate's detector is
+untouched and remains the only thing entries read.** To keep two structure
+truths honest, the `StructureEngine` runs a *shadow* instance of the real gate
+detector over the same bars and reports:
+
+```
+[ICTLIB-DIFF MNQ] mss: ictlib=18 gate=35 agreeWindow=6
+```
+
+`agreeWindow` pairs each ictlib shift with a gate shift of the same direction
+within ±`ictlib.structure.mssAgreeWindow` bars, greedily and at most once each.
+Order does not matter — either may lead. That number answers the only question
+worth asking: do the two see the same turn a few bars apart, or different
+markets entirely?
+
 ### Liquidity pools publish into the ONE level universe
 
 A confirmed §S6 pool does not stay locked inside ictlib. `IctLibLevelAdapter`
@@ -734,6 +770,13 @@ they simply are not published.
 | `ictlib.pool.scanDepth` | `50` | §S6 rolling swing history per side. |
 | `ictlib.pool.atrPeriod` | `10` | §S6 ATR window (simple mean, for replay determinism). |
 | `ictlib.retain.pool` | `4` | §S6 retention **per side**. |
+| `ictlib.ob.swingLen` | `10` | §S7 bars to the left of a tracked swing. |
+| `ictlib.ob.useBody` | `true` | §S7 zone from bodies (`true`) or full wicks (`false`). |
+| `ictlib.retain.orderBlock` | `5` | §S7 retention **per side**. |
+| `ictlib.structure.pivotLeft` | `5` | §S8 pivot left bars. |
+| `ictlib.structure.pivotRight` | `1` | §S8 pivot confirmation bars. |
+| `ictlib.structure.historyCap` | `200` | §S8 MSS/BOS history per family. |
+| `ictlib.structure.mssAgreeWindow` | `5` | Bars of slack when pairing ictlib and gate shifts. |
 
 The resolved config is printed once at start:
 `[ICTLIB] ictlib enabled=true displacement(meanLen=5,...) gaps(mode=FVG,...)`.

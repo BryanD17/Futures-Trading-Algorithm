@@ -35,7 +35,16 @@ public enum DetectionType {
     OPENING_GAP_DAILY("openingGapDaily"),
 
     /** §S6 — clustered equal swings: where resting stops pool. */
-    LIQUIDITY_POOL("liquidityPool");
+    LIQUIDITY_POOL("liquidityPool"),
+
+    /** §S7 — the origin candle of the move that broke structure, with breaker lifecycle. */
+    ORDER_BLOCK("orderBlock"),
+
+    /** §S8 — market structure SHIFT: the regime flipped. Point detection. */
+    MSS("mss"),
+
+    /** §S8 — break of structure: continuation in the prevailing regime. Point detection. */
+    BOS("bos");
 
     private final String jsonKey;
 

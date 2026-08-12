@@ -215,7 +215,7 @@ SECTION 2 — PROGRESS LEDGER
   [✅] Agent 01 — Pre-Flight: Predecessor State + Baselines + License Sweep Base
   [✅] Agent 02 — ictlib I: Displacement, FVG/IFVG, BPR (spec §S1–§S3)
   [✅] Agent 03 — ictlib II: Volume Imbalance, Opening Gaps, Liquidity Pools (§S4–§S6)
-  [⬜] Agent 04 — ictlib III: Order Blocks + Structure Engine MSS/BOS (§S7–§S8)
+  [✅] Agent 04 — ictlib III: Order Blocks + Structure Engine MSS/BOS (§S7–§S8)
   [⬜] Agent 05 — Trend-Shift OTE Anchoring Mode in ChartEngine (§S9)
   [⬜] Agent 06 — Bot Chart Overlay Parity (Every Detection Rendered)
   [⬜] Agent 07 — ConfluenceSnapshot Service + [CONFLUENCE] Telemetry + API
@@ -224,6 +224,16 @@ SECTION 2 — PROGRESS LEDGER
 
   LEDGER NOTES (append one dated line per completion):
   ------------------------------------------------------------------
+  2026-08-12 Agent 04 ✅ — ictlib complete: §S7 order blocks (origin scan in
+    body AND wick modes, ACTIVE->TESTED->BREAKER->REMOVED) and §S8 MSS/BOS over
+    a zigzag regime, with a SHADOW of the real gate detector for measurement.
+    Live evidence: [ICTLIB-DIFF MNQ] mss: ictlib=18 gate=35 agreeWindow=6 —
+    the two structure reads genuinely differ, which is exactly why V4 measures
+    instead of unifying. Gate MSS byte-untouched. Second test-feed defect
+    found and fixed: the synthetic generator derived each high from two
+    consecutive closes, making a pivot high ARITHMETICALLY IMPOSSIBLE, so the
+    swing-based families were silently untested. ictlib suite 83/83, full
+    suite 595/0.
   2026-08-12 Agent 03 ✅ — §S4/§S5/§S6 landed. Volume imbalance carries a
     near-miss negative for all five inequalities in BOTH directions (10 tests);
     opening gaps key on TradingSessionCalendar only (one calendar, one truth)
@@ -1315,7 +1325,7 @@ block empty for an agent marked ✅.
   STATUS:            ✅ COMPLETE
   DATE COMPLETED:    2026-08-12
   PR NUMBER:         #143 (base Main, state MERGED)
-  COMMIT HASH:       recorded in the Agent 04 doc update
+  COMMIT HASH:       8f1ae81  (squash-merge commit on Main)
   EVIDENCE PER ACCEPTANCE CRITERION:
     - §S4-§S6 implemented per spec (file:line per family):
         §S4  ictlib/VolumeImbalanceDetector.java:32
@@ -1474,20 +1484,130 @@ block empty for an agent marked ✅.
     - Regressions: none (579/0). Blocked: none.
 
 ··· APPENDIX A-04 — Agent 04: ictlib III (Order Blocks, MSS/BOS) ···
-  STATUS:            (⬜ / 🔄 / ✅ / ⛔)
-  DATE COMPLETED:    (YYYY-MM-DD)
-  PR NUMBER:         (#NN, base Main, state MERGED)
-  COMMIT HASH:       (squash-merge commit on Main)
+  STATUS:            ✅ COMPLETE
+  DATE COMPLETED:    2026-08-12
+  PR NUMBER:         #144 (base Main, state MERGED)
+  COMMIT HASH:       recorded in the Agent 05 doc update
   EVIDENCE PER ACCEPTANCE CRITERION:
-    - criterion 1:   (file:line / pasted output)
-    - criterion 2:   (file:line / pasted output)
-    - (one line per criterion — every box in the agent)
+    - §S7-§S8 per spec (file:line):
+        §S7  ictlib/OrderBlockDetector.java:46 (origin scan :97,
+             lifecycle :147)
+        §S8  ictlib/StructureEngine.java:44 (zigzag :144, MSS/BOS :100-137,
+             agreement matcher :192)
+        config: obSwingLen / obUseBody / retainObPerSide / structurePivotLeft /
+             structurePivotRight / structureHistoryCap / mssAgreeWindow, all in
+             IctLibConfig with ictlib.* overrides.
+    - GATE MSS UNTOUCHED — git diff --stat HEAD scoped to
+      strategy/MarketStructureShiftDetector.java and strategy/OrderBlockDetector
+      .java returns EMPTY. ictlib's classes are new files in a new package; the
+      name collision with strategy/OrderBlockDetector is resolved by package,
+      and neither file was opened for edit.
+    - Breaker lifecycle + origin-scan tests PASSING (IctLibOrderBlockTest, 7/7):
+        originScanBodyMode        W5 shape -> origin bar 12 (lowest bodyBot
+                                  21018), zone [21018.0, 21021.0],
+                                  brokenSwing 21030.0
+        originScanWickMode        same break, wick refs -> zone [21016, 21022]
+        fullLifecycle             trade-in -> TESTED; min(o,c)=21016 < 21018 ->
+                                  BREAKER (asserted NOT terminal — a breaker is
+                                  a live, inverted level); close 21024.5 above
+                                  the near edge -> REMOVED; then a monotonicity
+                                  assertion
+        wickThroughIsOnlyATest    a low of 21010 straight through the zone with
+                                  the BODY above it stays TESTED, never BREAKER
+        swingIsCrossedOnlyOnce    the crossed flag holds: no second block
+        bearishMirror             HIGHEST bodyTop origin -> zone [21012, 21013]
+        retentionCap              <= 5 per side over 14 break cycles
+      The W5 sequence is deliberately built so NO intervening pivot high
+      confirms between the tracked swing and the break — otherwise §S7's
+      "most recent swing" rule would silently retarget the scan and the test
+      would be checking a different rule.
+    - Whipsaw + dedup structure tests PASSING (IctLibStructureTest, 8/8):
+        mssBull                       W6: MSS_BULL at 21040, dir -> +1
+        bosThenDedup                  BOS_BULL at 21055; a second close above
+                                      the SAME level emits nothing
+        whipsawToBearish              close 21033 through the confirmed swing
+                                      low 21035 -> MSS_BEAR, dir -> -1 (full
+                                      regime transition asserted)
+        secondBullishShiftIsNotAnMss  1 MSS + 1 BOS, never 2 MSS
+        coldStartEmitsNothing         ABSTAIN: no pivots, no structure, no throw
+        mssDiffLine                   the documented line shape, exact
+        bothReadsFireAndAgreementIsBounded  both reads fire, counts DIFFER,
+                                      agreement <= min(ictlib, gate)
+        historyIsBounded              <= historyCap for MSS and BOS
+    - [ICTLIB-DIFF] mss line present — REAL lines from the test run:
+        [ICTLIB-DIFF MNQ] mss: ictlib=18 gate=35 agreeWindow=6
+        [ICTLIB-DIFF MNQ] mss: ictlib=29 gate=71 agreeWindow=12
+        [ICTLIB-DIFF MNQ] mss: ictlib=49 gate=185 agreeWindow=42
+      Emitted alongside the §S2 line once per session
+      (IctLibEngine.java, session rollover) and on demand via logDiffLines().
+      The gate side comes from a SHADOW of the real
+      MarketStructureShiftDetector, constructed exactly as the strategy
+      constructs it (StructureEngine.java:78 vs StdvOteRunnerStrategy.java:405)
+      — it is silent and cheap, so there is no reason to mirror its rule and
+      risk drift the way §S2 had to.
+      READ THE NUMBERS HONESTLY: the two structure reads disagree a lot. That
+      is the expected result, not a defect — the gate additionally requires
+      displacement through the level and prior opposite structure. Unifying
+      them is a future OWNER decision from this data (anti-pattern C3).
+    - Caps + determinism tested: IctLibDeterminismTest#retentionCapsHoldOverA
+      LongFeed now asserts every family including ORDER_BLOCK/MSS/BOS;
+      #sameFeedSameDetections still byte-identical across two engines with all
+      eight families running; new #feedIsNotDegenerate guards the feed itself.
+    - Full suite green: trading-engine tests=595 failures=0 errors=0 skipped=1;
+      ictlib subtotal 83/83 across 12 classes. `./gradlew clean build`
+      BUILD SUCCESSFUL.
+    - License sweep CLEAN: source-only grep (*.java/*.ts/*.tsx) -> 0 hits on
+      all six patterns.
+    - PR merged: #144, base Main.
   SPEC DECISIONS (where Appendix S was ambiguous and you decided):
-    - (decision + first-principles reason, or "none")
+    - §S7 confirmation width — the spec says "swingLen-bar confirmation" without
+      splitting left/right, while §S6 states its convention explicitly (left =
+      swingLen, right = 1) and §S9 says "both sides". DECIDED: follow §S6 —
+      left = 10, right = 1. First principles: requiring 10 bars on the RIGHT
+      would delay confirmation by ten bars, and §S7 fires on "the FIRST close
+      through an uncrossed swing". Price routinely breaks a swing high within
+      ten bars of making it, so a symmetric confirmation would silently drop
+      exactly the fast, decisive breaks that leave the best order blocks.
+      Recorded at OrderBlockDetector.java:34.
+    - §S7 origin scan when the swing has aged out of the 300-bar window —
+      unspecified. DECIDED: scan what remains rather than abandon the block. A
+      truncated scan still returns the lowest candle we can see; reporting
+      nothing would be strictly worse and would make block creation depend on
+      how long the process had been running. Recorded at
+      OrderBlockDetector.java:104.
+    - §S8 BOS dedup key — the spec says "no emission if the level equals the
+      previous MSS/BOS level for that side". Implemented literally as a
+      per-side last-level field updated by BOTH MSS and BOS, which is what
+      makes "a NEWER confirmed swing high" operational without a second notion
+      of newness.
   Q1/Q2/Q3 ANSWERS (where required):
-    - Q1: (evidence)   Q2: (sweep)   Q3: (triggers found/filed)
+    - Q1: full clean build + 595-test suite green at HEAD; ictlib suite re-run
+      green after both fixes below.
+    - Q2: swept for other places the gate's MSS could be perturbed — ictlib
+      constructs its OWN MarketStructureShiftDetector instance and never
+      touches the strategy's (StdvOteRunnerStrategy.java:405 is a separate
+      object); nothing in ictlib is referenced from strategy/ or validation/.
+      Also swept the remaining families for unbounded growth introduced this
+      agent: the zigzag deque is capped at structureHistoryCap and both
+      pending-match deques are pruned to mssAgreeWindow every event.
+    - Q3: failure class = "a test that passes without exercising the thing it
+      names". FOUND: the synthetic feed shared by the determinism tests derived
+      each bar's high from max(open, close) + a constant, so adjacent highs
+      shared a term and a pivot high was ARITHMETICALLY IMPOSSIBLE — 0 pivots
+      in 600 bars. Every swing-based family (§S6 pools, §S7 blocks, §S8
+      structure) was therefore untested by that feed while the assertions still
+      passed, because they only asserted that SOME detections existed. Fixed by
+      giving each bar independent wicks, and closed permanently with
+      #feedIsNotDegenerate, which asserts the feed produces MSS and order
+      blocks at all. Swept the other fixtures: the hand-built Appendix W
+      sequences are explicit bar-by-bar and unaffected.
   ADAPTATIONS / REGRESSIONS / BLOCKED:
-    - (as in prior documents; "none" where clean)
+    - Adaptation: StructureEngine implements FamilyDetector but owns TWO
+      families (MSS and BOS); family() reports MSS. The interface is a
+      dispatch contract, not an ownership registry, and splitting the regime
+      across two objects would fork the `dir` state — the one thing that must
+      not be duplicated.
+    - Regressions: none (595/0). Blocked: none.
 
 ··· APPENDIX A-05 — Agent 05: Trend-Shift OTE Anchoring Mode ···
   STATUS:            (⬜ / 🔄 / ✅ / ⛔)
