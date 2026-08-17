@@ -40,6 +40,12 @@ public final class HistoricalBackfill {
     /** Chunk width — small enough to stay under API row limits at 1m granularity. */
     private static final Duration CHUNK = Duration.ofHours(6);
 
+    /**
+     * Bars of 1m history below which the chart is COLD. Must stay in step with
+     * the {@code warm} flag served by {@code /api/chart/<symbol>}.
+     */
+    public static final int WARM_BARS_1M = 1500;
+
     private HistoricalBackfill() {}
 
     /**
@@ -91,8 +97,17 @@ public final class HistoricalBackfill {
         if (last != null && markDelivered != null) {
             markDelivered.accept(last);
         }
+        // Report warmth against the same threshold /api/chart uses, rather than
+        // asserting it. The unconditional "Chart memory is warm." claimed warmth
+        // for a 5-bar MGC backfill on 2026-08-17 while the API tripwire read
+        // warm=false — the log has to agree with the tripwire or it is worse
+        // than no log at all.
         System.out.println("[Backfill] " + symbol + ": delivered " + delivered
-                + " historical 1m bars (" + days + " days). Chart memory is warm.");
+                + " historical 1m bars (" + days + " days). "
+                + (delivered >= WARM_BARS_1M
+                    ? "Chart memory is warm."
+                    : "CHART IS COLD (< " + WARM_BARS_1M + " bars) — raise -Dbackfill.days"
+                      + " or check the contract binding for this symbol."));
         return delivered;
     }
 }

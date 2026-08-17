@@ -466,14 +466,149 @@ public class TopstepConnector implements TradingConnector {
             return cachedContractId;
         }
 
+        // Not in the bulk cache. Ask the API for THIS symbol specifically before
+        // guessing: the bulk discovery above searches with an empty searchText,
+        // which the ProjectX gateway answers with a truncated page (20 contracts,
+        // ordered by root), so every symbol sorting after that cut-off — MGC, MNQ
+        // and MES among them — misses the cache no matter how healthy the API is.
+        String searchedContractId = resolveContractBySearch(symbol);
+        if (searchedContractId != null) {
+            discoveredContracts.put(symbol.toUpperCase(), searchedContractId);
+            logger.info("Resolved contract for {} by targeted search: {}", symbol, searchedContractId);
+            return searchedContractId;
+        }
+
         // If not in cache, try fallback contract ID with correct ProjectX format
         String fallbackContractId = getFallbackContractId(symbol);
         if (fallbackContractId != null) {
-            logger.info("Using fallback contract ID: {}", fallbackContractId);
+            // The guesser derives an expiry from the calendar, so it is only ever
+            // right by coincidence — it put MGC on an expired Q26 (August) contract
+            // on 2026-08-17 while the active month was Z26. Loud on purpose.
+            logger.warn("Contract search returned nothing for {} — falling back to a GUESSED "
+                + "contract id {}. Verify the expiry month before trusting fills or market data.",
+                symbol, fallbackContractId);
             return fallbackContractId;
         }
 
         throw new IOException("No contracts found for symbol: " + symbol);
+    }
+
+    /**
+     * Resolve a single symbol against {@code /Contract/search} using the symbol
+     * itself as the search text.
+     *
+     * <p>Matching is on the ProjectX <em>root</em> parsed out of the contract id
+     * ({@code CON.F.US.<root>.<monthYear>}) and must equal the symbol exactly.
+     * A prefix/contains match would let {@code MGC} bind to {@code MGCsomething}
+     * or {@code ES} to any of a dozen roots — the same class of loose match that
+     * account resolution deliberately refuses.
+     *
+     * <p>Contracts flagged {@code activeContract=true} win; that flag is what
+     * distinguishes December gold from the August contract that has already
+     * rolled off.
+     *
+     * @return the contract id, or null when the API offers no exact-root match.
+     */
+    private String resolveContractBySearch(String symbol) {
+        String upperSymbol = symbol.toUpperCase();
+
+        // Try the current data mode first, then the opposite — the same
+        // SIM/LIVE ambiguity discoverAndCacheContracts() already copes with.
+        for (boolean liveFlag : new boolean[] { useLiveData, !useLiveData }) {
+            try {
+                String searchBody = objectMapper.writeValueAsString(Map.of(
+                    "searchText", upperSymbol,
+                    "live", liveFlag
+                ));
+
+                Request request = new Request.Builder()
+                    .url(apiUrl + "/Contract/search")
+                    .header("Authorization", "Bearer " + authToken)
+                    .post(RequestBody.create(searchBody, MediaType.parse("application/json")))
+                    .build();
+
+                try (Response response = httpClient.newCall(request).execute()) {
+                    if (!response.isSuccessful()) {
+                        continue;
+                    }
+                    JsonNode json = objectMapper.readTree(response.body().string());
+                    JsonNode contracts = json.has("contracts") ? json.get("contracts") : json;
+                    if (!contracts.isArray() || contracts.size() == 0) {
+                        continue;
+                    }
+
+                    String firstExactMatch = null;
+                    for (JsonNode contract : contracts) {
+                        String id = contract.has("id") ? contract.get("id").asText() : "";
+                        if (!upperSymbol.equals(rootOf(id))) {
+                            continue;
+                        }
+                        boolean active = contract.has("activeContract")
+                            && contract.get("activeContract").asBoolean();
+                        if (active) {
+                            return id;
+                        }
+                        if (firstExactMatch == null) {
+                            firstExactMatch = id;
+                        }
+                    }
+                    if (firstExactMatch != null) {
+                        logger.warn("No contract for {} is flagged activeContract; using {}",
+                            symbol, firstExactMatch);
+                        return firstExactMatch;
+                    }
+                }
+            } catch (Exception e) {
+                logger.warn("Targeted contract search failed for {} (live={}): {}",
+                    symbol, liveFlag, e.getMessage());
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract the ProjectX root from a contract id of the form
+     * {@code CON.F.US.<root>.<monthYear>}. Returns an empty string when the id
+     * does not have that shape.
+     */
+    static String rootOf(String contractId) {
+        if (contractId == null) {
+            return "";
+        }
+        String[] parts = contractId.split("\\.");
+        return parts.length >= 5 ? parts[3].toUpperCase() : "";
+    }
+
+    /** Total attempts for one bar-range fetch, including the first. */
+    private static final int BARS_MAX_ATTEMPTS = 5;
+
+    /** Base backoff for a rate-limited bar fetch. */
+    private static final long BARS_BACKOFF_BASE_MS = 500L;
+
+    /** Ceiling on a single backoff, so a boot cannot stall indefinitely. */
+    static final long BARS_BACKOFF_MAX_MS = 8_000L;
+
+    /**
+     * Backoff for a 429: honour {@code Retry-After} when the gateway sends one,
+     * otherwise exponential on the attempt number. Always clamped to
+     * {@link #BARS_BACKOFF_MAX_MS}.
+     */
+    static long retryAfterMillis(Response response, int attempt) {
+        String header = response != null ? response.header("Retry-After") : null;
+        if (header != null) {
+            try {
+                // Retry-After in seconds (the delta-seconds form).
+                long seconds = Long.parseLong(header.trim());
+                if (seconds >= 0) {
+                    return Math.min(seconds * 1000L, BARS_BACKOFF_MAX_MS);
+                }
+            } catch (NumberFormatException ignored) {
+                // HTTP-date form, or junk — fall through to exponential backoff.
+            }
+        }
+        long backoff = BARS_BACKOFF_BASE_MS * (1L << Math.max(0, attempt - 1));
+        return Math.min(backoff, BARS_BACKOFF_MAX_MS);
     }
 
     /**
@@ -839,6 +974,22 @@ public class TopstepConnector implements TradingConnector {
      */
     private java.util.List<Candle> fetchBarsRange(String symbol, String contractId,
             java.time.Instant start, java.time.Instant end, int unit, int unitNumber) {
+        return fetchBarsRange(symbol, contractId, start, end, unit, unitNumber, 1);
+    }
+
+    /**
+     * As above, with the retry attempt number.
+     *
+     * <p>A multi-day backfill issues one request per 6h chunk per symbol, which
+     * is enough to trip the gateway's rate limit: on 2026-08-17 a 7-day boot
+     * across three symbols returned HTTP 429 for every MES chunk, and because a
+     * throttled chunk is indistinguishable from a market-closed one it was
+     * reported as a successful backfill of 0 bars. A 429 is transient by
+     * definition, so it is retried rather than counted as no data.
+     */
+    private java.util.List<Candle> fetchBarsRange(String symbol, String contractId,
+            java.time.Instant start, java.time.Instant end, int unit, int unitNumber,
+            int attempt) {
         java.util.List<Candle> parsedCandles = new java.util.ArrayList<>();
         try {
             logger.debug("Fetching bars for {} using contract ID: {} (live={})", symbol, contractId, useLiveData);
@@ -864,6 +1015,18 @@ public class TopstepConnector implements TradingConnector {
 
             try (Response response = httpClient.newCall(request).execute()) {
                 if (!response.isSuccessful()) {
+                    if (response.code() == 429 && attempt < BARS_MAX_ATTEMPTS) {
+                        long backoffMs = retryAfterMillis(response, attempt);
+                        logger.warn("Rate limited (429) fetching bars for {} — attempt {}/{}, retrying in {} ms",
+                            symbol, attempt, BARS_MAX_ATTEMPTS, backoffMs);
+                        try {
+                            Thread.sleep(backoffMs);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            return parsedCandles;
+                        }
+                        return fetchBarsRange(symbol, contractId, start, end, unit, unitNumber, attempt + 1);
+                    }
                     String body = response.body() != null ? response.body().string() : "No body";
                     logger.error("HTTP error fetching bars for {}: {} - {}", symbol, response.code(), body);
                     return parsedCandles;
