@@ -367,6 +367,13 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private final int stopBufferTicks;
     private final int reactionWickTicks;
 
+    /**
+     * Recency window, in detector bars, for the displacement that follows a
+     * sweep. Default 5 — a 25-minute window on the 5m LIVE detector.
+     * See {@code stdvote.displacement.recentBars}.
+     */
+    private final int displacementRecentBars;
+
     // Per-bar state — recomputed each onCandle.
     private MarketBias lastBias = MarketBias.NEUTRAL;
     private MSS lastObservedMss;
@@ -424,10 +431,23 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         double dispAtrMult = doubleProperty("stdvote.displacement.atrMult", 1.5);
         double dispBodyPct = doubleProperty("stdvote.displacement.bodyPct", 0.65);
         this.displacementDetector = new DisplacementDetector(20, dispAtrMult, dispBodyPct, symbol);
-        if (dispAtrMult != 1.5 || dispBodyPct != 0.65) {
+        // How recent a displacement must be to still count as "the" displacement
+        // for a completed sweep, in DETECTOR bars. At the 5m LIVE default this
+        // is a 25-minute window.
+        //
+        // Measured 2026-08-18 (LIVE_OBS_02): displacement fires on only ~5-7% of
+        // live 5m bars, so a 5-bar window is empty ~75% of the time and
+        // `no-recent-displacement` was 83% (MNQ) / 69% (MGC) of all stalls across
+        // nine sweeps that produced zero armed setups. Widening this trades setup
+        // quality for frequency and is an OWNER decision — the default is
+        // unchanged at 5.
+        this.displacementRecentBars = Math.max(1, intProperty("stdvote.displacement.recentBars", 5));
+        if (dispAtrMult != 1.5 || dispBodyPct != 0.65 || displacementRecentBars != 5) {
             System.out.println("[StdvOteRunnerStrategy] " + symbol
                     + " displacement thresholds OVERRIDDEN: atrMult=" + dispAtrMult
-                    + " bodyPct=" + dispBodyPct + " (defaults 1.5/0.65)");
+                    + " bodyPct=" + dispBodyPct
+                    + " recentBars=" + displacementRecentBars
+                    + " (defaults 1.5/0.65/5)");
         }
         this.mssDetector = new MarketStructureShiftDetector(50, 2);
         System.out.println("[StdvOteRunnerStrategy] " + symbol
@@ -1341,11 +1361,11 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private void tryRecordDisplacement() {
         FunnelTelemetry funnel = FunnelTelemetry.forSymbol(symbol);
         boolean bullish = (lastBias == MarketBias.BULLISH);
-        if (!displacementDetector.hasRecentDisplacement(5, bullish)) {
+        if (!displacementDetector.hasRecentDisplacement(displacementRecentBars, bullish)) {
             // Distinguish "no displacement at all" from "one, but the wrong
             // way" — they call for completely different fixes.
             funnel.recordStall("SWEEP_DONE",
-                    displacementDetector.hasRecentDisplacement(5)
+                    displacementDetector.hasRecentDisplacement(displacementRecentBars)
                             ? "displacement-wrong-direction" : "no-recent-displacement");
             return;
         }
