@@ -180,6 +180,112 @@ class OteAlertRaidEnrichmentTest {
         }
     }
 
+    /** Drive the fixture the rest of the way: ARMED -> REACTED -> INVALIDATED. */
+    private static void invalidateZone(ChartEngine engine) {
+        // Rejection back above the band, then a close below the leg origin.
+        engine.onCandle(flat(bucket(10).plusSeconds(180), 20015));
+        engine.onCandle(flat(bucket(10).plusSeconds(240), 19985));
+        assertTrue(engine.getActiveOteZone(SYM).isEmpty(),
+                "an invalidated zone must vanish from getActiveOteZone — this is "
+                        + "precisely why the publisher's INVALIDATED branch was dead");
+        assertTrue(engine.getLastInvalidatedZone(SYM).isPresent(),
+                "but it must still be reachable via getLastInvalidatedZone");
+    }
+
+    @Test
+    void invalidationIsPublishedForAZoneThatWasAnnounced() throws Exception {
+        List<String> received = new CopyOnWriteArrayList<>();
+        HttpServer server = serve(ex -> {
+            received.add(body(ex));
+            respond(ex, 204);
+        });
+        Function<String, ChartStateQueryAPI> provider = s -> queryApiWithRaid(raidWithQuality(7));
+        String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/webhook";
+        ChartEngine engine = engineWithArmedZone();
+
+        try (DiscordWebhookClient webhook = new DiscordWebhookClient(url, 32, 0, Duration.ofSeconds(2));
+             OteAlertPublisher publisher = new OteAlertPublisher(
+                     engine, provider, webhook, config(url, 5, 1.0))) {
+            publisher.start();
+            waitFor(() -> !received.isEmpty(), 8000);
+            assertFalse(received.isEmpty(), "precondition: the ARMED post went out");
+            assertTrue(received.get(0).contains("OTE armed"));
+
+            invalidateZone(engine);
+            waitFor(() -> received.size() >= 2, 8000);
+
+            assertTrue(received.size() >= 2,
+                    "the death of an announced zone must be published");
+            String last = received.get(received.size() - 1);
+            assertTrue(last.contains("OTE invalidated"), "got: " + last);
+            assertTrue(last.contains("This setup is dead"));
+            assertFalse(last.contains("First target"),
+                    "a dead setup must not still advertise a target");
+            assertTrue(last.contains("Not financial advice"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void invalidationIsNotRepublishedOnEveryPoll() throws Exception {
+        List<String> received = new CopyOnWriteArrayList<>();
+        HttpServer server = serve(ex -> {
+            received.add(body(ex));
+            respond(ex, 204);
+        });
+        Function<String, ChartStateQueryAPI> provider = s -> queryApiWithRaid(raidWithQuality(7));
+        String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/webhook";
+        ChartEngine engine = engineWithArmedZone();
+
+        try (DiscordWebhookClient webhook = new DiscordWebhookClient(url, 32, 0, Duration.ofSeconds(2));
+             OteAlertPublisher publisher = new OteAlertPublisher(
+                     engine, provider, webhook, config(url, 5, 1.0))) {
+            publisher.start();
+            waitFor(() -> !received.isEmpty(), 8000);
+            invalidateZone(engine);
+            waitFor(() -> received.size() >= 2, 8000);
+            int afterInvalidation = received.size();
+
+            // getLastInvalidatedZone keeps returning the same dead zone forever.
+            Thread.sleep(3_500);   // several more poll cycles at 1s
+            assertEquals(afterInvalidation, received.size(),
+                    "a dead zone must be mourned once, not once per poll");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void anUnannouncedZoneIsNotMournedWhenItDies() throws Exception {
+        List<String> received = new CopyOnWriteArrayList<>();
+        HttpServer server = serve(ex -> {
+            received.add(body(ex));
+            respond(ex, 204);
+        });
+        // minRaid 9 vs a quality-3 raid: the ARMED post is suppressed, so members
+        // never hear of this zone. Announcing its death would be incoherent.
+        Function<String, ChartStateQueryAPI> provider = s -> queryApiWithRaid(raidWithQuality(3));
+        String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/webhook";
+        ChartEngine engine = engineWithArmedZone();
+
+        try (DiscordWebhookClient webhook = new DiscordWebhookClient(url, 32, 0, Duration.ofSeconds(2));
+             OteAlertPublisher publisher = new OteAlertPublisher(
+                     engine, provider, webhook, config(url, 9, 1.0))) {
+            publisher.start();
+            Thread.sleep(2_500);
+            assertTrue(received.isEmpty(), "precondition: ARMED was gated out");
+
+            invalidateZone(engine);
+            Thread.sleep(3_500);
+            assertTrue(received.isEmpty(),
+                    "a zone nobody was told about must not get a death notice, got: "
+                            + received);
+        } finally {
+            server.stop(0);
+        }
+    }
+
     @Test
     void managerConstructorStillCompilesAndYieldsNoRaid() throws Exception {
         // The original ChartStateManager form is retained for callers/tests that

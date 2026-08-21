@@ -64,6 +64,15 @@ public final class OteAlertPublisher implements AutoCloseable {
     /** Last state we published per symbol, so a transition fires exactly once. */
     private final Map<String, String> lastPublished = new HashMap<>();
 
+    /**
+     * Zones this channel actually announced (ARMED or REACTED), by identity.
+     * Only these get an INVALIDATED post when they die — see
+     * {@link #publishInvalidationIfAnnounced}. Cleared on restart, which is the
+     * safe direction: a missed invalidation is quieter than announcing the
+     * death of a zone from before the process started.
+     */
+    private final java.util.Set<String> announced = new java.util.HashSet<>();
+
     /** Manager form. Retained so existing callers and tests are unaffected. */
     public OteAlertPublisher(ChartEngine chartEngine,
                              ChartStateManager chartState,
@@ -117,14 +126,21 @@ public final class OteAlertPublisher implements AutoCloseable {
     private void poll(String symbol) {
         Optional<OteZoneSnapshot> maybe = chartEngine.getActiveOteZone(symbol);
         if (maybe.isEmpty()) {
-            // A zone that disappears entirely (expired, or replaced) resets the
-            // dedupe slot so the next zone on this symbol can publish freshly.
+            // The zone is gone: expired, replaced, or INVALIDATED. Death is the
+            // one of those members need told about, so check for it before
+            // clearing state.
+            publishInvalidationIfAnnounced(symbol);
+            // A zone that disappears entirely resets the dedupe slot so the
+            // next zone on this symbol can publish freshly.
             lastPublished.remove(symbol);
             return;
         }
 
         OteZoneSnapshot zone = maybe.get();
         OteAlert.Kind kind = switch (zone.state()) {
+            // INVALIDATED is unreachable here — getActiveOteZone returns empty
+            // for it — which is exactly why invalidations never published. It
+            // is handled above, off getLastInvalidatedZone.
             case ARMED       -> OteAlert.Kind.ARMED;
             case REACTED     -> OteAlert.Kind.REACTED;
             case INVALIDATED -> OteAlert.Kind.INVALIDATED;
@@ -143,7 +159,50 @@ public final class OteAlertPublisher implements AutoCloseable {
         }
 
         lastPublished.put(symbol, key);
+        announced.add(zoneIdentity(symbol, zone));
         webhook.enqueue(formatter.format(alert));
+    }
+
+    /**
+     * Publish the death of a zone — but only one this channel actually
+     * announced.
+     *
+     * <p>Two things had to be true for invalidations to work, and neither was.
+     * First, {@code ChartEngine.getActiveOteZone} returns empty for an
+     * INVALIDATED zone, so the publisher's INVALIDATED branch could never be
+     * reached; the last dead zone lives on {@code getLastInvalidatedZone}
+     * instead. Second, publishing every invalidation would announce the death
+     * of setups members were never told about — a zone can form and die
+     * without ever passing the quality gates, and "this setup is dead" reads as
+     * nonsense when nobody saw it live. So a zone is only mourned if it was
+     * announced.
+     */
+    private void publishInvalidationIfAnnounced(String symbol) {
+        Optional<OteZoneSnapshot> dead = chartEngine.getLastInvalidatedZone(symbol);
+        if (dead.isEmpty()) return;
+
+        OteZoneSnapshot zone = dead.get();
+        String identity = zoneIdentity(symbol, zone);
+        // Removing on publish is the dedupe: getLastInvalidatedZone keeps
+        // returning the same zone indefinitely, so without this it would post
+        // on every poll for the rest of the session.
+        if (!announced.remove(identity)) return;
+
+        OteAlert alert = toAlert(symbol, zone, OteAlert.Kind.INVALIDATED);
+        webhook.enqueue(formatter.format(alert));
+        LOG.log(System.Logger.Level.INFO,
+                "Published INVALIDATED for " + symbol + " (" + identity + ")");
+    }
+
+    /**
+     * Kind-independent identity for a zone, so an ARMED post and the later
+     * INVALIDATED post for the same zone can be matched up.
+     * {@link OteAlert#dedupeKey()} includes the kind and cannot be used here.
+     */
+    private static String zoneIdentity(String symbol, OteZoneSnapshot zone) {
+        return symbol + "|" + zone.bullish()
+                + "|" + Math.round(zone.oteStart() * 1e6)
+                + "|" + Math.round(zone.oteEnd() * 1e6);
     }
 
     /**

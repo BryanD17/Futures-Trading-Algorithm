@@ -372,6 +372,19 @@ public final class ChartEngine {
             // Update zone state on every 1m bar (tags/reactions happen intra-30m).
             if (activeZone != null) {
                 activeZone = advanceZone(activeZone, c1m);
+                // Record a price-driven invalidation the same way the §S9
+                // replacement paths do. advanceZone only set the state, so a
+                // zone that died by closing beyond its origin left NO trace:
+                // getActiveOteZone filters INVALIDATED out and lastInvalidated
+                // was never written, making the dead zone unreachable through
+                // any public accessor on the default FRACTAL_LEG mode. That is
+                // contrary to this field's stated purpose ("an invalidation
+                // that leaves no trace is not auditable against the chart") and
+                // it is why the notification layer could never announce one.
+                if (activeZone.state() == OteState.INVALIDATED
+                        && activeZone != lastInvalidated) {
+                    lastInvalidated = activeZone;
+                }
             }
             if (shadowZone != null) {
                 shadowZone = advanceZone(shadowZone, c1m);
