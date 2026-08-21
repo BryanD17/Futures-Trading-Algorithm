@@ -148,6 +148,10 @@ public class LiveEngineRunner {
     // Both are null whenever alerting is not configured or failed to start.
     private volatile com.topstep.trading.notify.OteAlertPublisher oteAlertPublisher;
     private volatile com.topstep.trading.notify.DiscordWebhookClient oteAlertWebhook;
+    // Daily pre-market levels digest. Its own webhook client so a digest-channel
+    // failure cannot consume the alert channel's rate-limit budget.
+    private volatile com.topstep.trading.notify.PreMarketDigest preMarketDigest;
+    private volatile com.topstep.trading.notify.DiscordWebhookClient digestWebhook;
     /**
      * Session/raid context for alert enrichment. getQueryAPI auto-registers a
      * symbol and never returns null, so session labels (which are clock-based)
@@ -1807,12 +1811,49 @@ public class LiveEngineRunner {
             System.out.println("[OTE-ALERTS] raid enrichment ACTIVE via the running "
                     + "strategy's chart state — OTE_ALERT_MIN_RAID=" + cfg.minRaidScore()
                     + " and OTE_ALERT_MIN_RR=" + cfg.minRiskReward() + " both gate.");
+
+            startPreMarketDigest(cfg);
         } catch (RuntimeException e) {
             // Never let alert wiring take down a live trading session.
             System.out.println("[OTE-ALERTS] failed to start, continuing without alerts: "
                     + e.getMessage());
             this.oteAlertPublisher = null;
             this.oteAlertWebhook = null;
+        }
+    }
+
+    /**
+     * Start the daily pre-market levels digest.
+     *
+     * <p>Separate webhook client from the alert path: the digest may go to a
+     * different (free or preview) channel, and a digest webhook failing must not
+     * consume the alert webhook's rate-limit budget. Same fail-safe contract —
+     * this can never take down a trading session.
+     */
+    private void startPreMarketDigest(com.topstep.trading.notify.NotifyConfig notifyCfg) {
+        try {
+            com.topstep.trading.notify.DigestConfig dcfg =
+                    com.topstep.trading.notify.DigestConfig.fromEnv();
+            if (!dcfg.enabled()) {
+                System.out.println("[DIGEST] disabled by OTE_DIGEST_ENABLED=false");
+                return;
+            }
+            if (!dcfg.hasWebhook()) {
+                System.out.println("[DIGEST] no digest webhook configured — daily digest off");
+                return;
+            }
+            System.out.println("[DIGEST] " + dcfg.describe());
+
+            this.digestWebhook = new com.topstep.trading.notify.DiscordWebhookClient(
+                    dcfg.webhookUrl());
+            this.preMarketDigest = new com.topstep.trading.notify.PreMarketDigest(
+                    chartEngine, this::resolveAlertQueryApi, digestWebhook, notifyCfg, dcfg);
+            this.preMarketDigest.start();
+        } catch (RuntimeException e) {
+            System.out.println("[DIGEST] failed to start, continuing without the digest: "
+                    + e.getMessage());
+            this.preMarketDigest = null;
+            this.digestWebhook = null;
         }
     }
 
@@ -1848,11 +1889,15 @@ public class LiveEngineRunner {
         try {
             if (oteAlertPublisher != null) oteAlertPublisher.close();
             if (oteAlertWebhook != null) oteAlertWebhook.close();
+            if (preMarketDigest != null) preMarketDigest.close();
+            if (digestWebhook != null) digestWebhook.close();
         } catch (RuntimeException e) {
             System.out.println("[OTE-ALERTS] shutdown error ignored: " + e.getMessage());
         } finally {
             oteAlertPublisher = null;
             oteAlertWebhook = null;
+            preMarketDigest = null;
+            digestWebhook = null;
         }
     }
 

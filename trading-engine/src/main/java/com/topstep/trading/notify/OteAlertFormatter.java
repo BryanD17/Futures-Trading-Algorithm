@@ -130,9 +130,7 @@ public final class OteAlertFormatter {
      * that {@code %.2f} rounds inconsistently across values.
      */
     private static String px(double value, int decimals) {
-        if (Double.isNaN(value) || Double.isInfinite(value)) return "n/a";
-        return BigDecimal.valueOf(value)
-                .setScale(decimals, RoundingMode.HALF_UP)
-                .toPlainString();
+        // Shared with the pre-market digest so both payloads round identically.
+        return Prices.px(value, decimals);
     }
 }
