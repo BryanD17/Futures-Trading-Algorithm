@@ -45,6 +45,19 @@ public final class OteAlertFormatter {
 
     /** Build the complete webhook payload for one alert. */
     public String format(OteAlert a) {
+        return format(a, null);
+    }
+
+    /**
+     * As above, with a plain-text banner rendered ABOVE the embed.
+     *
+     * <p>Exists so a synthetic test alert can be marked unmistakably as a test.
+     * Discord shows {@code content} above the embed in a different style, which
+     * is the one place a marker cannot be mistaken for part of the signal — a
+     * marker inside the embed reads like a field, and a marker only in the
+     * footer is easy to scroll past on a phone.
+     */
+    public String format(OteAlert a, String leadingContent) {
         List<String> fields = new ArrayList<>();
 
         fields.add(field("Zone",
@@ -82,7 +95,11 @@ public final class OteAlertFormatter {
                 .str("timestamp", ISO.format(a.occurredAt()))
                 .build();
 
-        return new Json.Obj()
+        Json.Obj payload = new Json.Obj();
+        if (leadingContent != null && !leadingContent.isBlank()) {
+            payload.str("content", leadingContent);
+        }
+        return payload
                 .raw("embeds", Json.array(List.of(embed)))
                 .build();
     }

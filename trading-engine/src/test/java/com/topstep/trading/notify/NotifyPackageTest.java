@@ -93,6 +93,28 @@ class NotifyPackageTest {
     }
 
     @Test
+    void leadingContentBannerRendersAboveTheEmbed() {
+        // The test-alert marker. Must sit in `content`, not inside the embed,
+        // so it cannot be mistaken for a signal field.
+        String json = new OteAlertFormatter().format(sample(OteAlert.Kind.ARMED),
+                "TEST ALERT — SYNTHETIC DATA");
+        assertTrue(json.startsWith("{\"content\":\""), "banner must precede the embed");
+        assertTrue(json.contains("TEST ALERT"));
+        assertTrue(json.contains("\"embeds\""), "the embed is still present");
+    }
+
+    @Test
+    void omittingTheBannerLeavesThePayloadByteIdenticalToBefore() {
+        // Guards the overload against changing the live alert payload.
+        String plain = new OteAlertFormatter().format(sample(OteAlert.Kind.ARMED));
+        String nulled = new OteAlertFormatter().format(sample(OteAlert.Kind.ARMED), null);
+        String blank = new OteAlertFormatter().format(sample(OteAlert.Kind.ARMED), "   ");
+        assertEquals(plain, nulled);
+        assertEquals(plain, blank);
+        assertTrue(plain.startsWith("{\"embeds\":["), "no stray content key");
+    }
+
+    @Test
     void footerIsMandatory() {
         assertThrows(IllegalArgumentException.class, () -> new OteAlertFormatter("  "),
                 "a paid channel must never post without the disclaimer");

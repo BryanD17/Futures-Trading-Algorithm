@@ -45,6 +45,14 @@ public class TradingEngineMain {
                 com.topstep.trading.montecarlo.MonteCarloScalpComparison.main(new String[0]);
                 break;
 
+            case "TESTALERT":
+                // One-shot Discord delivery proof. Touches no market data, no
+                // account, and no order path — it only posts a synthetic embed
+                // to DISCORD_OTE_WEBHOOK so the alert transport can be verified
+                // without waiting days for a real ARMED zone.
+                com.topstep.trading.notify.TestAlertMain.main(new String[0]);
+                break;
+
             case "SIM":
                 runSimMode();
                 break;
@@ -55,7 +63,7 @@ public class TradingEngineMain {
 
             default:
                 System.err.println("Unknown mode: " + mode);
-                System.err.println("Supported modes: BACKTEST, ABTEST, MONTECARLO, SIM, LIVE");
+                System.err.println("Supported modes: BACKTEST, ABTEST, MONTECARLO, SIM, LIVE, TESTALERT");
                 System.exit(1);
         }
     }
