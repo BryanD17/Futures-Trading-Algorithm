@@ -560,6 +560,19 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         return core.getSetupContext();
     }
 
+    /**
+     * Read-only access to this instrument's chart-state view, for the
+     * notification layer.
+     *
+     * <p>Additive: nothing in the evaluation path calls this. It exists so the
+     * Discord publisher can read the SAME raid the M4 scoring path saw, rather
+     * than running a second detector and reporting a quality score that
+     * disagrees with the one the gate actually used.
+     */
+    public ChartStateQueryAPI getChartState() {
+        return chartState;
+    }
+
     // Test hooks for the entry-fill timeout (2026-07-27 no-trade fix).
     void latchForTest() { this.positionOpen = true; }
     boolean isPositionOpenForTest() { return positionOpen; }
@@ -1668,13 +1681,25 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 if (a == null || a.isEmpty()) return java.util.Optional.empty();
                 return java.util.Optional.of(a.get(a.size() - 1));
             }
+            // Delegated 2026-08-21. These three were hardcoded empty/false
+            // while the list accessors above already delegated — an asymmetry
+            // that made the notification layer's raid gate silently inert.
+            //
+            // Behaviourally inert for TRADING: no evaluation path calls them.
+            // StdvProjectionEngine uses only getLevelsNearPrice/getAllLevels;
+            // MandatoryConfluenceValidator uses only getBestActiveRaid(). The
+            // sole caller in the repo is OteAlertPublisher. Verified by grep
+            // before the change; if that ever stops being true, this becomes a
+            // live-path edit and needs re-approval.
             @Override public java.util.Optional<LiquidityRaid> getActiveBullishRaid() {
-                return java.util.Optional.empty();
+                return raidDetector.getActiveBullishRaid();
             }
             @Override public java.util.Optional<LiquidityRaid> getActiveBearishRaid() {
-                return java.util.Optional.empty();
+                return raidDetector.getActiveBearishRaid();
             }
-            @Override public boolean hasActiveRaidForDirection(boolean expectBullish) { return false; }
+            @Override public boolean hasActiveRaidForDirection(boolean expectBullish) {
+                return raidDetector.hasActiveRaidForDirection(expectBullish);
+            }
             @Override public java.util.Optional<LiquidityRaid> getRaidById(String raidId) {
                 return java.util.Optional.empty();
             }

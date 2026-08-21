@@ -47,7 +47,15 @@ public final class OteAlertPublisher implements AutoCloseable {
             System.getLogger(OteAlertPublisher.class.getName());
 
     private final ChartEngine chartEngine;
-    private final ChartStateManager chartState;
+    /**
+     * Resolves the chart-state view for a symbol.
+     *
+     * <p>A function rather than a {@link ChartStateManager} so the live path can
+     * supply the view the running strategy actually owns. Handing the publisher
+     * its own manager meant polling one that nothing fed: raid score was always
+     * absent and {@code OTE_ALERT_MIN_RAID} was silently inert.
+     */
+    private final java.util.function.Function<String, ChartStateQueryAPI> queryProvider;
     private final DiscordWebhookClient webhook;
     private final OteAlertFormatter formatter;
     private final NotifyConfig config;
@@ -56,12 +64,24 @@ public final class OteAlertPublisher implements AutoCloseable {
     /** Last state we published per symbol, so a transition fires exactly once. */
     private final Map<String, String> lastPublished = new HashMap<>();
 
+    /** Manager form. Retained so existing callers and tests are unaffected. */
     public OteAlertPublisher(ChartEngine chartEngine,
                              ChartStateManager chartState,
                              DiscordWebhookClient webhook,
                              NotifyConfig config) {
+        this(chartEngine, chartState::getQueryAPI, webhook, config);
+    }
+
+    /**
+     * Resolver form. Lets the live path inject the strategy's own chart-state
+     * view so alerts report the same raid the entry gates scored.
+     */
+    public OteAlertPublisher(ChartEngine chartEngine,
+                             java.util.function.Function<String, ChartStateQueryAPI> queryProvider,
+                             DiscordWebhookClient webhook,
+                             NotifyConfig config) {
         this.chartEngine = chartEngine;
-        this.chartState = chartState;
+        this.queryProvider = queryProvider;
         this.webhook = webhook;
         this.config = config;
         this.formatter = new OteAlertFormatter();
@@ -152,7 +172,7 @@ public final class OteAlertPublisher implements AutoCloseable {
 
         Integer raidScore = null;
         String raidLevel = null;
-        ChartStateQueryAPI query = chartState.getQueryAPI(symbol);
+        ChartStateQueryAPI query = queryProvider.apply(symbol);
         if (query != null) {
             Optional<LiquidityRaid> raid = zone.bullish()
                     ? query.getActiveBullishRaid()

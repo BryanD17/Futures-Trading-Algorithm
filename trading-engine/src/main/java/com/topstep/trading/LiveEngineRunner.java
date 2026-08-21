@@ -1801,16 +1801,12 @@ public class LiveEngineRunner {
             this.oteAlertWebhook = new com.topstep.trading.notify.DiscordWebhookClient(
                     cfg.webhookUrl());
             this.oteAlertPublisher = new com.topstep.trading.notify.OteAlertPublisher(
-                    chartEngine, oteAlertChartState, oteAlertWebhook, cfg);
+                    chartEngine, this::resolveAlertQueryApi, oteAlertWebhook, cfg);
             this.oteAlertPublisher.start();
 
-            // Raid enrichment comes from ChartStateManager, which the STDV+OTE
-            // path does not populate (StdvOteRunnerStrategy builds its own
-            // ChartStateQueryAPI adapter instead). Say so rather than letting
-            // OTE_ALERT_MIN_RAID look like an active gate when it is inert.
-            System.out.println("[OTE-ALERTS] NOTE: raid enrichment unavailable in the "
-                    + "STDV+OTE path — raid score will be absent and OTE_ALERT_MIN_RAID "
-                    + "is therefore inert. R:R gating (OTE_ALERT_MIN_RR) is active.");
+            System.out.println("[OTE-ALERTS] raid enrichment ACTIVE via the running "
+                    + "strategy's chart state — OTE_ALERT_MIN_RAID=" + cfg.minRaidScore()
+                    + " and OTE_ALERT_MIN_RR=" + cfg.minRiskReward() + " both gate.");
         } catch (RuntimeException e) {
             // Never let alert wiring take down a live trading session.
             System.out.println("[OTE-ALERTS] failed to start, continuing without alerts: "
@@ -1818,6 +1814,33 @@ public class LiveEngineRunner {
             this.oteAlertPublisher = null;
             this.oteAlertWebhook = null;
         }
+    }
+
+    /**
+     * Resolve the chart-state view the alert publisher should read for a symbol.
+     *
+     * <p>Prefers the view owned by the running STDV+OTE strategy, so an alert
+     * reports the SAME raid the M4 scoring path saw. Falls back to the (empty)
+     * standalone manager when no such strategy exists for the symbol — the
+     * legacy engine paths, and MES, which is an SMT-only feed with no strategy
+     * of its own. The publisher tolerates an empty view; it simply omits the
+     * raid fields.
+     */
+    private com.topstep.trading.chartstate.ChartStateQueryAPI resolveAlertQueryApi(String symbol) {
+        try {
+            if (stdvOteMultiEngine != null) {
+                com.topstep.trading.strategy.stdvote.StdvOteRunnerStrategy s =
+                        stdvOteMultiEngine.getStrategy(symbol);
+                if (s != null && s.getChartState() != null) {
+                    return s.getChartState();
+                }
+            }
+        } catch (RuntimeException e) {
+            // Enrichment is best-effort; never let it break the poll loop.
+            System.out.println("[OTE-ALERTS] chart-state lookup failed for " + symbol
+                    + ", falling back: " + e.getMessage());
+        }
+        return oteAlertChartState.getQueryAPI(symbol);
     }
 
     /** Shut the alert layer down without letting it delay engine shutdown. */
