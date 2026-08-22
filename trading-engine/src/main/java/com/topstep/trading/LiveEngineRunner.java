@@ -144,6 +144,22 @@ public class LiveEngineRunner {
     private final com.topstep.trading.chart.ChartEngine chartEngine =
             new com.topstep.trading.chart.ChartEngine();
 
+    // ── Discord OTE alerts (optional, off unless DISCORD_OTE_WEBHOOK is set) ──
+    // Both are null whenever alerting is not configured or failed to start.
+    private volatile com.topstep.trading.notify.OteAlertPublisher oteAlertPublisher;
+    private volatile com.topstep.trading.notify.DiscordWebhookClient oteAlertWebhook;
+    // Daily pre-market levels digest. Its own webhook client so a digest-channel
+    // failure cannot consume the alert channel's rate-limit budget.
+    private volatile com.topstep.trading.notify.PreMarketDigest preMarketDigest;
+    private volatile com.topstep.trading.notify.DiscordWebhookClient digestWebhook;
+    /**
+     * Session/raid context for alert enrichment. getQueryAPI auto-registers a
+     * symbol and never returns null, so session labels (which are clock-based)
+     * work; raids stay empty in the STDV+OTE path — see startOteAlerts().
+     */
+    private final com.topstep.trading.chartstate.ChartStateManager oteAlertChartState =
+            new com.topstep.trading.chartstate.ChartStateManager();
+
     // V4 Agent 02 — the ICT detection library, hung off the chart's candle tap
     // so it provably reads the same bars the Bot Chart draws (ONE ingest seam).
     // Observation-grade: it feeds the chart overlay, the confluence snapshot
@@ -670,6 +686,8 @@ public class LiveEngineRunner {
                 BALANCE_SYNC_INTERVAL_MINUTES, BALANCE_SYNC_INTERVAL_MINUTES, TimeUnit.MINUTES
             );
             System.out.println("✓ Account balance sync scheduled (every " + BALANCE_SYNC_INTERVAL_MINUTES + " minutes)");
+
+            startOteAlerts();
 
             running.set(true);
 
@@ -1752,11 +1770,144 @@ public class LiveEngineRunner {
     /**
      * Stop the LIVE engine.
      */
+    /**
+     * Start the Discord OTE alert publisher, if one is configured.
+     *
+     * <p>Alerting is a courtesy feature bolted onto an engine that manages live
+     * positions, so this method cannot fail the start-up path. An unset
+     * {@code DISCORD_OTE_WEBHOOK} is the normal case and is not an error;
+     * {@link NotifyConfig#fromEnv()} throws on a missing webhook, which is
+     * correct for a notifier being constructed deliberately but would abort a
+     * LIVE boot if left uncaught here.
+     *
+     * <p>The publisher only ever calls {@code chartEngine.getActiveOteZone},
+     * which is documented thread-safe and returns immutable copies, so it cannot
+     * perturb engine state.
+     */
+    private void startOteAlerts() {
+        if (!Boolean.parseBoolean(System.getProperty("notify.discord.enabled", "true"))) {
+            System.out.println("[OTE-ALERTS] disabled by -Dnotify.discord.enabled=false");
+            return;
+        }
+        String webhook = System.getenv("DISCORD_OTE_WEBHOOK");
+        if (webhook == null || webhook.isBlank()) {
+            System.out.println("[OTE-ALERTS] DISCORD_OTE_WEBHOOK not set — alerts disabled "
+                    + "(trading is unaffected)");
+            return;
+        }
+        try {
+            com.topstep.trading.notify.NotifyConfig cfg =
+                    com.topstep.trading.notify.NotifyConfig.fromEnv();
+            // describe() deliberately redacts the URL — the webhook is a
+            // credential and must never reach a log or a screenshot.
+            System.out.println("[OTE-ALERTS] " + cfg.describe());
+
+            this.oteAlertWebhook = new com.topstep.trading.notify.DiscordWebhookClient(
+                    cfg.webhookUrl());
+            this.oteAlertPublisher = new com.topstep.trading.notify.OteAlertPublisher(
+                    chartEngine, this::resolveAlertQueryApi, oteAlertWebhook, cfg);
+            this.oteAlertPublisher.start();
+
+            System.out.println("[OTE-ALERTS] raid enrichment ACTIVE via the running "
+                    + "strategy's chart state — OTE_ALERT_MIN_RAID=" + cfg.minRaidScore()
+                    + " and OTE_ALERT_MIN_RR=" + cfg.minRiskReward() + " both gate.");
+
+            startPreMarketDigest(cfg);
+        } catch (RuntimeException e) {
+            // Never let alert wiring take down a live trading session.
+            System.out.println("[OTE-ALERTS] failed to start, continuing without alerts: "
+                    + e.getMessage());
+            this.oteAlertPublisher = null;
+            this.oteAlertWebhook = null;
+        }
+    }
+
+    /**
+     * Start the daily pre-market levels digest.
+     *
+     * <p>Separate webhook client from the alert path: the digest may go to a
+     * different (free or preview) channel, and a digest webhook failing must not
+     * consume the alert webhook's rate-limit budget. Same fail-safe contract —
+     * this can never take down a trading session.
+     */
+    private void startPreMarketDigest(com.topstep.trading.notify.NotifyConfig notifyCfg) {
+        try {
+            com.topstep.trading.notify.DigestConfig dcfg =
+                    com.topstep.trading.notify.DigestConfig.fromEnv();
+            if (!dcfg.enabled()) {
+                System.out.println("[DIGEST] disabled by OTE_DIGEST_ENABLED=false");
+                return;
+            }
+            if (!dcfg.hasWebhook()) {
+                System.out.println("[DIGEST] no digest webhook configured — daily digest off");
+                return;
+            }
+            System.out.println("[DIGEST] " + dcfg.describe());
+
+            this.digestWebhook = new com.topstep.trading.notify.DiscordWebhookClient(
+                    dcfg.webhookUrl());
+            this.preMarketDigest = new com.topstep.trading.notify.PreMarketDigest(
+                    chartEngine, this::resolveAlertQueryApi, digestWebhook, notifyCfg, dcfg);
+            this.preMarketDigest.start();
+        } catch (RuntimeException e) {
+            System.out.println("[DIGEST] failed to start, continuing without the digest: "
+                    + e.getMessage());
+            this.preMarketDigest = null;
+            this.digestWebhook = null;
+        }
+    }
+
+    /**
+     * Resolve the chart-state view the alert publisher should read for a symbol.
+     *
+     * <p>Prefers the view owned by the running STDV+OTE strategy, so an alert
+     * reports the SAME raid the M4 scoring path saw. Falls back to the (empty)
+     * standalone manager when no such strategy exists for the symbol — the
+     * legacy engine paths, and MES, which is an SMT-only feed with no strategy
+     * of its own. The publisher tolerates an empty view; it simply omits the
+     * raid fields.
+     */
+    private com.topstep.trading.chartstate.ChartStateQueryAPI resolveAlertQueryApi(String symbol) {
+        try {
+            if (stdvOteMultiEngine != null) {
+                com.topstep.trading.strategy.stdvote.StdvOteRunnerStrategy s =
+                        stdvOteMultiEngine.getStrategy(symbol);
+                if (s != null && s.getChartState() != null) {
+                    return s.getChartState();
+                }
+            }
+        } catch (RuntimeException e) {
+            // Enrichment is best-effort; never let it break the poll loop.
+            System.out.println("[OTE-ALERTS] chart-state lookup failed for " + symbol
+                    + ", falling back: " + e.getMessage());
+        }
+        return oteAlertChartState.getQueryAPI(symbol);
+    }
+
+    /** Shut the alert layer down without letting it delay engine shutdown. */
+    private void stopOteAlerts() {
+        try {
+            if (oteAlertPublisher != null) oteAlertPublisher.close();
+            if (oteAlertWebhook != null) oteAlertWebhook.close();
+            if (preMarketDigest != null) preMarketDigest.close();
+            if (digestWebhook != null) digestWebhook.close();
+        } catch (RuntimeException e) {
+            System.out.println("[OTE-ALERTS] shutdown error ignored: " + e.getMessage());
+        } finally {
+            oteAlertPublisher = null;
+            oteAlertWebhook = null;
+            preMarketDigest = null;
+            digestWebhook = null;
+        }
+    }
+
     public void stop() {
         if (!running.get()) {
             System.out.println("LIVE engine not running");
             return;
         }
+
+        stopOteAlerts();
 
         System.out.println("\n" + "=".repeat(60));
         System.out.println("STOPPING LIVE MODE");

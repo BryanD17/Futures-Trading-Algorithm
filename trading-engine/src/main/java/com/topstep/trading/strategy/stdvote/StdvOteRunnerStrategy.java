@@ -367,6 +367,13 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private final int stopBufferTicks;
     private final int reactionWickTicks;
 
+    /**
+     * Recency window, in detector bars, for the displacement that follows a
+     * sweep. Default 5 — a 25-minute window on the 5m LIVE detector.
+     * See {@code stdvote.displacement.recentBars}.
+     */
+    private final int displacementRecentBars;
+
     // Per-bar state — recomputed each onCandle.
     private MarketBias lastBias = MarketBias.NEUTRAL;
     private MSS lastObservedMss;
@@ -424,10 +431,23 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         double dispAtrMult = doubleProperty("stdvote.displacement.atrMult", 1.5);
         double dispBodyPct = doubleProperty("stdvote.displacement.bodyPct", 0.65);
         this.displacementDetector = new DisplacementDetector(20, dispAtrMult, dispBodyPct, symbol);
-        if (dispAtrMult != 1.5 || dispBodyPct != 0.65) {
+        // How recent a displacement must be to still count as "the" displacement
+        // for a completed sweep, in DETECTOR bars. At the 5m LIVE default this
+        // is a 25-minute window.
+        //
+        // Measured 2026-08-18 (LIVE_OBS_02): displacement fires on only ~5-7% of
+        // live 5m bars, so a 5-bar window is empty ~75% of the time and
+        // `no-recent-displacement` was 83% (MNQ) / 69% (MGC) of all stalls across
+        // nine sweeps that produced zero armed setups. Widening this trades setup
+        // quality for frequency and is an OWNER decision — the default is
+        // unchanged at 5.
+        this.displacementRecentBars = Math.max(1, intProperty("stdvote.displacement.recentBars", 5));
+        if (dispAtrMult != 1.5 || dispBodyPct != 0.65 || displacementRecentBars != 5) {
             System.out.println("[StdvOteRunnerStrategy] " + symbol
                     + " displacement thresholds OVERRIDDEN: atrMult=" + dispAtrMult
-                    + " bodyPct=" + dispBodyPct + " (defaults 1.5/0.65)");
+                    + " bodyPct=" + dispBodyPct
+                    + " recentBars=" + displacementRecentBars
+                    + " (defaults 1.5/0.65/5)");
         }
         this.mssDetector = new MarketStructureShiftDetector(50, 2);
         System.out.println("[StdvOteRunnerStrategy] " + symbol
@@ -538,6 +558,19 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** Read-only access to the underlying setup context (used by the API + tests). */
     public SetupContext getSetupContext() {
         return core.getSetupContext();
+    }
+
+    /**
+     * Read-only access to this instrument's chart-state view, for the
+     * notification layer.
+     *
+     * <p>Additive: nothing in the evaluation path calls this. It exists so the
+     * Discord publisher can read the SAME raid the M4 scoring path saw, rather
+     * than running a second detector and reporting a quality score that
+     * disagrees with the one the gate actually used.
+     */
+    public ChartStateQueryAPI getChartState() {
+        return chartState;
     }
 
     // Test hooks for the entry-fill timeout (2026-07-27 no-trade fix).
@@ -1341,11 +1374,11 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private void tryRecordDisplacement() {
         FunnelTelemetry funnel = FunnelTelemetry.forSymbol(symbol);
         boolean bullish = (lastBias == MarketBias.BULLISH);
-        if (!displacementDetector.hasRecentDisplacement(5, bullish)) {
+        if (!displacementDetector.hasRecentDisplacement(displacementRecentBars, bullish)) {
             // Distinguish "no displacement at all" from "one, but the wrong
             // way" — they call for completely different fixes.
             funnel.recordStall("SWEEP_DONE",
-                    displacementDetector.hasRecentDisplacement(5)
+                    displacementDetector.hasRecentDisplacement(displacementRecentBars)
                             ? "displacement-wrong-direction" : "no-recent-displacement");
             return;
         }
@@ -1648,13 +1681,25 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 if (a == null || a.isEmpty()) return java.util.Optional.empty();
                 return java.util.Optional.of(a.get(a.size() - 1));
             }
+            // Delegated 2026-08-21. These three were hardcoded empty/false
+            // while the list accessors above already delegated — an asymmetry
+            // that made the notification layer's raid gate silently inert.
+            //
+            // Behaviourally inert for TRADING: no evaluation path calls them.
+            // StdvProjectionEngine uses only getLevelsNearPrice/getAllLevels;
+            // MandatoryConfluenceValidator uses only getBestActiveRaid(). The
+            // sole caller in the repo is OteAlertPublisher. Verified by grep
+            // before the change; if that ever stops being true, this becomes a
+            // live-path edit and needs re-approval.
             @Override public java.util.Optional<LiquidityRaid> getActiveBullishRaid() {
-                return java.util.Optional.empty();
+                return raidDetector.getActiveBullishRaid();
             }
             @Override public java.util.Optional<LiquidityRaid> getActiveBearishRaid() {
-                return java.util.Optional.empty();
+                return raidDetector.getActiveBearishRaid();
             }
-            @Override public boolean hasActiveRaidForDirection(boolean expectBullish) { return false; }
+            @Override public boolean hasActiveRaidForDirection(boolean expectBullish) {
+                return raidDetector.hasActiveRaidForDirection(expectBullish);
+            }
             @Override public java.util.Optional<LiquidityRaid> getRaidById(String raidId) {
                 return java.util.Optional.empty();
             }
