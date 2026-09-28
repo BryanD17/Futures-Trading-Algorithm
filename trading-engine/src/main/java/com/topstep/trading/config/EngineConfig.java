@@ -133,6 +133,8 @@ public final class EngineConfig {
         k.add(key("ote.stopMode", Type.ENUM, "BAND", "OTE stop BAND (beyond 0.786 / PD array) | ORIGIN (beyond 1.0) (Agent 04)"));
         k.add(key("ote.entryModel", Type.ENUM, "IMPULSE_LEG", "OTE entry model IMPULSE_LEG (M5/M6 on the dealing-range impulse, arm on the OTE-band sweep) | POST_SWEEP (new displacement+MSS after the sweep) (Agent 05.2)"));
         k.add(key("ote.impulseLeg.minSweepFib", Type.DOUBLE, "0.705", "IMPULSE_LEG: dealing-range fib the sweep extreme must reach (Agent 05.2)"));
+        k.add(key("ote.pdArraySource", Type.ENUM, "ICT_OB", "IMPULSE_LEG M7 order block at the sweep: ICT_OB (last opposite-close 1m bar before the sweep bar overlapping the band, added to the M7 candidates) | SWEEP_BAR (05.2: the 5m bar containing the sweep only) (Agent 05.5)"));
+        k.add(key("ote.obLookbackBars", Type.INT, "5", "ICT_OB: 1m bars walked back from the sweep bar to find the last opposite-close candle (Agent 05.5)"));
         k.add(key("risk.rrFloor", Type.DOUBLE, "1.0", "ONE RR band: floor vs T1, legacy profile (Agent 04; risk engine: Agent 05)"));
         k.add(key("risk.rrFloor.scalp", Type.DOUBLE, "0.8", "ONE RR band: floor vs T1, scalp profile (Agent 04)"));
         k.add(key("risk.rrCeiling", Type.DOUBLE, "5.0", "ONE RR band: ceiling vs final target, both profiles (Agent 04)"));
@@ -624,6 +626,8 @@ public final class EngineConfig {
                 + "/" + getDouble("ote.fib79", 0.786) + " M7b=" + getString("ote30m.mode", "SCORING")
                 + " entryModel=" + getString("ote.entryModel", "IMPULSE_LEG")
                 + " (minSweepFib " + getDouble("ote.impulseLeg.minSweepFib", 0.705) + ")"
+                + " pdArraySource=" + getString("ote.pdArraySource", "ICT_OB")
+                + " obLookbackBars=" + getInt("ote.obLookbackBars", 5)
                 + " | ONE RR band legacy [" + getDouble("risk.rrFloor", 1.0) + ", " + getDouble("risk.rrCeiling", 5.0)
                 + "] scalp [" + getDouble("risk.rrFloor.scalp", 0.8) + ", " + getDouble("risk.rrCeiling", 5.0) + "]");
         out.add("LIFECYCLE (Agent 05.3): setup.rearmAfterClose=" + getBoolean("setup.rearmAfterClose", true)

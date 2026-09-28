@@ -22,6 +22,8 @@ package com.topstep.trading.strategy.stdvote;
  *   ote.stopMode             -                                 BAND  (BAND | ORIGIN)
  *   ote.entryModel           -                                 IMPULSE_LEG (IMPULSE_LEG | POST_SWEEP) (Agent 05.2)
  *   ote.impulseLeg.minSweepFib -                               0.705 (fib the sweep must reach) (Agent 05.2)
+ *   ote.pdArraySource        -                                 ICT_OB (ICT_OB | SWEEP_BAR) (Agent 05.5)
+ *   ote.obLookbackBars       -                                 5     (1m feed bars before the sweep bar) (Agent 05.5)
  *   mss.freshBars            stdvOte.mssFreshBars              30    (detector bars)
  *   ote30m.mode              ote30m.confluence                 SCORING
  *   risk.rrFloor             -                                 1.0   (legacy profile)
@@ -127,6 +129,31 @@ public final class OteConfig {
         return dbl(DEFAULT_IMPULSE_MIN_SWEEP_FIB, "ote.impulseLeg.minSweepFib");
     }
 
+    // ── V5 Agent 05.5: the IMPULSE_LEG order block at the sweep ─────────
+    public static final String PD_SOURCE_ICT_OB = "ICT_OB";
+    public static final String PD_SOURCE_SWEEP_BAR = "SWEEP_BAR";
+    public static final int DEFAULT_OB_LOOKBACK_BARS = 5;
+
+    /**
+     * {@code ICT_OB} (default): the IMPULSE_LEG M7 order block is the ICT OB =
+     * the NEWEST opposite-close candle (down-close for a long, up-close for a
+     * short) among the {@link #obLookbackBars()} 1m feed bars BEFORE the sweep
+     * bar, kept when its range overlaps the OTE band. It joins the 05.2
+     * candidates (the 5m sweep-bar OB, the rejection WICK, FVG/IFVG/BREAKER);
+     * the pick stays Agent 04's (entry nearest the 0.705, tie -> OB).
+     * {@code SWEEP_BAR}: the 05.2 behaviour (only the 5m bar containing the
+     * sweep can be the OB) - A/B.
+     */
+    public static String pdArraySource() {
+        String m = str(PD_SOURCE_ICT_OB, "ote.pdArraySource");
+        return PD_SOURCE_SWEEP_BAR.equalsIgnoreCase(m) ? PD_SOURCE_SWEEP_BAR : PD_SOURCE_ICT_OB;
+    }
+
+    /** ICT_OB walk-back, in 1m feed bars before the sweep bar (clamped 1..30). */
+    public static int obLookbackBars() {
+        return Math.max(1, Math.min(30, integer(DEFAULT_OB_LOOKBACK_BARS, "ote.obLookbackBars")));
+    }
+
     public static final int DEFAULT_OTE_WINDOW_BARS = 8;
 
     /** OTE_ARMED window in DETECTOR bars (the runner scales to feed bars). */
@@ -199,6 +226,8 @@ public final class OteConfig {
                 + " stopMode=" + stopMode()
                 + " entryModel=" + entryModel()
                 + " impulseLeg.minSweepFib=" + impulseMinSweepFib()
+                + " pdArraySource=" + pdArraySource()
+                + " obLookbackBars=" + obLookbackBars()
                 + " | mss.freshBars=" + mssFreshBars()
                 + " | ote30m.mode=" + ote30mModeRaw()
                 + " | RR band legacy [" + rrFloor(false) + ", " + rrCeiling() + "]"
