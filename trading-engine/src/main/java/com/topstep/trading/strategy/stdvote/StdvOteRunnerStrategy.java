@@ -1139,7 +1139,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                         candle.getClose(), Double.NaN);
                 return;
             case "impulse-no-pd-array-at-sweep":
-                armedDiagnostic("ALARM", "ALARM: impulse-no-pd-array-at-sweep (no sweep OB, rejection wick or"
+                armedDiagnostic("ALARM", "ALARM: impulse-no-pd-array-at-sweep (no sweep/ICT OB, rejection wick or"
                         + " FVG/OB at swept " + swept + " overlaps band " + band + ")", swept, lo);
                 return;
             case "no-pd-array-overlapping-band":

@@ -59,6 +59,16 @@ public final class OteSetupDriver {
     /** V5 Agent 05.2: IMPULSE_LEG | POST_SWEEP (read at construction, like the other OTE keys). */
     private final String entryModel;
     private final double minSweepFib;
+    /** V5 Agent 05.5: ICT_OB | SWEEP_BAR (read at construction, like entryModel). */
+    private final String pdArraySource;
+    private final int obLookbackBars;
+    /** Last 1m feed candles (for the ICT order block before the sweep bar). */
+    private final Deque<Candle> feedBars = new ArrayDeque<>();
+    private static final int FEED_BUFFER = 32;
+    /** Snapshot of the {@link #obLookbackBars} feed bars BEFORE {@link #sweepBar}, oldest first. */
+    private List<Candle> sweepPrior = List.of();
+    /** Human-readable pick of the last impulse alarm (transcript / OteAlarmEvent reaction). */
+    private String lastPdPick;
     /** Minimum upper (short) / lower (long) wick share for the rejection-wick PD array. */
     static final double REJECTION_WICK_MIN = 0.5;
 
@@ -97,6 +107,8 @@ public final class OteSetupDriver {
         this.anchorMode = OteConfig.anchorMode();
         this.entryModel = OteConfig.entryModel();
         this.minSweepFib = OteConfig.impulseMinSweepFib();
+        this.pdArraySource = OteConfig.pdArraySource();
+        this.obLookbackBars = OteConfig.obLookbackBars();
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -113,13 +125,32 @@ public final class OteSetupDriver {
                 sweepTs = ts;
                 postSweepHigh = Math.max(ctx.sweep.getSweptLevel(), c.getHigh());
                 postSweepLow = Math.min(ctx.sweep.getSweptLevel(), c.getLow());
-                sweepBar = c;
+                setSweepBar(c);
             } else {
                 postSweepHigh = Math.max(postSweepHigh, c.getHigh());
                 postSweepLow = Math.min(postSweepLow, c.getLow());
             }
             trackEpisode(ctx.sweep.getSweptLevel(), c);
         }
+        feedBars.addLast(c);
+        while (feedBars.size() > FEED_BUFFER) feedBars.removeFirst();
+    }
+
+    /**
+     * Record the raid bar and snapshot the {@link #obLookbackBars} 1m feed
+     * bars printed BEFORE it (the ICT order block is read from these).
+     */
+    private void setSweepBar(Candle c) {
+        sweepBar = c;
+        java.util.ArrayList<Candle> prior = new java.util.ArrayList<>();
+        Iterator<Candle> it = feedBars.descendingIterator();
+        while (it.hasNext() && prior.size() < obLookbackBars) {
+            Candle b = it.next();
+            if (c.getTimestamp() != null && b.getTimestamp() != null
+                    && !b.getTimestamp().isBefore(c.getTimestamp())) continue;
+            prior.add(0, b);
+        }
+        sweepPrior = List.copyOf(prior);
     }
 
     /**
@@ -252,7 +283,7 @@ public final class OteSetupDriver {
             sweepTs = ts;
             postSweepHigh = Math.max(level, candle.getHigh());
             postSweepLow = Math.min(level, candle.getLow());
-            sweepBar = candle;
+            setSweepBar(candle);
         }
         trackEpisode(level, candle);
         // The retrace's extreme since the episode's first sweep: a retrace
@@ -384,6 +415,9 @@ public final class OteSetupDriver {
             long sweepBarIdx = pd.indexOf(barStart);
             if (sweepBarIdx >= 0) pd.sweepOrderBlock(sweepBarIdx, bullish, level).ifPresent(out::add);
         }
+        if (OteConfig.PD_SOURCE_ICT_OB.equals(pdArraySource)) {
+            ictOrderBlock(bullish).ifPresent(out::add);
+        }
         if (sweepBar != null) {
             double range = sweepBar.getHigh() - sweepBar.getLow();
             double bodyTop = Math.max(sweepBar.getOpen(), sweepBar.getClose());
@@ -401,6 +435,27 @@ public final class OteSetupDriver {
             if (bullish ? p.bottom() <= level : p.top() >= level) out.add(p);
         }
         return out;
+    }
+
+    /**
+     * V5 Agent 05.5 - the ICT order block of the raid, on the 1m FEED
+     * timeframe (the timeframe the sweep and its rejection wick are read on):
+     * the NEWEST opposite-close candle (down-close for a long, up-close for a
+     * short) among the {@code ote.obLookbackBars} bars BEFORE the sweep bar,
+     * i.e. the last opposite candle before the move that swept the level
+     * reversed. Only that newest candle is the OB; the alarm keeps it only
+     * when its range overlaps the OTE band. 09-25 10:06 long: the 10:05 bar
+     * [30755.00, 30803.50] (down-close) - the up-closing 10:06 raid bar is the
+     * rejection. G1 14:53 short: the 14:52 bar [30632.00, 30640.00] (up-close).
+     */
+    Optional<PdArray> ictOrderBlock(boolean bullish) {
+        for (int i = sweepPrior.size() - 1; i >= 0; i--) {
+            Candle c = sweepPrior.get(i);
+            boolean opposite = bullish ? c.getClose() < c.getOpen() : c.getClose() > c.getOpen();
+            if (!opposite) continue;
+            return Optional.of(new PdArray("OB", bullish, c.getLow(), c.getHigh(), c.getTimestamp()));
+        }
+        return Optional.empty();
     }
 
     /**
@@ -589,7 +644,15 @@ public final class OteSetupDriver {
         List<PdArray> candidates = impulse
                 ? impulseCandidates(z.bullish())
                 : pd.candidates(z.bullish(), linked, orderBlock);
+        boolean ictOb = impulse && OteConfig.PD_SOURCE_ICT_OB.equals(pdArraySource);
+        // Selection is Agent 04's rule in both sources (entry nearest the
+        // 0.705; tie -> OB). 05.5 measured the brief's strict OB > WICK > FVG
+        // priority on the tape: it dropped the 09-28 12:32 NY_LUNCH fill (the
+        // sweep OB's entry clamps to the 0.618, RR(T1) 0.40 < 1.0) and moved
+        // 09-23 01:42 ASIA off its FVG entry - see A-05.5 section 2.
         Optional<PdArray> best = PdArrayLocator.bestInBand(candidates, z);
+        lastPdPick = best.map(p -> p.kind() + " [" + p.bottom() + "," + p.top() + "]@" + p.at()
+                + (impulse ? " src=" + pdArraySource : "")).orElse(null);
         if (best.isEmpty()) {
             lastStall = impulse ? "impulse-no-pd-array-at-sweep" : "no-pd-array-overlapping-band";
             return false;
@@ -602,10 +665,16 @@ public final class OteSetupDriver {
         double entry = roundTick(PdArrayLocator.entryLevel(best.get(), z));
         if (core.recordOteAlarm(entry, best.get().kind(), best.get().farEdge(), candle.getTimestamp())) {
             publish(new OteAlarmEvent(symbol, candle.getTimestamp(), z.bullish(), best.get().kind(),
-                    best.get().bottom(), best.get().top(), entry, z.f62(), z.f79(), reaction));
+                    best.get().bottom(), best.get().top(), entry, z.f62(), z.f79(),
+                    ictOb ? reaction + " | pd " + lastPdPick : reaction));
             return true;
         }
         return false;
+    }
+
+    /** The PD array the last {@link #alarm} call picked (kind [bottom,top]@bar), or null. */
+    public String lastPdPick() {
+        return lastPdPick;
     }
 
     /** Why the last {@link #alarm} call did not fire (null when it did / n.a.). */
@@ -663,6 +732,7 @@ public final class OteSetupDriver {
             postSweepHigh = Double.NaN;
             postSweepLow = Double.NaN;
             sweepBar = null;
+            sweepPrior = List.of();
             episodeHigh = Double.NaN;
             episodeLow = Double.NaN;
         }
@@ -686,6 +756,9 @@ public final class OteSetupDriver {
         impulseMode = false;
         impulseSweptLevel = Double.NaN;
         sweepBar = null;
+        sweepPrior = List.of();
+        feedBars.clear();
+        lastPdPick = null;
         episodeHigh = Double.NaN;
         episodeLow = Double.NaN;
     }

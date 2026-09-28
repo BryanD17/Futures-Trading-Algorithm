@@ -210,13 +210,18 @@ class ArmedNeverSilentTapeTest {
         assertThat(silentBars).as("OTE_ARMED bars with lastGateFailed == null and no emission").isEmpty();
     }
 
+    /**
+     * V5 Agent 05.5: with the default {@code ote.pdArraySource=ICT_OB} the
+     * 09-25 10:06 LONG no longer stalls - the 10:05 down-close bar is its
+     * order block and the setup emits on the raid bar. The 05.4 reason
+     * ({@code ALARM: impulse-no-pd-array-at-sweep ...}) is still asserted
+     * under {@code SWEEP_BAR} in {@link IctOrderBlockAtSweepTest}.
+     */
     @Test
-    void the0925LongCarriesItsRealReason() {
-        assertThat(state1006).isEqualTo(SetupState.OTE_ARMED);
-        assertThat(reason1006).isNotNull();
-        assertThat(armedGates).anySatisfy(g -> {
-            assertThat(g.getCandleTime()).isEqualTo(et("2026-09-25T10:06"));
-            assertThat(g.getReason()).isEqualTo(reason1006);
-        });
+    void the0925LongNowEmitsOnTheIctOrderBlock() {
+        assertThat(state1006).isEqualTo(SetupState.IN_TRADE);
+        assertThat(reason1006).isNull();
+        assertThat(armedGates).noneSatisfy(g ->
+                assertThat(g.getCandleTime()).isEqualTo(et("2026-09-25T10:06")));
     }
 }
