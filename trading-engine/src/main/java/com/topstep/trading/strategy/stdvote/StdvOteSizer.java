@@ -12,7 +12,7 @@ import com.topstep.trading.strategy.TradeTier;
  * size        = floor(riskDollars / perContract)
  * size        = min(size, maxMicros)                  (size.maxMicros, default 20)
  * if size &lt; minMicros (size.minMicros, default 1) -&gt; DENY
- *     "SIZE: stop too wide for risk budget (need $X, have $Y)"
+ *     "SIZE: stop too wide for risk budget (need $X/micro, have $Y)"
  * </pre>
  * {@code size.preferredMicros} (default 5) is a PREFERENCE used only when
  * geometry is unknown — never a floor. A killzone boost is applied AFTER
@@ -121,8 +121,13 @@ public final class StdvOteSizer {
         }
         long raw = (long) Math.floor(riskDollars / perContract + 1e-9);
         if (raw < floor) {
+            // AGENT-05.4: the reason names the $ per micro (the two numbers
+            // /api/setup and the autopsy CSV show).
+            String needTxt = floor == 1
+                    ? String.format("$%.2f/micro", perContract)
+                    : String.format("$%.2f = %d x $%.2f/micro", need, floor, perContract);
             return new RiskSize(0, true, String.format(
-                    "SIZE: stop too wide for risk budget (need $%.2f, have $%.2f)", need, riskDollars),
+                    "SIZE: stop too wide for risk budget (need %s, have $%.2f)", needTxt, riskDollars),
                     riskDollars, need, perContract, stopTicks);
         }
         int cap = Math.max(floor, maxMicros);

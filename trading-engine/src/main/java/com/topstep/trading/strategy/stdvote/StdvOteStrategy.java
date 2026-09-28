@@ -736,6 +736,11 @@ public final class StdvOteStrategy implements TradingStrategy {
             System.out.println("[BIAS] emission blocked: current bias "
                     + lastRecordedBias + " not aligned with setup "
                     + setup.htfBias + " (grace preserves progress, not entries)");
+            // AGENT-05.4: no silent refusal — the reason reaches SetupContext
+            // (self-written, cleared on the next attempt like any diagnostic).
+            setup.lastGateFailed = "BIAS: emission blocked (current bias " + lastRecordedBias
+                    + " not aligned with setup " + setup.htfBias + ")";
+            gateDiagnosticSelfWritten = true;
             return false;
         }
 
@@ -934,6 +939,17 @@ public final class StdvOteStrategy implements TradingStrategy {
             if (Double.compare(p.sigma(), sigma) == 0) return p;
         }
         return null;
+    }
+
+    /**
+     * AGENT-05.4: the runner's "armed but not emitted" reason (ALARM stall,
+     * SIZE deny, open position, ...). Written as a SELF-written diagnostic so
+     * it is cleared at the top of the next {@link #tryEmit} attempt and can
+     * never poison M9 on a later re-plan. Only meaningful while OTE_ARMED.
+     */
+    void writeArmedDiagnostic(String reason) {
+        setup.lastGateFailed = reason;
+        gateDiagnosticSelfWritten = true;
     }
 
     /** Force-invalidate the current setup with a logged reason. */

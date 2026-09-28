@@ -270,8 +270,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private java.time.LocalDate tradingDayAtEmit;
     /** AGENT-05 (RC-16): a position for this symbol was observed after emission. */
     private boolean positionSeenSinceEmit = false;
-    /** AGENT-05: last SIZE denial published (one GateDecisionEvent per distinct reason). */
-    private String lastSizeDenial;
+    /** AGENT-05.4: the last risk-derived sizing outcome (SIZE deny numbers). */
+    private StdvOteSizer.RiskSize lastRiskSize;
     /** Bars left before a re-arm may fire; -1 = no re-arm pending. */
     private int rearmCooldownRemaining = -1;
     /** Previous candle's state, to detect INVALIDATED transitions. */
@@ -1045,6 +1045,18 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 tryEmitOrder(context);
             } else if (oteDriver.lastStall() != null) {
                 funnel.recordStall("OTE_ARMED", oteDriver.lastStall());
+                // AGENT-05.4: an ALARM stall is a reason, not silence.
+                if (ctx.state == SetupState.OTE_ARMED) alarmStallDiagnostic(oteDriver.lastStall(), candle);
+            } else if (ctx.state == SetupState.OTE_ARMED) {
+                // AGENT-05.4: alarm refused without a stall (defensive).
+                armedDiagnostic("ALARM", "ALARM: not fired (driver gave no stall reason)",
+                        candle.getClose(), Double.NaN);
+            }
+            // AGENT-05.4 invariant: OTE_ARMED at the end of this step with no
+            // emission ALWAYS carries a reason in SetupContext.
+            if (ctx.state == SetupState.OTE_ARMED && ctx.lastGateFailed == null) {
+                armedDiagnostic("EMIT", "EMIT: armed, attempt produced no signal and no reason",
+                        candle.getClose(), Double.NaN);
             }
             if (ctx.state == SetupState.IN_TRADE) {
                 OteAgreementStats stats = OteAgreementStats.forSymbol(symbol);
@@ -1069,8 +1081,80 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             endEmittedSetup(ctx.lastGateFailed, context);
         }
 
+        // AGENT-05.4: a new OTE_ARMED episode republishes its diagnostics.
+        if (ctx.state != SetupState.OTE_ARMED) lastArmedDiagnostic = null;
+
         // Remember the state for INVALIDATED-transition detection (SA4).
         lastSeenState = ctx.state;
+    }
+
+    // ======================================================================
+    // AGENT-05.4 - no silent stand-down. Every OTE_ARMED bar that does not
+    // emit writes its reason into SetupContext.lastGateFailed (self-written,
+    // cleared at the top of the next attempt, so a later re-plan retries)
+    // and publishes ONE GateDecisionEvent per distinct reason per armed
+    // episode with the two numbers. /api/setup, the autopsy CSV and M9 all
+    // see it. DIAGNOSIS_V5 D-07 can no longer happen silently.
+    // ======================================================================
+
+    /** Last diagnostic published for the current OTE_ARMED episode. */
+    private String lastArmedDiagnostic;
+
+    private void armedDiagnostic(String gate, String reason, double numberA, double numberB) {
+        core.writeArmedDiagnostic(reason);
+        publishArmedDecision(gate, reason, numberA, numberB);
+    }
+
+    /** Publish (deduplicated per episode) one GateDecisionEvent for an armed refusal. */
+    private void publishArmedDecision(String gate, String reason, double numberA, double numberB) {
+        if (reason == null || reason.equals(lastArmedDiagnostic)) return;
+        lastArmedDiagnostic = reason;
+        System.out.println("[" + symbol + "] OTE_ARMED, not emitted: " + reason);
+        if (eventBus != null) {
+            com.topstep.trading.event.EngineTelemetry.publish(eventBus,
+                    new com.topstep.trading.event.GateDecisionEvent(symbol, lastCandleInstant,
+                            lastCandleInstant == null ? null
+                                    : com.topstep.trading.event.EngineTelemetry.sessionOf(lastCandleInstant),
+                            String.valueOf(core.getSetupContext().state), gate, reason, numberA, numberB));
+        }
+    }
+
+    /** Gate token of a core-written reason ("M7: ..." -> "M7"). */
+    private static String gateOf(String reason) {
+        int colon = reason.indexOf(':');
+        return colon > 0 && colon < 24 ? reason.substring(0, colon).trim() : "VALIDATOR";
+    }
+
+    /** The OTE driver's alarm stall, as a SetupContext reason with numbers. */
+    private void alarmStallDiagnostic(String stall, Candle candle) {
+        SetupContext ctx = core.getSetupContext();
+        OteZone z = ctx.ote;
+        double lo = z == null ? Double.NaN : Math.min(z.f62(), z.f79());
+        double hi = z == null ? Double.NaN : Math.max(z.f62(), z.f79());
+        String band = z == null ? "?" : "[" + lo + "," + hi + "]";
+        double swept = ctx.sweep == null ? Double.NaN : ctx.sweep.getSweptLevel();
+        switch (stall) {
+            case "no-entry-block-14:45-17:00CT":
+                armedDiagnostic("NO_ENTRY", "NO_ENTRY: 14:45-17:00 CT no-entry block (armed, band " + band + ")",
+                        candle.getClose(), Double.NaN);
+                return;
+            case "impulse-no-pd-array-at-sweep":
+                armedDiagnostic("ALARM", "ALARM: impulse-no-pd-array-at-sweep (no sweep OB, rejection wick or"
+                        + " FVG/OB at swept " + swept + " overlaps band " + band + ")", swept, lo);
+                return;
+            case "no-pd-array-overlapping-band":
+                armedDiagnostic("ALARM", "ALARM: no-pd-array-overlapping-band (band " + band + ")", lo, hi);
+                return;
+            case "impulse-awaiting-rejection":
+                armedDiagnostic("ALARM", "ALARM: impulse-awaiting-rejection (need a close back beyond swept "
+                        + swept + " in the trade direction, band " + band + ")", swept, lo);
+                return;
+            case "no-reaction-at-band":
+                armedDiagnostic("ALARM", "ALARM: no-reaction-at-band (band " + band + ")", lo, hi);
+                return;
+            default:
+                armedDiagnostic("ALARM", "ALARM: " + stall + " (band " + band + ")", lo, hi);
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -1857,24 +1941,34 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 tier = TradeTier.TIER_1;
             } else {
                 core.invalidate("no qualifying tier");
+                // AGENT-05.4: the death is reasoned (lastGateFailed) AND published.
+                publishArmedDecision("TIER", "TIER: no qualifying tier", Double.NaN, Double.NaN);
                 return;
             }
         }
+        // AGENT-05 (V5 RC-16) / AGENT-05.4: M9 is cleared PER ATTEMPT - a
+        // diagnostic left by an earlier bar must never veto this bar's
+        // attempt (D-06); every early return below writes its own reason.
+        ctx.lastGateFailed = null;
         // NO-OVERLAP (scalp): never emit while a position is open on this
         // symbol. Legacy is single-shot by construction (IN_TRADE terminal).
-        if (scalpMode && (positionOpen
-                || (context != null && context.hasPosition(symbol)))) {
+        boolean accountPosition = context != null && context.hasPosition(symbol);
+        if (scalpMode && (positionOpen || accountPosition)) {
+            armedDiagnostic("POSITION", "POSITION: " + symbol + " position still open (latch="
+                    + positionOpen + ", account=" + accountPosition + ")",
+                    positionOpen ? 1 : 0, accountPosition ? 1 : 0);
             return;
         }
-        // AGENT-05 (V5 RC-16): M9 is cleared PER ATTEMPT — a diagnostic left
-        // by an earlier bar must never veto this bar's attempt (D-06).
-        ctx.lastGateFailed = null;
+        lastRiskSize = null;
         int size = scalpMode ? scalpSize(ctx, tier, context) : sizeForTier(ctx, tier, context);
         if (size <= 0) {
             // SIZE deny (stop too wide for the risk budget even at
-            // size.minMicros): published once per distinct reason as a
-            // GateDecisionEvent; the OTE window keeps counting and the setup
-            // expires/invalidates normally if conditions do not improve.
+            // size.minMicros): the reason and both $ numbers go into
+            // SetupContext + one GateDecisionEvent (AGENT-05.4); the OTE
+            // window keeps counting and a later re-plan retries.
+            StdvOteSizer.RiskSize rs = lastRiskSize;
+            armedDiagnostic("SIZE", rs != null ? rs.reason() : "SIZE: sizer returned 0 micros",
+                    rs != null ? rs.needDollars() : Double.NaN, rs != null ? rs.haveDollars() : Double.NaN);
             return;
         }
         // tryEmit runs the validator; if it passes, a signal is published.
@@ -1892,6 +1986,16 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         } finally {
             com.topstep.trading.event.SignalCandleClock.set(prevClock);
         }
+        if (!emitted && ctx.state == SetupState.OTE_ARMED) {
+            // AGENT-05.4: the core wrote its reason (validator / SCALP /
+            // BIAS) - publish it; never leave the refusal silent.
+            if (ctx.lastGateFailed == null) {
+                armedDiagnostic("EMIT", "EMIT: core refused the attempt without a reason",
+                        ctx.entry, ctx.stop);
+            } else {
+                publishArmedDecision(gateOf(ctx.lastGateFailed), ctx.lastGateFailed, ctx.entry, ctx.stop);
+            }
+        }
         if (emitted) {
             // Latch (both modes, RC-16): cleared by this symbol's
             // PositionClosedEvent (real close or synthetic release).
@@ -1902,7 +2006,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             AccountState account = (context != null) ? context.getAccountState() : null;
             tradesAtEmit = (account != null) ? account.getTradesToday() : -1;
             tradingDayAtEmit = (account != null) ? account.getCurrentTradingDay() : null;
-            lastSizeDenial = null;
+            lastArmedDiagnostic = null;
         }
     }
 
@@ -1958,17 +2062,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         StdvOteSizer.RiskSize rs = StdvOteSizer.riskDerived(budget, entry, stop,
                 spec.tickSize(), spec.tickValue(),
                 com.topstep.trading.risk.RiskConfig.minMicros(), cap);
+        lastRiskSize = rs;   // AGENT-05.4: the caller writes + publishes the deny
         if (rs.denied()) {
-            if (!rs.reason().equals(lastSizeDenial)) {
-                lastSizeDenial = rs.reason();
-                System.out.println("[" + symbol + "] " + rs.reason()
-                        + " — entry " + entry + " stop " + stop + " (" + tier + ")");
-                if (eventBus != null) {
-                    com.topstep.trading.event.EngineTelemetry.publish(eventBus, new com.topstep.trading.event.GateDecisionEvent(
-                            symbol, lastCandleInstant, null, String.valueOf(ctx.state),
-                            "SIZE", rs.reason(), rs.needDollars(), rs.haveDollars()));
-                }
-            }
             return 0;
         }
         int size = rs.contracts();
