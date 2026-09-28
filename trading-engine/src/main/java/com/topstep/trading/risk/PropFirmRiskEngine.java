@@ -141,38 +141,34 @@ public class PropFirmRiskEngine {
         if (derived.denied()) {
             return deny(signal, derived.reason(), derived.needDollars(), derived.haveDollars());
         }
-        // Envelope for the REQUESTED size: the risk-derived size times the
-        // killzone boost the strategy may apply AFTER it (RiskConfig
-        // .maxSizeBoost: 1.0 unless scalp mode), never above maxContracts /
-        // size.maxMicros, and never more $ than the DLL / MLL room.
-        double roomCap = Math.min(remainingDailyLoss, Double.isNaN(remainingMllRoom)
-                ? Double.POSITIVE_INFINITY : remainingMllRoom);
-        int roomContracts = (int) Math.floor(roomCap / dollarRiskPerContract + 1e-9);
-        int envelope = com.topstep.trading.strategy.stdvote.StdvOteSizer.applyBoost(
-                derived.contracts(), RiskConfig.maxSizeBoost(), hardCap);
-        envelope = Math.min(envelope, Math.min(hardCap, roomContracts));
+        // Envelope for the REQUESTED size (FABLE-REJECT #1): the $ risk of
+        // the FINAL order never exceeds the budget. derived.contracts() is
+        // exactly floor(budget / $perMicro) capped at min(maxContracts,
+        // size.maxMicros) — budget already = min(riskPerTrade, DLL room,
+        // MLL room). A request above it is DENIED with both numbers; the
+        // engine never trims (and never silently re-sizes).
+        int envelope = derived.contracts();
         int requested = signal.getQuantity();
         int quantity;
         String sizeNote;
         if (requested <= 0) {
-            quantity = derived.contracts();
+            quantity = envelope;
             sizeNote = "risk-derived " + quantity;
         } else if (requested <= envelope) {
             quantity = requested;
-            sizeNote = "honoured requested " + requested + " (risk-derived " + derived.contracts()
-                    + ", envelope " + envelope + ")";
+            sizeNote = "honoured requested " + requested + " (risk-derived max " + envelope + ")";
         } else {
-            quantity = envelope;
-            sizeNote = "REDUCED requested " + requested + " -> " + envelope
-                    + " (risk-derived " + derived.contracts() + " @ $" + String.format("%.2f", dollarRiskPerContract)
-                    + "/micro, budget $" + String.format("%.2f", budget) + ", maxContracts " + limits.getMaxContracts() + ")";
-            System.out.println("[RISK-RESIZE] WARN " + sym + ": " + sizeNote);
-        }
-        if (quantity < minMicros) {
+            double reqRisk = requested * dollarRiskPerContract;
+            if (reqRisk > budget + 1e-9) {
+                return deny(signal, String.format(
+                        "RISK: requested %d micros x $%.2f = $%.2f > risk budget $%.2f (max %d micros)",
+                        requested, dollarRiskPerContract, reqRisk, budget, envelope),
+                        reqRisk, budget);
+            }
             return deny(signal, String.format(
-                    "SIZE: stop too wide for risk budget (need $%.2f, have $%.2f)",
-                    minMicros * dollarRiskPerContract, Math.min(budget, roomCap)),
-                    minMicros * dollarRiskPerContract, Math.min(budget, roomCap));
+                    "RISK: requested %d micros > max contracts %d (maxContracts %d, size.maxMicros %d)",
+                    requested, hardCap, limits.getMaxContracts(), RiskConfig.maxMicros()),
+                    requested, hardCap);
         }
 
         // 6. Check total contracts limit — SACRED (max contracts).

@@ -1893,10 +1893,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         }
         int size = rs.contracts();
         if (boost > 1.0) {
-            int boosted = StdvOteSizer.applyBoost(size, boost, cap);
+            // FABLE-REJECT #1: the boost never raises $ risk above the budget.
+            int boosted = StdvOteSizer.applyBoost(size, boost, cap, budget, rs.perContract());
             if (boosted != size) {
                 System.out.println("[" + symbol + "] KILLZONE SIZE BOOST x" + boost
-                        + " -> " + boosted + " micros (risk-derived " + size + ", cap " + cap + ")");
+                        + " -> " + boosted + " micros (risk-derived " + size + ", cap " + cap
+                        + ", budget $" + budget + ")");
             }
             size = boosted;
         }

@@ -113,20 +113,6 @@ public final class RiskConfig {
     }
 
     /**
-     * Largest killzone size boost the strategy may apply on top of the
-     * risk-derived size. The risk engine honours a boosted request up to
-     * this multiple of the per-trade budget (never above maxContracts, the
-     * DLL room, or the total-contracts cap).
-     */
-    public static double maxSizeBoost() {
-        boolean scalp = "true".equalsIgnoreCase(System.getProperty("scalpMode.enabled", "false").trim());
-        if (!scalp) return 1.0;
-        double b = doubleProp("scalp.killzoneSizeBoost", 1.5);
-        if (Double.isNaN(b) || b < 1.0) return 1.0;
-        return Math.min(2.0, b);
-    }
-
-    /**
      * True inside the Topstep daily no-entry / flatten block
      * [14:45, 17:00) America/Chicago (SACRED; DST-correct via the zone).
      * Null time -> false.

@@ -46,7 +46,7 @@ class ScalpRiskProfileTest {
         return new StrategySignalEvent(
                 SignalType.LONG_ENTRY, "MNQ", OrderSide.BUY,
                 21000.0, 20990.0, 21030.0, "legacy test",
-                TradeTier.TIER_1, 6);
+                TradeTier.TIER_1, 5); // V5: within legacy maxContracts 5 (over-cap requests are DENIED)
     }
 
     // ──────────────────────────────────────────────────────────────────────

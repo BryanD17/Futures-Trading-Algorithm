@@ -68,15 +68,41 @@ class RiskDerivedSizingTest {
     }
 
     @Test
-    void preferredMicrosIsNotAFloorAndBoostAppliesAfter() {
+    void preferredMicrosIsNotAFloor() {
         // 80 pt -> 1 micro even though size.preferredMicros = 5.
         assertThat(RiskConfig.preferredMicros()).isEqualTo(5);
         assertThat(StdvOteSizer.riskDerived(250, 20000, 19920, MNQ_TICK, MNQ_TICK_VALUE, 1, 20).contracts())
                 .isEqualTo(1);
-        // Boost x1.5 after the risk-derived size, never above the cap.
-        assertThat(StdvOteSizer.applyBoost(6, 1.5, 20)).isEqualTo(9);
-        assertThat(StdvOteSizer.applyBoost(18, 1.5, 20)).isEqualTo(20);
-        assertThat(StdvOteSizer.applyBoost(3, 1.5, 5)).isEqualTo(4);
+    }
+
+    /** FABLE-REJECT #1: the killzone boost never raises $ risk above the budget. */
+    @Test
+    void killzoneBoostNeverExceedsTheDollarRiskBudget() {
+        // $150 budget, 28-pt MNQ stop = 112 ticks = $56/micro -> risk-derived 2 ($112).
+        StdvOteSizer.RiskSize rs = StdvOteSizer.riskDerived(150, 30482.5, 30510.5, MNQ_TICK, MNQ_TICK_VALUE, 1, 20);
+        int boosted = StdvOteSizer.applyBoost(rs.contracts(), 1.5, 20, 150, rs.perContract());
+        System.out.printf("KILLZONE BOOST: budget $150, $%.2f/micro, risk-derived %d, boost x1.5 -> %d micros ($%.2f risk)%n",
+                rs.perContract(), rs.contracts(), boosted, boosted * rs.perContract());
+        assertThat(rs.contracts()).isEqualTo(2);
+        assertThat(boosted).isEqualTo(2);
+        assertThat(boosted * rs.perContract()).isEqualTo(112.0).isLessThanOrEqualTo(150.0);
+        // Across a grid, the boosted $ risk is always <= budget.
+        for (double budget : new double[] {100, 150, 250, 500}) {
+            for (double pts : new double[] {2, 5, 10, 13.25, 28, 39.25}) {
+                StdvOteSizer.RiskSize r = StdvOteSizer.riskDerived(budget, 20000, 20000 - pts, MNQ_TICK, MNQ_TICK_VALUE, 1, 20);
+                if (r.denied()) continue;
+                for (double boost : new double[] {1.25, 1.5, 2.0}) {
+                    int b = StdvOteSizer.applyBoost(r.contracts(), boost, 20, budget, r.perContract());
+                    assertThat(b * r.perContract()).as("budget %s stop %s boost %s", budget, pts, boost)
+                            .isLessThanOrEqualTo(budget + 1e-9);
+                    assertThat(b).isLessThanOrEqualTo(20);
+                }
+            }
+        }
+        // The boost only fills headroom a CAP left below the budget-implied max:
+        // 10-pt stop @ $250 -> 12 by budget; a tier cap of 8 leaves headroom;
+        // x1.5 -> min(12, 12, 20) = 12 ($240 <= $250).
+        assertThat(StdvOteSizer.applyBoost(8, 1.5, 20, 250, 20.0)).isEqualTo(12);
     }
 
     @Test
@@ -111,25 +137,29 @@ class RiskDerivedSizingTest {
     }
 
     @Test
-    void riskEngineHonoursRequestedSizeAndNeverSilentlyResizes() {
+    void riskEngineHonoursRequestedSizeAndDeniesAnythingAboveTheBudget() {
         PropFirmRiskEngine engine = new PropFirmRiskEngine();
         AccountState acct = new AccountState(50_000.0);
         RiskLimits scalp = RiskLimits.topstep50kScalp(); // $150, maxContracts 20
-        // 20-pt stop: $40/micro -> risk-derived 3. Strategy asks 2 -> honoured.
+        // 20-pt stop: $40/micro -> risk-derived max 3 ($120). Strategy asks 2 -> honoured.
         var smaller = engine.evaluate(longSignal(20000, 19980, 20020, 2), acct, scalp);
         assertThat(smaller.getOrder().getQuantity()).isEqualTo(2);
         assertThat(smaller.getReason()).contains("honoured requested 2");
-        // Strategy asks 3 == derived -> 3.
+        // Strategy asks 3 == derived max -> 3 ($120 <= $150).
         assertThat(engine.evaluate(longSignal(20000, 19980, 20020, 3), acct, scalp)
                 .getOrder().getQuantity()).isEqualTo(3);
-        // Strategy asks 12 (not a boost the profile allows) -> LOUD reduction to 3.
-        var big = engine.evaluate(longSignal(20000, 19980, 20020, 12), acct, scalp);
-        assertThat(big.getOrder().getQuantity()).isEqualTo(3);
-        assertThat(big.getReason()).contains("REDUCED requested 12 -> 3");
-        // Scalp killzone boost (x1.5) is honoured up to floor(3 x 1.5) = 4.
+        // Strategy asks 4 ($160 > $150 budget) -> DENIED with both numbers (no trimming,
+        // scalp mode or not — a killzone boost can never buy extra dollar risk).
         System.setProperty("scalpMode.enabled", "true");
-        assertThat(engine.evaluate(longSignal(20000, 19980, 20020, 4), acct, scalp)
-                .getOrder().getQuantity()).isEqualTo(4);
+        var over = engine.evaluate(longSignal(20000, 19980, 20020, 4), acct, scalp);
+        System.out.println("RISK over-budget request: " + over.getReason());
+        assertThat(over.isAllowed()).isFalse();
+        assertThat(over.getReason())
+                .isEqualTo("RISK: requested 4 micros x $40.00 = $160.00 > risk budget $150.00 (max 3 micros)");
+        // Over maxContracts (legacy max 5) with $ inside the budget -> denied too.
+        var tooMany = engine.evaluate(longSignal(20000, 19995, 20010, 6), acct, RiskLimits.topstep50k());
+        assertThat(tooMany.isAllowed()).isFalse();
+        assertThat(tooMany.getReason()).contains("requested 6 micros");
     }
 
     @Test

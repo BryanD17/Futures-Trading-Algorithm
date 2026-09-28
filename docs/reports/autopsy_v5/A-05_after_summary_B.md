@@ -86,7 +86,7 @@ episodes (BIAS_SET arrivals)=14 stateArrivals={BIAS_SET=14, DISPLACED=6, IDLE=6,
 
 ## Signal / order / trade log
 
-- 2026-09-24 08:45 ET PRE_NY | SHORT_ENTRY e=30482.5 s=30510.5 t=30454.5 rr=1.00 q=2 | ALLOW qty=2 Approved: 2 contracts (honoured requested 2 (risk-derived 2, envelope 3)), $112.00 risk ($56.00/micro), budget $150.00 (base $150.00), R:R 1.00:1, DLL room: $1000.00
+- 2026-09-24 08:45 ET PRE_NY | SHORT_ENTRY e=30482.5 s=30510.5 t=30454.5 rr=1.00 q=2 | ALLOW qty=2 Approved: 2 contracts (honoured requested 2 (risk-derived max 2)), $112.00 risk ($56.00/micro), budget $150.00 (base $150.00), R:R 1.00:1, DLL room: $1000.00
 - 2026-09-24 09:02 ET PRE_NY | CLOSED SELL q=2 in=30482.5 out=30510.5 pnl=-112.00 R=0.00 Stop hit
 
 ## FunnelTelemetry (current session): [FUNNEL MNQ] BIAS_SET=1 MANIP_DONE=10 SWEEP_DONE=10 DISPLACED=2 MSS_CONFIRMED=3 OTE_ARMED=0 IN_TRADE=0 | invalidated: HTF bias flip=4, impulse origin violated before OTE entry=3, expired=3, HTF bias NEUTRAL beyond grace=2 | stalls: SWEEP_DONE:no-recent-displacement=852, SWEEP_DONE:no-fvg-for-displacement=93, SWEEP_DONE:displacement-wrong-direction=82, MSS_CONFIRMED:no-reaction-at-band=52

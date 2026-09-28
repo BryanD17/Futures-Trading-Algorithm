@@ -169,10 +169,16 @@ class ProfileRiskIndependenceTest {
         // it clamps to, it clamps to the SAME number in all three profiles.
         String strict = verdicts.get(TradeProfile.STRICT);
         String qty = strict.split("\\|")[1];
-        assertThat(qty).isNotEqualTo("none");
-        assertThat(Integer.parseInt(qty))
-                .as("500 contracts must not survive the risk engine")
-                .isLessThan(500);
+        // AGENT-05 (V5, FABLE-REJECT #1): an over-budget request is now DENIED
+        // with its numbers instead of being trimmed — 500 contracts still
+        // never survive, and the verdict is identical under every profile.
+        if ("none".equals(qty)) {
+            assertThat(strict).startsWith("false|none|RISK: requested 500 micros");
+        } else {
+            assertThat(Integer.parseInt(qty))
+                    .as("500 contracts must not survive the risk engine")
+                    .isLessThan(500);
+        }
     }
 
     @ParameterizedTest(name = "{0}")

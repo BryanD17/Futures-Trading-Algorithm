@@ -16,8 +16,10 @@ import com.topstep.trading.strategy.TradeTier;
  * </pre>
  * {@code size.preferredMicros} (default 5) is a PREFERENCE used only when
  * geometry is unknown — never a floor. A killzone boost is applied AFTER
- * the risk-derived size ({@link #applyBoost}) and never above maxMicros or
- * the Topstep cap. PropFirmRiskEngine re-derives with this same function
+ * the risk-derived size ({@link #applyBoost}) and NEVER raises the dollar
+ * risk above the budget (FABLE-REJECT #1): boosted = min(floor(boost x
+ * size), floor(budget / $perMicro), cap). With a pure risk-derived size the
+ * boost is therefore a no-op on risk — by design. PropFirmRiskEngine re-derives with this same function
  * and honours the strategy's requested size (it never silently re-sizes).
  *
  * <p>MNQ ($0.50/tick, 4 ticks/pt = $2/pt) at $250: stop 10/20/40/80 pts →
@@ -132,13 +134,20 @@ public final class StdvOteSizer {
     }
 
     /**
-     * Killzone boost AFTER the risk-derived size: floor(size x boost), never
-     * above {@code cap} (maxMicros / Topstep cap) and never below the input.
+     * Killzone boost AFTER the risk-derived size (FABLE-REJECT #1 fix):
+     * {@code min(floor(size x boost), floor(budget / perContract), cap)} and
+     * never below the input. The dollar risk of the result NEVER exceeds
+     * {@code budgetDollars}: the boost can only fill headroom left by a
+     * cap below the budget-implied maximum, never add risk.
      */
-    public static int applyBoost(int size, double boost, int cap) {
+    public static int applyBoost(int size, double boost, int cap,
+                                 double budgetDollars, double perContract) {
         if (size <= 0 || !(boost > 1.0)) return size;
         int boosted = (int) Math.floor(size * Math.min(2.0, boost));
-        return Math.max(size, Math.min(boosted, cap));
+        int budgetMax = (perContract > 0)
+                ? (int) Math.floor(budgetDollars / perContract + 1e-9)
+                : size;
+        return Math.max(size, Math.min(boosted, Math.min(budgetMax, cap)));
     }
 
     /**
