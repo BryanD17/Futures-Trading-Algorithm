@@ -1865,7 +1865,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         }
         double entry = oteCalculator.chooseEntry(
                 ctx.ote, OptionalDouble.of(ctx.pdArrayInOte), spec.tickSize());
-        double stop = oteCalculator.stopPrice(ctx.ote, spec.tickSize(), stopBufferTicks);
+        // Size on the SAME stop tryEmit will plan (Agent 04's anchored stop
+        // when the OTE is dealing-range anchored) — never a different geometry.
+        double stop = core.plannedStopForSizing(spec.tickSize(), stopBufferTicks);
         double dllRoom = Double.NaN;
         double mllRoom = Double.NaN;
         AccountState account = (context != null) ? context.getAccountState() : null;

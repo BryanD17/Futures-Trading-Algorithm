@@ -72,21 +72,22 @@ public final class RiskConfig {
         return clamp(intProp(SIZE_PREFERRED_MICROS, 5), minMicros(), maxMicros());
     }
 
-    /** Legacy-profile RR floor (risk.rrFloor, default 1.0). */
+    /**
+     * Legacy-profile RR floor — delegated to Agent 04's {@code OteConfig} so the
+     * validator (M7) and PropFirmRiskEngine read the SAME number (risk.rrFloor, 1.0).
+     */
     public static double rrFloorLegacy() {
-        return doubleProp(RR_FLOOR, DEFAULT_RR_FLOOR_LEGACY);
+        return com.topstep.trading.strategy.stdvote.OteConfig.rrFloor(false);
     }
 
-    /** Scalp-profile RR floor (risk.rrFloor.scalp, else risk.rrFloor, else 0.8). */
+    /** Scalp-profile RR floor — same reader as the validator (risk.rrFloor.scalp, 0.8). */
     public static double rrFloorScalp() {
-        String v = cfg().getRaw(RR_FLOOR_SCALP);
-        if (v != null && !v.isBlank()) return doubleProp(RR_FLOOR_SCALP, DEFAULT_RR_FLOOR_SCALP);
-        return doubleProp(RR_FLOOR, DEFAULT_RR_FLOOR_SCALP);
+        return com.topstep.trading.strategy.stdvote.OteConfig.rrFloor(true);
     }
 
-    /** Single RR ceiling (risk.rrCeiling, default 5.0). */
+    /** Single RR ceiling — same reader as the validator (risk.rrCeiling, 5.0). */
     public static double rrCeiling() {
-        return doubleProp(RR_CEILING, DEFAULT_RR_CEILING);
+        return com.topstep.trading.strategy.stdvote.OteConfig.rrCeiling();
     }
 
     /** risk.haltOnProfitTarget; default depends on mode (LIVE true, SIM false). */

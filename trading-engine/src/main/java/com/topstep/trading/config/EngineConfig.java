@@ -175,9 +175,6 @@ public final class EngineConfig {
         k.add(key("size.minMicros", Type.INT, "1", "risk-derived size below this is DENIED (SIZE: ...); band [1,20]"));
         k.add(key("size.preferredMicros", Type.INT, "5", "fallback size when geometry is unknown; never a floor"));
         k.add(key("size.maxMicros", Type.INT, "20", "hard micro ceiling per position (also capped by RiskLimits.maxContracts)"));
-        k.add(key("risk.rrFloor", Type.DOUBLE, "1.0", "THE RR floor (validator M7 + PropFirmRiskEngine), legacy profile"));
-        k.add(key("risk.rrFloor.scalp", Type.DOUBLE, "0.8", "RR floor for the scalp profile"));
-        k.add(key("risk.rrCeiling", Type.DOUBLE, "5.0", "THE RR ceiling (validator, final target)"));
         k.add(key("risk.haltOnProfitTarget", Type.BOOL, null, "stop at the profit target (unset: LIVE true / SIM false)"));
         k.add(key("news.blockWithoutCalendar", Type.BOOL, "false", "let a Mock/absent economic calendar block trades"));
         k.add(key("order.ttlBars", Type.INT, null, "SIM resting-order TTL in 1m bars (unset: ote.windowBars x detector.timeframe x 2 = 80)"));
