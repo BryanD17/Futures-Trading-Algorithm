@@ -1,0 +1,1013 @@
+================================================================================
+================================================================================
+        TRADE FLOW — WHY-NO-TRADE ROOT CAUSE • FULL FUNNEL AUTOPSY •
+        ALL-SESSIONS ENTRY • FABLE DIAGNOSE → 5× OPUS FIX → FABLE VERIFY
+              MASTER REMEDIATION PROMPT — V5 (TRADE FLOW UNBLOCK)
+================================================================================
+================================================================================
+
+DOCUMENT NAME:    TRADE_FLOW_UNBLOCK_MASTER_PROMPT_V5.txt
+VERSION:          V5 (trade-flow unblock + all-sessions + risk-correct entries)
+REPOSITORY:       https://github.com/BryanD17/Futures-Trading-Algorithm.git
+DEFAULT BRANCH:   Main   (CAPITAL M — every PR targets --base Main.)
+PREDECESSORS:     V1 (CHART_FIX), V2 (CHART_FIX verification), V3 (TOPDOWN_OTE),
+                  V4 (ICT_STACK).
+LAST COMMIT SEEN: 2c43df9 (2026-08-12) "fix: funnel progression + bias
+                  stability — SIM now takes trades (#150)"
+CURRENT STATE:    Owner reports ZERO trades in every mode and every session.
+                  Agent 00 reproduced this on the real tape: 0 signals in five
+                  configurations over 7,830 real 1m bars (DIAGNOSIS_V5.md).
+PURPOSE:          Find EVERY reason a trade does not get sent, FIX every one,
+                  and PROVE with tape numbers that the engine takes multiple
+                  high-quality, risk-correct trades in Asia, London, NY AM,
+                  NY PM and the pre-session windows whenever confluence aligns.
+TOTAL AGENTS:     9  (00 Fable diagnose → 01–05 Opus fix → 06 Fable verify →
+                  07 Fable gap-hunt → 08 Fable sign-off)
+MODEL TOPOLOGY:   Fable 5.1 = DIAGNOSE + VERIFY + SIGN-OFF (00, 06, 07, 08).
+                  Opus = FIX (01–05, five parallel worktrees). Fable never
+                  merges an Opus fix it has not re-verified against the tape.
+                  Opus never marks its own work ✅ — only Fable does.
+TARGET END STATE: On the real MNQ tape replayed through the REAL engine path,
+                  the engine emits and FILLS ≥ 1 trade in EACH of Asia,
+                  London, NY AM, NY PM, pre-NY, pre-Asia; every trade passes
+                  the mandatory chain with a gate-by-gate proof; every trade
+                  sits inside the Topstep envelope; the GOLDEN CASES reproduce
+                  within tolerance; ALL existing tests pass; bootRun runs the
+                  SAME configuration the tests proved.
+
+================================================================================
+SECTION 0 — THE EXECUTION PROTOCOL  ("READ THIS FIRST")
+================================================================================
+
+You are Claude Code operating as a PRINCIPAL-LEVEL quant + platform engineer.
+"The code looks fine" is never evidence. A number from the tape is evidence.
+A test that fails before the fix and passes after is evidence. A gate
+histogram that moves is evidence.
+
+0.1  THE GOLDEN LOOP  (Fable → Opus×5 → Fable)
+  STEP 1  Read the PROGRESS LEDGER (Section 1).
+  STEP 2  Find the FIRST agent whose status is not ✅ COMPLETE.
+  STEP 3  Obey the agent's MODEL ROLE (Fable diagnoses/verifies and may write
+          only harnesses, telemetry, tests, docs; Opus fixes inside its
+          ownership map and marks 🔄 READY-FOR-FABLE, never ✅).
+  STEP 4  Execute EVERY task of that agent, in order, end-to-end.
+  STEP 5  Run EVERY acceptance criterion with real evidence into Appendix A.
+  STEP 6  Commit on the agent's branch → push → PR --base Main → squash-merge
+          (Opus PRs merge ONLY after a Fable agent stamps FABLE-VERIFIED).
+  STEP 7  Update the LEDGER.
+  STEP 8  RETURN TO STEP 1. Do NOT stop. Do NOT ask "shall I continue?".
+  ONLY STOPPING CONDITION: all nine agents ✅ AND Appendix F fully green.
+  RESUME: re-read the ledger + Appendix A, `git fetch && git checkout Main &&
+  git pull`, resume at the first agent that is not ✅. Never trust memory
+  over the ledger.
+
+0.2  CRITICAL RULES
+  R1  NEVER skip an agent. NEVER reorder Fable/Opus phases.
+  R2  NEVER mark a criterion ✅ without evidence in Appendix A.
+  R3  NEVER "fix" no-trade by deleting a gate. A gate may be (a) corrected,
+      (b) re-classified BLOCKING → SCORING, or (c) re-parameterised — each
+      change cites the tape number and the ICT rule it preserves.
+  R4  NEVER loosen the Topstep envelope: DLL, MLL, max contracts, and the
+      14:45–17:00 CT no-entry/flatten block are SACRED.
+  R5  NEVER ship a change that only trades in SIM random-walk. Proof = the
+      real tape through the real runner path.
+  R6  ALWAYS build both modules before every PR. Red build = no PR.
+  R7  ALWAYS run the full test suite. A regression is a blocker.
+  R8  ALWAYS keep configuration in ONE source of truth (Agent 01).
+  R9  ALWAYS log the EFFECTIVE configuration at boot.
+  R10 Mark ⛔ BLOCKED only with a precise owner action; a ⛔ never halts the loop.
+  R11 After every agent: "Return to the GOLDEN LOOP STEP 1."
+
+0.3  GIT + PR WORKFLOW (one branch per agent; Opus agents use worktrees)
+  git worktree add ../wt-agent-NN -b fix/agent-NN-v5-<short-name> Main
+  ... work ...  build both modules  ... git add -A && git commit -m "agent-NN-v5: ..."
+  git push -u origin fix/agent-NN-v5-<short-name>
+  gh pr create --base Main --head fix/agent-NN-v5-<short-name> --title ... --body ...
+  MERGE GATE: Opus PRs merged ONLY by a Fable agent after verification:
+  gh pr merge <n> --squash --delete-branch ; git checkout Main && git pull
+  MERGE ORDER for the Opus PRs: 01 → 02 → 03 → 04 → 05 (rebase each).
+
+0.4  RUN COMMANDS
+  cd trading-engine && ./gradlew clean build ; cd ../api-backend && ./gradlew build
+  Autopsy (real tape, real runner path — Agent 00's harness):
+    AUTOPSY_DIR=<abs path to trading-engine/src/test/resources/tape> \
+    AUTOPSY_CONFIG=A AUTOPSY_OUT=<abs out dir> \
+    AUTOPSY_TRANSCRIPT="2026-09-28T13:30,2026-09-28T15:45" \
+    ./gradlew :trading-engine:cleanTest :trading-engine:test --tests '*FunnelAutopsyHarness*'
+    (AUTOPSY_PROPS="k=v;k=v" sets extra system properties; configs: A = no
+    flags / B = scalp+floor5+hysteresis / C = scalp+allSessions+VOTE / custom)
+  SIM via API: cd api-backend && ./gradlew bootRun ; curl localhost:8080/api/status
+  Dashboard: cd dashboard-frontend && npm install && npm run dev
+  Owner's chart: TradingView MNQ1! 5m, chart TZ UTC-7 (PT) — ADD 3 HOURS FOR ET.
+
+================================================================================
+SECTION 1 — PROGRESS LEDGER
+================================================================================
+
+Status markers: ⬜ NOT STARTED | 🔄 IN PROGRESS | 🔄 READY-FOR-FABLE (Opus only)
+                | ✅ COMPLETE (Fable stamps) | ⛔ BLOCKED (with owner action)
+
+PHASE 0 — FABLE DIAGNOSIS
+  [✅] Agent 00 — Fable — Funnel Autopsy — COMPLETE 2026-09-28. DIAGNOSIS_V5.md,
+                  FunnelAutopsyHarness, real tape committed, 18 root causes routed.
+
+PHASE 1 — OPUS FIXERS (five worktrees, parallel; merge order 01→05)
+  [⬜] Agent 01 — Opus — Configuration & Wiring.  ASSIGNED: RC-01, RC-17(telemetry)
+  [⬜] Agent 02 — Opus — Time & Session Domain.   ASSIGNED: RC-02, RC-03
+  [⬜] Agent 03 — Opus — Bias, Manip Leg, Sweep & Raid. ASSIGNED: RC-04..RC-08
+  [⬜] Agent 04 — Opus — Displacement/FVG/MSS/OTE/RR.   ASSIGNED: RC-09..RC-13(band), RC-18
+  [⬜] Agent 05 — Opus — Post-Signal Pipeline.    ASSIGNED: RC-13(risk), RC-14..RC-17
+
+PHASE 2 — FABLE VERIFICATION + LOOP
+  [⬜] Agent 06 — Fable — Integration Verify
+  [⬜] Agent 07 — Fable — Gap Hunt Loop
+  [⬜] Agent 08 — Fable — Final Sign-Off
+
+LEDGER NOTES (append dated lines; never delete):
+  2026-09-28  Document created. Pre-flight findings captured from repo @2c43df9.
+  2026-09-28  Agent 00: TopstepX API key REJECTED (errorCode 3) — ⛔ owner must
+              refresh ~/.topstep/credentials.properties apiKey (LIVE cannot
+              connect either). Real MNQ/MES 1m tape (7 days, chart-parity to
+              the tick) obtained from a public feed and committed under
+              trading-engine/src/test/resources/tape/. tools/fetch_topstep_tape.py
+              fetches 21+ days once the key works.
+  2026-09-28  Agent 00: owner's live JVM (pid 14220, since 09-22) runs a jar
+              built from the OPEN PR #151 branch with flags
+              -Dbackfill.days=7 -Dstdvote.displacement.recentBars=12
+              -Dstdvote.displacement.atrMult=1.2 -Dstdvote.displacement.bodyPct=0.55.
+              Agent 01 must make those (and #151's recentBars key) first-class.
+              PR #151 remains open — Agent 06 rebases/merges it or the owner does.
+  2026-09-28  Agent 00: api-backend/build/libs jar is LOCKED by pid 14220, so
+              `:api-backend:clean` fails; build without clean succeeds
+              (663 tests, 0 failures, 122 result files). Do not kill the owner's
+              engine; use `./gradlew :api-backend:build`.
+
+================================================================================
+SECTION 2 — PRE-FLIGHT FINDINGS  (PF-01..PF-12; verdicts in DIAGNOSIS_V5.md §1)
+================================================================================
+
+PF-01 strategy selection silent fallback — CONFIRMED (StdvOteFactory:40-62).
+PF-02 strict sequential AND-chain — CONFIRMED (11 gates, product of pass rates).
+PF-03 M3 NY-only in the default path — CONFIRMED (runner isInstrumentKillzone
+      :1214; cfg A kzOpen bars: ASIA 0, PRE_NY 0, PRE_ASIA 0).
+PF-04 flags never set at runtime — CONFIRMED + worse (94 keys; bootRun forwards
+      none; owner runs java -jar with 4 flags, one only exists on PR #151).
+PF-05 warmup guard wall-clock — CONFIRMED (LiveEngineRunner:659,815,827;
+      WarmupGuard:26-28 drops everything when lastTs == null; no timeout).
+PF-06 seven deny paths — CONFIRMED; plus the risk engine IGNORES the signal
+      quantity and re-sizes from riskPerTrade/$risk (PropFirmRiskEngine:127-158).
+PF-07 two RR bands — CONFIRMED with numbers: legacy validator [2.0,∞) vs risk
+      [3.0,6.0]; scalp [0.8,1.5] both.
+PF-08 3-of-4 deadlock — CONFIRMED + root cause: V2 (AMD) can never vote
+      (DailyAmdCycleTracker:107-108 vs :152) → VOTE mode is 3-of-3; first
+      decisive vote after 29 h on tape.
+PF-09 KillzoneClock dual zone — DRIFTED (chicagoZone is dead code); three time
+      systems, no DST table.
+PF-10 re-arm/expiry — CONFIRMED + expiry counts from BIAS_SET; canRearm needs
+      an open killzone in BOTH modes (:1063) → 94.5 % of ASIA bars are
+      INVALIDATED-await-rearm-kzClosed.
+PF-11 telemetry not the runtime — CONFIRMED (:8080 did not answer on 09-28).
+PF-12 G1 died inside a killzone — CONFIRMED: M2 direction (bias BULLISH
+      13:45–15:00 on a short), then M5 displacement (15:00 bar body 53 % < 65 %),
+      then M5 FVG linkage (15:35: c1.low 30589.00 vs c3.high 30593.50).
+
+HONEST ASSESSMENT FOR THE OWNER: zero trades is over-determined — eleven
+independent defects, any one of which alone yields zero. All five Opus agents
+must land before the first trade can appear. The setup gates are computing
+the WRONG thing (levels, bias direction, anchors, FVG linkage), not the right
+thing too strictly. Session/killzone becomes SCORING; the setup gates stay
+mandatory. Size must come from risk (floor 1 micro, configurable), and ONE
+RR band must be the single truth.
+
+================================================================================
+SECTION 3 — THE AGENTS
+================================================================================
+
+Every agent block: MODEL ROLE, PRIORITY, THE QUESTION, INPUTS, CONTEXT (files
+owned), TASKS, OUTPUTS, ACCEPTANCE CRITERIA, HAND-OFF, FAILURE HANDLING,
+COMMIT MESSAGE, AFTER COMPLETION. A Fable agent never begins verification
+until its Opus inputs exist; Agent 08 never signs off until every upstream
+agent has returned valid results.
+
+################################################################################
+AGENT 00 — FABLE — FUNNEL AUTOPSY  ✅ COMPLETE (see DIAGNOSIS_V5.md, Appendix A-00)
+################################################################################
+
+Delivered: PF re-verification, 94-key config diff table, gate-death
+histograms for five configurations (each row sums to the session's bars;
+7,830 total), G1/G2/G3 transcripts with the rejecting gates and numbers,
+root-cause register RC-01..RC-18, routing table, sanity checks, swallowed
+exception map. Harness: trading-engine/src/test/.../FunnelAutopsyHarness.java.
+Tape: trading-engine/src/test/resources/tape/real_{MNQ,MES}_1m.json.
+
+################################################################################
+AGENT 01 — OPUS — CONFIGURATION & WIRING  (single source of truth)
+################################################################################
+
+MODEL ROLE:        Claude Opus (fixer) — worktree wt-agent-01
+PRIORITY:          P0 — merges FIRST; every other Opus agent rebases on it
+ASSIGNED ROOT CAUSES: RC-01, RC-17 (GateDecisionEvent + telemetry counters);
+                   PF-01, PF-04, PF-11.
+
+THE QUESTION:      "Does the engine the owner actually launches run the
+                    configuration we test, and can we see every effective
+                    flag at boot and every gate death at runtime?"
+
+INPUTS:            DIAGNOSIS_V5.md §2 (config diff table), §5, RC-01, RC-17.
+
+CONTEXT (files owned — ONLY these plus new files you create):
+  trading-engine/src/main/java/com/topstep/trading/
+    EngineFacade.java, TradingEngineMain.java, SimEngineRunner.java (config
+    + subscription sections only), LiveEngineRunner.java (config +
+    subscription sections only), strategy/stdvote/{StdvOteFactory,ScalpConfig}.java,
+    NEW: config/EngineConfig.java, config/EngineConfigLoader.java,
+    NEW: src/main/resources/engine-defaults.properties,
+    NEW: event/GateDecisionEvent.java
+  api-backend/build.gradle, api-backend/src/main/resources/application.yml,
+  api-backend/src/main/java/com/topstep/api/controller/{StatusController,SetupController}.java
+  trading-engine/build.gradle (property forwarding list)
+  docs/QUICK_START.md, README.md (run section)
+
+TASKS:
+  1. Create `EngineConfig` — an immutable record of EVERY behavioural flag in
+     DIAGNOSIS_V5.md §2 (all 94 keys, including PR #151's
+     stdvote.displacement.recentBars, which Main must now honour). Every
+     field: typed value, documented default, `source`
+     (DEFAULT | PROPERTIES_FILE | SYSTEM_PROPERTY | ENV).
+  2. Create `EngineConfigLoader` with precedence: -D > ENGINE_* env >
+     ${user.home}/topstep-trading/engine.properties > classpath
+     engine-defaults.properties > code default. Load ONCE at EngineFacade
+     construction; inject into runners and factory. Replace every
+     `System.getProperty(...)` in the engine with a read from EngineConfig
+     (ScalpConfig becomes a thin view over EngineConfig; keep its public API
+     so Agents 02–05 compile). Classes that read properties in static
+     initialisers or constructors (SimEngineRunner, BiasVoteEngine.install,
+     IctLibConfig, ChartEngine, ConfluenceField, TradeProfile, …) must read
+     the loaded config, not the raw property.
+  3. NEW DEFAULTS in engine-defaults.properties: session.allSessions=true,
+     session.gateMode=SCORING (Agent 02's key — you carry it), the owner's
+     proven values backfill.days=7, and bias.hysteresis=true. Do NOT flip
+     scalp.enabled by default.
+  4. Boot log: fixed-width "EFFECTIVE ENGINE CONFIG" table key | value |
+     source, then one line per mode consequence (e.g. "SESSION GATE:
+     SCORING (entries allowed all sessions except 14:45–17:00 CT)"). Expose
+     at GET /api/status under `effectiveConfig`.
+  5. bootRun parity + `java -jar` parity: api-backend's bootRun forwards the
+     same -D list trading-engine's test task forwards AND reads
+     engine.properties; `./gradlew bootRun -Pengine.props=<path>`. The owner
+     launches `java -jar api-backend-1.0.0-SNAPSHOT.jar` — that path must
+     load engine.properties too.
+  6. Strategy selection sanity: StdvOteFactory FAILS FAST (throws with a
+     message naming strategy.legacyFallback) for a non-tradeable symbol
+     unless strategy.legacyFallback=true. Log the chosen strategy class.
+  7. Event-bus ordering: assert (and unit-test) every runner handler
+     subscribes before the connector publishes its first CandleEvent;
+     EventBus.publish while !running must be an ERROR with a counter, not a
+     WARN.
+  8. Runtime gate telemetry: `GateDecisionEvent` (symbol, candleTime,
+     session, state, gate, reason, numberA, numberB) published per
+     candle-with-setup and per denial; last 200 exposed at GET /api/setup so
+     the dashboard can answer "which gate killed it".
+  9. Swallowed exceptions on the signal → order path (DIAGNOSIS_V5.md §5
+     table): the ones in YOUR files (runners, EventBus) become
+     log-at-ERROR + telemetry counter; leave `// AGENT-05: ...` markers for
+     the connector/execution ones.
+
+ACCEPTANCE CRITERIA:
+  [ ] `grep -rn "System.getProperty" trading-engine/src/main` returns ONLY
+      EngineConfigLoader (paste output).
+  [ ] `./gradlew bootRun` log shows the EFFECTIVE ENGINE CONFIG table (paste)
+      and the values match `./gradlew test` forwarding for every key.
+  [ ] GET /api/status returns effectiveConfig (paste curl output).
+  [ ] Starting with symbol "NQ" fails fast naming strategy.legacyFallback.
+  [ ] New test: handlers subscribed before first candle (name + PASS).
+  [ ] GET /api/setup returns gate decisions with gate + reason + two numbers
+      (paste one JSON row).
+  [ ] Zero silent catches remain in your files (paste grep).
+  [ ] Build + full tests green in both modules.
+  [ ] FunnelAutopsyHarness cfg A (no flags) now produces the SAME histogram
+      as a run with the engine.properties defaults (paste both totals).
+
+HAND-OFF:          Agents 02–05 rebase on this PR; all new flags go through
+                   EngineConfig.
+COMMIT MESSAGE:    agent-01-v5: single EngineConfig source of truth, boot config table, bootRun/java -jar parity, fail-fast strategy selection, GateDecisionEvent
+AFTER COMPLETION:  Mark 🔄 READY-FOR-FABLE, fill Appendix A-01, push PR
+                   (base Main) — do NOT merge. Return to GOLDEN LOOP STEP 1.
+
+################################################################################
+AGENT 02 — OPUS — TIME & SESSION DOMAIN  (M3, expiry, re-arm, timezones)
+################################################################################
+
+MODEL ROLE:        Claude Opus (fixer) — worktree wt-agent-02
+ASSIGNED ROOT CAUSES: RC-02, RC-03; PF-03, PF-09, PF-10.
+
+THE QUESTION:      "Can a valid setup be entered in ANY session the market
+                    is open, with killzones raising quality/size instead of
+                    blocking, and is every time comparison provably correct
+                    across ET/CT/PT and DST?"
+
+INPUTS:            DIAGNOSIS_V5.md §3 (cfg A: INVALIDATED-await-rearm-kzClosed
+                   = ASIA 2059/2179, LONDON 1182/2160, PRE_NY 540/540,
+                   PRE_ASIA 290/290), RC-02, RC-03.
+
+CONTEXT (files owned):
+  trading-engine/src/main/java/com/topstep/trading/
+    strategy/{KillzoneClock,SilverBulletClock,SessionManager,KillzonePhase,
+      TradingSessionCalendar}.java
+    domain/{TradingSession,TradingSessionManager}.java
+    strategy/stdvote/StdvOteRunnerStrategy.java — ONLY: isInstrumentKillzone,
+      isScalpWindow, isPrimeKillzone, allSessionEntryWindow, killzone
+      bookkeeping block, expiry / re-arm block (processScalpRearm,
+      processLegacyRearm, canRearm, rearm), lastCandleInstant
+    strategy/stdvote/StdvOteStrategy.java — ONLY: onCandle expiry logic +
+      createdAtBar handling
+    validation/MandatoryConfluenceValidator.java — ONLY the M3 block
+    NEW: strategy/session/SessionClassifier.java, SessionGateMode.java,
+      SessionWindow.java
+    Tests for all of the above.
+
+TASKS:
+  1. `SessionClassifier.classify(Instant) → SessionWindow` in
+     America/New_York: ASIA 19:00–02:00 (Sun opens 18:00), LONDON 02:00–08:00
+     (prime 02:00–05:00), PRE_NY 08:00–09:30, NY_AM 09:30–12:00 (prime
+     09:45–11:00), NY_LUNCH 12:00–13:30, NY_PM 13:30–15:45 (prime
+     13:45–15:00), NO_ENTRY 15:45–18:00 (= 14:45–17:00 CT), PRE_ASIA
+     18:00–19:00, WEEKEND Fri 17:00 → Sun 18:00; plus primeKillzone and
+     silverBullet booleans. Constants in one place; CT/PT equivalents documented.
+  2. `SessionGateMode {BLOCKING, SCORING}` from EngineConfig
+     (`session.gateMode`, default SCORING). M3 SCORING: pass iff window ∉
+     {NO_ENTRY, WEEKEND}; window + prime flags written into SetupContext.
+     BLOCKING: legacy behaviour for A/B. Decouple from scalpMode entirely.
+  3. Killzone → scoring: primeKillzone adds O1 and the killzoneSizeBoost;
+     Asia/London non-prime entries get NO penalty.
+  4. KillzoneClock: route every public method through SessionClassifier;
+     remove the dead chicagoZone; keep the public API.
+  5. Candle-time vs wall-clock: every gate that says "now" uses the CANDLE
+     timestamp. Grep runner + validator + scorers for Instant.now() and fix
+     every trading-decision use (leave logging).
+  6. DST + boundary table test: ≥ 40 instants covering 2026-03-08 and
+     2026-11-01, Sunday open, Friday close, 14:45 CT, 17:00/18:00 ET, and the
+     G1 instant 2026-09-28 15:05 ET → NY_PM + prime=true.
+  7. Setup lifecycle: expiry measured from SWEEP_DONE (RC-03), default 60
+     bars on 1m / 12 on 5m, exposed as bars AND minutes; INVALIDATED → IDLE
+     re-arm after cooldown in every mode; canRearm must NOT require a
+     killzone when gateMode=SCORING; a re-armed setup must not be
+     re-invalidated on the SAME bias event (read `biasEpoch` from
+     SetupContext; Agent 03 writes it).
+  8. Re-run FunnelAutopsyHarness cfg A BEFORE/AFTER: `INVALIDATED-await-
+     rearm-kzClosed` and GATE-M3 must be ZERO outside NO_ENTRY/WEEKEND.
+
+ACCEPTANCE CRITERIA:
+  [ ] SessionClassifier table test ≥ 40 instants PASS (paste names).
+  [ ] G1 instant → NY_PM / prime=true (paste assertion).
+  [ ] Instant.now() audit in strategy/validation/chartstate: only logging
+      remains (paste, annotate).
+  [ ] After: kzClosed + M3 bars = 0 in ASIA, LONDON, PRE_NY, NY_AM, NY_LUNCH,
+      NY_PM, PRE_ASIA (paste histogram row); NO_ENTRY/WEEKEND still block.
+  [ ] session.gateMode=BLOCKING reproduces the pre-fix cfg A histogram (paste both).
+  [ ] Lifecycle tests: expires at N bars from SWEEP_DONE, re-arms after
+      cooldown without a killzone in SCORING, no double-invalidate (3 tests).
+  [ ] Build + full tests green.
+
+COMMIT MESSAGE:    agent-02-v5: all-sessions entry (SCORING gate mode), SessionClassifier, candle-time gating, DST-proof windows, setup lifecycle from SWEEP_DONE
+AFTER COMPLETION:  🔄 READY-FOR-FABLE, Appendix A-02, PR (base Main), do not merge.
+
+################################################################################
+AGENT 03 — OPUS — BIAS, MANIPULATION LEG, SWEEP & RAID  (M2, M2b, M4)
+################################################################################
+
+MODEL ROLE:        Claude Opus (fixer) — worktree wt-agent-03
+ASSIGNED ROOT CAUSES: RC-04, RC-05, RC-06, RC-07, RC-08; PF-08.
+
+THE QUESTION:      "Does the machine ever legitimately leave IDLE — is the
+                    HTF bias reachable AND pointed the right way, is the
+                    manipulation leg found, and does a real sweep of a real
+                    level (the London high 30,640 in G1) score ≥ the floor?"
+
+INPUTS:            DIAGNOSIS_V5.md §3 (cfg C M2-NEUTRAL 60–89 %; cfg D
+                   2,031 sweeps rejected at floor 6; raidScore never > 5),
+                   §4 G1 (bias BULLISH 13:45–15:00 on a short day; LevelEngine
+                   PDH/PDL = the Fri 17:00 1-lot print), RC-04..RC-08.
+
+CONTEXT (files owned):
+  trading-engine/src/main/java/com/topstep/trading/
+    strategy/stdvote/{BiasVoteEngine,ManipulationLegDetector,
+      ImpulseLegTracker,PremiumDiscountEvaluator,FractalSwings}.java
+    strategy/{HtfTrendAnalyzer,BarAggregationManager,HtfSeriesRegistry,
+      MultiTimeframeAnalyzer,MarketBias,LiquidityDetector,LiquiditySweep,
+      DailyAmdCycleTracker}.java
+    chartstate/{LevelEngine,EqualLevelDetector,RaidDetector,
+      RaidQualityScorer,InstrumentRaidConfig,KnownLevel,LevelType,
+      LiquidityRaid}.java
+    strategy/stdvote/StdvOteRunnerStrategy.java — ONLY: recordHtfBias /
+      tryRecordManipulationLeg / tryRecordSweep call sites, currentRaidScore,
+      the raid-score resolution block
+    strategy/stdvote/StdvOteStrategy.java — ONLY: recordHtfBias (hysteresis,
+      biasEpoch), recordSweep floor logic
+    strategy/stdvote/SetupContext.java — add biasEpoch, rangeHigh/rangeLow/rangeEq,
+      sessionWindow/prime fields (coordinate names with Agents 02/04)
+    validation/MandatoryConfluenceValidator.java — ONLY M2, M2b, M4 blocks
+    Tests for the above.
+
+TASKS:
+  1. BIAS REACHABILITY (RC-05): fix DailyAmdCycleTracker so V2 can vote
+     (compare against the pre-candle reference); warm-boot M15/M30 (the seed
+     covers only H1/H4/D1); vote rule `bias.voteRule = STRICT_3OF4 | ADAPTIVE`
+     default ADAPTIVE (3-of-4 when 4 vote; 2-of-3 with one abstain; warm
+     pair with agreement when 2+ abstain); hysteresis ON by default
+     (bias.hysteresis=true, neutralGraceBars=3); increment `biasEpoch` on
+     every REAL flip (RC-04).
+  2. BIAS DIRECTION (RC-06): the OTE model's bias is the direction of the
+     day's dealing range / impulse leg with premium-discount context, NOT the
+     15m retrace structure. On G1 the engine must read BEARISH by ~11:30 ET
+     (after HH 30759.25 → LL 30356.75) and stay BEARISH through the retrace
+     into 30640. Demote HtfTrendAnalyzer's 15m/30m structure to ONE vote.
+     Write the M2 truth table test (LOW_SWEEP → long → requires BULLISH, etc.).
+  3. M2b: entry vs equilibrium of the CORRECT dealing range (G1: HH 30759.25 /
+     LL 30356.50 → EQ 30557.875; short @ 30635 = PREMIUM → pass). Publish
+     rangeHigh/rangeLow/rangeEq in SetupContext for Agent 04. G1 unit test.
+  4. Manipulation leg: with SCORING mode there is always a "session"; the
+     leg = counter-bias excursion that sweeps a known level inside the
+     CURRENT SessionWindow, fallback most-recent swing pair (cfg B: MANIP-no-
+     leg 195–232 bars/session because the killzone buffer never falls back).
+     Test on G1 (retrace up into 30,640 after the 30356.75 low).
+  5. LEVEL ENGINE PARITY (RC-08): ignore phantom trading days (< N bars or
+     inside the 17:00–18:00 halt) so a 1-lot settlement print cannot become
+     PDH/PDL; session windows configurable and defaulted to the owner's
+     LuxAlgo windows (London high 30640.00 on 09-28 = the 04:00–06:00 ET
+     window on the tape — pick the window that reproduces it and document);
+     fix `inAsia` dead code and `inNY` starting at 09:00; tolerances in TICKS.
+     Expected 09-28 levels: PDH 30999.50, PDL 30679.00, NY_AM_HIGH 30759.25,
+     NY_AM_LOW 30356.75, LONDON_HIGH 30640.00 (owner) / 30679.00 (02:00 window).
+  6. RAID DETECTION + SCORE FLOOR (RC-07): every sweep must be scored (no
+     silent fallback to the base); wick-rejection math; RaidQualityScorer
+     recalibrated so a textbook sweep of a session level clears the MNQ
+     floor 5 WITHOUT SMT/PDH/killzone; the -1 timing penalty must not apply
+     in SCORING mode; HTF-opposes penalty uses the SAME bias M2 used.
+     Write the weight table + reachability table (session × SMT × level type).
+  7. Starved-pipeline fallback documented base score + test.
+  8. Re-run the autopsy cfg A BEFORE/AFTER: M2, M2b, M4 holding bars per
+     session and the state distribution (how often SWEEP_DONE is reached).
+
+ACCEPTANCE CRITERIA:
+  [ ] Cold-start bars-to-warm per TF before/after; bias non-NEUTRAL within
+      60 bars of start (paste).
+  [ ] M2 truth-table test (4 rows) PASS.
+  [ ] G1: bias BEARISH by 11:30 ET on 09-28 and through 15:00 (paste rows).
+  [ ] G1 M2b: short @30635 vs EQ 30557.875 → PREMIUM → pass (paste).
+  [ ] G1 sweep: 30640.00 raided at 14:52–14:58 ET with score ≥ 5 and factors
+      (paste LiquidityRaid toString).
+  [ ] Raid reachability table pasted; cfg D-equivalent M4-no-sweep < 20 %.
+  [ ] Levels emitted for 2026-09-28 within 1 pt of the expected table above.
+  [ ] Autopsy: cfg C M2-NEUTRAL bars ASIA 1948 → < 300; cfg A deaths
+      "HTF bias became NEUTRAL" 8 → ≤ 2 (paste).
+  [ ] Build + full tests green.
+
+COMMIT MESSAGE:    agent-03-v5: reachable + correctly-directed HTF bias (adaptive vote, V2 fix, hysteresis), M2/M2b correctness, session-aware manipulation leg, level parity, raid score recalibration
+AFTER COMPLETION:  🔄 READY-FOR-FABLE, Appendix A-03, PR (base Main), do not merge.
+
+################################################################################
+AGENT 04 — OPUS — DISPLACEMENT, FVG, MSS, OTE ARM & RR BAND  (M5, M6, M7, M7b)
+################################################################################
+
+MODEL ROLE:        Claude Opus (fixer) — worktree wt-agent-04
+ASSIGNED ROOT CAUSES: RC-09, RC-10, RC-11, RC-12, RC-13 (band), RC-18; PF-07
+                   (validator half), PF-12.
+
+THE QUESTION:      "Once a sweep is confirmed, does the engine see the same
+                    displacement, FVG, MSS and 0.618–0.786 OTE zone the owner
+                    sees, arm at the right bar, plan the entry/stop/target the
+                    owner would, and does the RR band let a textbook trade through?"
+
+INPUTS:            DIAGNOSIS_V5.md §3 (M5-no-recent-displacement 47–51 % of
+                   ASIA/LONDON/NY_PM bars; 6.9 % of 5m bars pass; M5-no-FVG
+                   149–315 bars; M6-no-MSS 216 NY_AM bars; M7-no-reaction 250
+                   ASIA bars; OTE_ARMED reached 1–2× in 7 days), §4 G1 numbers.
+
+CONTEXT (files owned):
+  trading-engine/src/main/java/com/topstep/trading/
+    strategy/stdvote/{OteEntryCalculator,OteZone,StdvProjectionEngine,
+      StdvProjection,Ote30mConfluenceGate,OteAgreementStats,
+      OteAgreementStatsStore,ScalpTargetCalculator}.java
+    strategy/stdvote/StdvOteStrategy.java — recordDisplacement / recordMss /
+      recordOteImpulse / M7 PD-array block / tryEmit (entry/stop/target planning)
+    strategy/stdvote/StdvOteRunnerStrategy.java — ONLY: tryRecordDisplacement,
+      pickFvgFor, tryRecordMss, tryArmOte, computeTier, VariantSelector wiring
+    strategy/{DisplacementDetector,FvgDetector,FairValueGap,
+      MarketStructureShiftDetector,IctStructureDetector,
+      StatisticalRetracementEngine,TradeTier,TradeTierVariant,
+      VariantSelector,AdaptiveStopCalculator,TargetPlacement}.java
+    chart/{ChartEngine,OteBand,OteState,OteZoneSnapshot,AnchorMode}.java
+    ictlib/{FairValueGapDetector,DisplacementScanner,DisplacementRule,
+      StructureEngine,SwingPivots,OrderBlockDetector}.java
+    validation/MandatoryConfluenceValidator.java — ONLY M5, M6, M7, M7b
+    NEW: event/{OteArmedEvent,OteAlarmEvent,OteInvalidatedEvent}.java
+    Tests for the above.
+
+TASKS:
+  1. DISPLACEMENT + FVG LINKAGE (RC-09, RC-10): ONE displacement source;
+     calibrate with the tape (the owner runs atrMult 1.2 / bodyPct 0.55;
+     require ≥ 30 % of real 5m impulses to pass and G1's 15:00 bar — range
+     44.0 = 1.66×avg14, body 53 % — to qualify); FVG = gap created BY the
+     displacement OR within N bars, either detector family, plus OB/IFVG/
+     breaker candidates; prove both FVG modes agree on G1's bearish FVG.
+  2. MSS / CHoCH (RC — M6 216 NY_AM bars): ONE MSS source; G1: 15:05 close
+     30594.50 < prior 5m swing low 30600.75 is the MSS.
+  3. OTE ANCHORS + BAND (RC-11): AnchorMode incl. DEALING_RANGE (day's impulse
+     HH→LL for shorts); for G1 the zone must be [30605.50, 30673.00] ± 1 pt
+     from 30759.25 → 30356.50; fib constants 0.618 / 0.705 / 0.786 exactly;
+     explicit ARM (price trades into the band after MSS) / ALARM (PD-array
+     edge OVERLAPS the band AND price reacts: close back toward the trade or
+     limit at 0.705/0.786) / EXPIRE (oteWindowBars) / INVALIDATE (close beyond
+     the range extreme); candidate list must include OB / IFVG / breaker;
+     entry = PD-array edge (G1 OB 30638–30650 → ≈ 30635.75), stop beyond the
+     OB/range with buffer, T1 = 0.5 (30558), T2 = 0.382 (30510), T3 = range
+     low / −1σ / −2σ.
+  4. RR BAND (RC-13): ONE band in RiskLimits read by validator AND
+     PropFirmRiskEngine (Agent 05 removes the second ceiling): floor 1.0R
+     legacy / 0.8R scalp, ceiling 5.0R; validator floor vs T1, ceiling vs
+     final target; recompute RR on every re-plan.
+  5. M7b (RC-18): measure its kill share on the after-tape; re-classify to
+     SCORING by default with config to re-block.
+  6. TIER RESOLUTION: VariantSelector monotonic TIER_1..TIER_4; NO tier maps
+     to "no trade" once M1–M9 pass in legacy OR scalp.
+  7. OTE telemetry: OteArmedEvent / OteAlarmEvent / OteInvalidatedEvent with
+     zone numbers on the bus (feeds /api/setup and the dashboard).
+  8. Re-run the autopsy cfg A BEFORE/AFTER: M5/M6/M7/M7b holding bars per
+     session; OTE_ARMED arrivals; emissions.
+
+ACCEPTANCE CRITERIA:
+  [ ] G1 OTE zone from the engine = [30605.50, 30673.00] ± 1 pt (paste).
+  [ ] G1 bar-by-bar: SWEEP_DONE → DISPLACED (15:00) → MSS_CONFIRMED (15:05)
+      → OTE_ARMED → emit with ET timestamps, entry within 2 pts of 30635.75,
+      stop above 30673, T1 = 30558 ± 1 (paste transcript).
+  [ ] G2/G3 reproduce direction, zone, entry within tolerance (paste).
+  [ ] Exactly one displacement detector and one MSS detector wired (paste grep).
+  [ ] RR band test: 0.9R rejected legacy / accepted scalp; 3.2R accepted both.
+  [ ] Displacement pass-rate on real 5m impulses ≥ 30 % (paste measurement).
+  [ ] M7b kill share before/after; default justified.
+  [ ] OTE events visible in /api/setup (paste JSON).
+  [ ] Autopsy: OTE_ARMED arrivals 1–2 → ≥ 20 on the 7-day tape (paste).
+  [ ] Build + full tests green.
+
+COMMIT MESSAGE:    agent-04-v5: chart-parity OTE (0.618/0.786, dealing-range anchor), explicit arm/alarm/invalidate rules, single displacement+MSS sources, calibrated M5, one RR band, M7b scoring
+AFTER COMPLETION:  🔄 READY-FOR-FABLE, Appendix A-04, PR (base Main), do not merge.
+
+################################################################################
+AGENT 05 — OPUS — POST-SIGNAL PIPELINE  (M8, M9, warmup, risk, sizing, exec)
+################################################################################
+
+MODEL ROLE:        Claude Opus (fixer) — worktree wt-agent-05
+ASSIGNED ROOT CAUSES: RC-13 (risk engine), RC-14, RC-15, RC-16, RC-17
+                   (execution/connector); PF-05, PF-06, PF-07 (risk half).
+
+THE QUESTION:      "When the strategy emits a StrategySignalEvent, does it
+                    become a FILLED bracket order with correct size inside the
+                    Topstep envelope — in SIM and LIVE — and if not, which
+                    denial, warmup guard, sizer floor or connector ate it?"
+
+INPUTS:            DIAGNOSIS_V5.md §3 (09-24 08:45 PRE_NY OTE_ARMED with every
+                   gate green for 41 bars, never emitted: sizer stand-down),
+                   §5 (swallow map, P&L units, no order TTL), RC-13..RC-17.
+
+CONTEXT (files owned):
+  trading-engine/src/main/java/com/topstep/trading/
+    WarmupGuard.java, LiveEngineRunner.java (signal handler, warmup, order
+      path, reconnection), SimEngineRunner.java (signal handler, account checks),
+    risk/{PropFirmRiskEngine,RiskDecision,RiskProfile,TradingRiskManager,
+      PhaseAwareRiskCalculator,MarketConditionFilter}.java
+    domain/{RiskLimits,AccountState,Order,Position}.java
+    strategy/stdvote/{StdvOteSizer,TradeableInstrument}.java
+    strategy/stdvote/StdvOteRunnerStrategy.java — ONLY: scalpSize, sizeForTier,
+      the PositionClosedEvent subscription, positionOpen latch
+    validation/MandatoryConfluenceValidator.java — ONLY M8, M9
+    validation/TradeEntryValidator.java
+    execution/{ExecutionEngine,BracketOrderManager,TrailingStopManager}.java
+    strategy/PartialProfitManager.java
+    connector/{MockConnector,TopstepConnector,TradingConnector,OrderListener,SimWarmBoot}.java
+    news/gating/EventProximityChecker.java, news/MacroNewsManager.java
+    lifecycle/{MultiAccountManager,AccountLifecycle}.java
+    engine/MultiInstrumentEngine.java, strategy/stdvote/StdvOteMultiInstrumentEngine.java
+    Tests for the above.
+
+TASKS:
+  1. WARMUP (RC-15): warmupComplete flips when every REQUIRED subscription
+     has delivered ≥ 1 live candle OR after `warmup.timeoutSeconds` (default
+     120) with a WARN naming the missing symbol; the "created before warmup"
+     check compares CANDLE times; every dropped signal publishes
+     GateDecisionEvent "WARMUP" and increments a /api/status counter.
+  2. RISK ENGINE — ONE TRUTH (RC-13): remove "R:R too high (unrealistic)";
+     read RiskLimits.rrFloor/rrCeiling (Agent 04's band); every deny carries
+     the two numbers and publishes GateDecisionEvent "RISK: <reason>".
+  3. SIZING FROM RISK (RC-14): size = floor(riskDollars / (stopTicks ×
+     tickValue)) clamped to [size.minMicros (default 1), size.maxMicros 20];
+     size.preferredMicros=5 is a preference, not a floor; deny "SIZE: stop
+     too wide for risk budget" with numbers when < minMicros; killzone boost
+     AFTER the risk-derived size; ONE sizer — the risk engine honours the
+     strategy's size (or re-derives identically) and never silently
+     re-sizes; TradeableInstrument no longer throws for minMicros < 5. State
+     the Topstep micro-contract rule you implement (cite or mark ASSUMPTION).
+  4. M8/M9: M8 compares to the config minimum; M9 cleared per attempt; the
+     legacy path must subscribe PositionClosedEvent so a risk denial releases
+     the latch (RC-16).
+  5. ACCOUNT STANDING: fresh SIM AccountState in good standing;
+     risk.haltOnProfitTarget (LIVE true, SIM false); multi-mode SIM must run
+     checkRiskLimits (it never runs today — DIAGNOSIS §5).
+  6. EXECUTION PATH (RC-17): trace signal → order → fill → position →
+     bracket → partial → trailing → close; SIM order TTL; fix P&L units
+     (points × tick value); MockConnector fills processed even if the next
+     candle arrives first; TopstepConnector send/cancel fail loudly; the
+     three BracketOrderManager paths that leave a LIVE position without a
+     stop must flatten or retry; integration test: synthetic valid signal →
+     FILLED bracket in SIM < 5 s.
+  7. MULTI-INSTRUMENT: each runner receives only its symbol; SMT routed;
+     one runner's position must not block another's entry unless the total
+     cap says so; LIVE multi mode must still run day rollover /
+     executionEngine.onNewCandle / breakeven trigger. Test MNQ + MES.
+  8. NEWS / MARKET-CONDITION gates: non-blocking when the calendar provider
+     is Mock/absent; every reject has a reason + GateDecisionEvent.
+  9. FLATTEN-BY safety net in the execution path (defence in depth) + test.
+  10. Re-run the autopsy: signals emitted vs orders sent vs fills per
+      session; every gap explained by a GateDecisionEvent.
+
+ACCEPTANCE CRITERIA:
+  [ ] Warmup test: missing SMT → completes at timeout with WARN; later
+      signal NOT dropped (paste).
+  [ ] `grep -n "unrealistic" risk/` → gone; ceiling from RiskLimits (paste).
+  [ ] Sizer table MNQ stops 10/20/40/80 pts @ $250 → 12/6/3/1; deny at 160 pts.
+  [ ] G1 sizing: entry 30635.75 / stop ~30675 (≈39 pt, $78/micro) → size and
+      $-risk inside the envelope (paste).
+  [ ] SIM integration test: synthetic signal → FILLED bracket < 5 s (PASS).
+  [ ] Fresh SIM account in good standing (paste assertion).
+  [ ] Multi-instrument MNQ + MES trade independently (paste).
+  [ ] GateDecisionEvent publish sites ≥ 10 (paste grep).
+  [ ] Flatten-by test PASS.
+  [ ] Autopsy: signals emitted == orders sent + explained denials (paste).
+  [ ] Build + full tests green.
+
+FAILURE HANDLING:  TopstepConnector cannot be exercised (API key rejected) →
+                   ⛔ "owner must refresh ~/.topstep/credentials.properties"
+                   for the LIVE order test ONLY; SIM path must be proven.
+COMMIT MESSAGE:    agent-05-v5: deterministic warmup, single RR truth, risk-derived sizing with configurable floor, proven SIM execution path, multi-instrument routing, explained denials
+AFTER COMPLETION:  🔄 READY-FOR-FABLE, Appendix A-05, PR (base Main), do not merge.
+
+################################################################################
+AGENT 06 — FABLE — INTEGRATION VERIFY  (merge 01→05, re-autopsy, golden cases)
+################################################################################
+
+MODEL ROLE: Fable (skeptical verifier + merge owner). Read-only on trading code.
+TASKS: for each PR 01→05: rebase on Main, build, full tests, REGENERATE every
+acceptance criterion (never trust pasted evidence), reject on scope creep /
+deleted gate / weakened envelope with "FABLE-REJECT #k", stamp
+"FABLE-VERIFIED <date> <commit>", squash-merge. Then: full autopsy on Main
+under the DEFAULT config → AFTER histogram + ALL-SESSIONS TRADE MATRIX v1
+(Appendix F); G1/G2/G3 within tolerance; 10-trade seeded quality audit;
+regression (both modules, dashboard build, bootRun + /api/status + a SIM trade).
+CRITERIA: all five PRs MERGED; signals > 0 in ≥ 5 of 7 sessions; G1–G3
+reproduce; audit count of "not-a-setup" stated; tests green; no file outside
+ownership maps changed.
+COMMIT MESSAGE: agent-06-v5: fable integration verification — matrix v1, golden cases, quality audit
+
+################################################################################
+AGENT 07 — FABLE — GAP HUNT LOOP
+################################################################################
+
+STARVATION (loop while any holds): S1 a session with ≥ 3 trading days has 0
+fills; S2 one gate > 50 % of deaths past SWEEP_DONE; S3 signals > fills not
+explained by GateDecisionEvents; S4 an audited trade is not the setup; S5 a
+golden case fails; S6 trades/day < 1.0 while the chart shows ≥ 1 setup/day.
+ITERATION: pick worst → diagnose from the CSV (gate, numbers, bars) → RC in
+DIAGNOSIS_V5.md "ITERATION k" → fix class per R3 → spawn Opus 05.k in its own
+worktree inside ONE agent's map → verify as Agent 06 → re-run matrix v k+1 →
+no other session may drop > 10 %. Hard cap 8 iterations then escalate.
+COMMIT MESSAGE: agent-07-v5: gap-hunt loop iterations k..n — matrix green
+
+################################################################################
+AGENT 08 — FABLE — FINAL SIGN-OFF, RUNBOOK, DASHBOARD "WHY NO TRADE"
+################################################################################
+
+TASKS: risk envelope proof on the final run (DLL, MLL, max contracts, zero
+positions at/after 15:45 ET, zero entries in NO_ENTRY/WEEKEND); quality
+report per session/tier vs the zero-trade baseline; dashboard Setup view fed
+by /api/setup (session, state, gate, two numbers, OTE band) live over the
+WebSocket; docs/RUNBOOK_V5.md with the exact proven engine.properties, boot
+table, histogram reading, pre-live checklist, A/B commands; README +
+QUICK_START; docs/REMOVED.md for unplugged paths; close the ledger.
+COMMIT MESSAGE: agent-08-v5: final sign-off — risk proof, quality report, why-no-trade panel, RUNBOOK_V5
+
+================================================================================
+APPENDIX A — PER-AGENT VERIFICATION LOG  (fill in as you go; never delete)
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+A-00  AGENT 00 — FABLE — FUNNEL AUTOPSY
+────────────────────────────────────────────────────────────────────────────────
+STATUS:            ✅ COMPLETE
+DATE:              2026-09-28
+PF RE-VERIFICATION: PF-01 CONFIRMED (StdvOteFactory:40-62) · PF-02 CONFIRMED
+  (validator :461-617) · PF-03 CONFIRMED (runner :1214-1225; cfg A kzOpen
+  ASIA/PRE_NY/PRE_ASIA = 0) · PF-04 CONFIRMED+ (94 keys, bootRun 0, owner
+  java -jar from PR #151) · PF-05 CONFIRMED (LiveEngineRunner:659,815,827;
+  WarmupGuard:26-28) · PF-06 CONFIRMED + risk engine ignores signal qty
+  (:127-158) · PF-07 CONFIRMED [2,∞) vs [3,6] · PF-08 CONFIRMED + V2 never
+  votes (DailyAmdCycleTracker:107-108/:152) · PF-09 DRIFTED (chicagoZone dead)
+  · PF-10 CONFIRMED + expiry from BIAS_SET (:323) + canRearm needs killzone
+  (:1063) · PF-11 CONFIRMED (:8080 no answer) · PF-12 CONFIRMED (M2 dir → M5
+  body 53 % → M5 FVG c1.low 30589.00 vs c3.high 30593.50).
+CONFIG DIFF TABLE:  DIAGNOSIS_V5.md §2 — 94 keys; grep
+  `grep -rn "System.getProperty\|Integer.getInteger\|Boolean.getBoolean\|Long.getLong" trading-engine/src/main api-backend/src/main`
+  (47 direct sites); bootRun forwards NONE; test task forwards 17.
+HISTOGRAM C-A / C-B / C-C (+D, E): docs/reports/autopsy_v5/summary_{A..E}.md;
+  every config = 7,830 candles (ASIA 2179 · LONDON 2160 · PRE_NY 540 · NY_AM
+  900 · NY_LUNCH 540 · NY_PM 810 · PRE_ASIA 290 · NO_ENTRY 410 · WEEKEND 1);
+  signals 0 / orders 0 / fills 0 in all five.
+TOP-3 KILLERS PER SESSION: cfg A — ASIA await-rearm-kzClosed 94.5 % / M2 5.5 %;
+  LONDON kzClosed 54.7 % / M5-no-recent-disp 25.5 % / M5-no-FVG 6.9 %; PRE_NY
+  kzClosed 100 %; NY_AM M5-no-recent 27.7 % / M6-no-MSS 24.0 % / M4 12.2 %;
+  NY_LUNCH M5 29.8 % / kzClosed 28.7 % / M7-no-reaction 15.0 %; NY_PM M5-no-
+  recent 50.7 % / M4 13.7 % / kzClosed 9.3 %; PRE_ASIA kzClosed 100 %.
+  cfg B — M5-no-recent-displacement 33–51 % everywhere; M7-no-reaction 11–18 %;
+  MANIP-no-leg 9–27 %; PRE_NY sizer stand-down 41 bars with all gates green.
+  cfg C — M2-bias-NEUTRAL 60–89 % every session (vote never decisive < 29 h).
+  cfg D — M4-no-sweep 75–92 % (2,031 sweeps rejected at floor 6, score always 5).
+G1 TRANSCRIPT: docs/reports/autopsy_v5/G1_transcript_cfgA.txt — rejecting
+  gates: M2 (bias BULLISH vs SHORT 13:45–15:00), M5 displacement (15:00 bar
+  body 0.53 < 0.65; 14:35 bar range 1.495× < 1.5×), M5 FVG (15:35 c1.low
+  30589.00 vs c3.high 30593.50). Even then: OTE anchored on a 65-pt post-MSS
+  leg not the 402.75-pt range; 39-pt stop → 3 micros legacy / 1 micro scalp
+  (stand-down); legacy RR 2.0 < risk-engine floor 3.0.
+ROOT-CAUSE REGISTER: RC-01..RC-18 (DIAGNOSIS_V5.md §6) → 01: RC-01, RC-17t ·
+  02: RC-02, RC-03 · 03: RC-04..08 · 04: RC-09..13b, RC-18 · 05: RC-13r, RC-14..17.
+SWALLOWED EXCEPTIONS: DIAGNOSIS_V5.md §5 table (MockConnector:307;
+  StdvOteMultiInstrumentEngine:249,258,281-313; TopstepConnector:949,1089,
+  1094,350-354,364,378,251,387; HistoricalBackfill:78; EventBus:146-158,242,
+  266-267; LiveEngineRunner:866,985,1080-1137,1242,1576; BracketOrderManager:
+  316,384,401-404,516,550; OrderListener defaults).
+BUILD + TESTS: `./gradlew :trading-engine:clean :trading-engine:build` green;
+  `./gradlew :api-backend:build` green (clean blocked: jar locked by the
+  owner's pid 14220) — 663 tests, 0 failures, 0 errors, 1 skipped, 122 result files.
+COMMIT HASH / PR:  (filled at merge)
+BLOCKED ITEMS (owner action): refresh TopstepX apiKey in
+  ~/.topstep/credentials.properties (errorCode 3 since ≥ 2026-09-23).
+
+────────────────────────────────────────────────────────────────────────────────
+A-01  AGENT 01 — OPUS — CONFIGURATION & WIRING
+────────────────────────────────────────────────────────────────────────────────
+STATUS:            ⬜
+DATE:              ____-__-__
+ASSIGNED RC:       RC-01, RC-17 (telemetry)
+EVIDENCE PER CRITERION:
+  [ ] getProperty grep:
+  [ ] bootRun boot table:
+  [ ] /api/status.effectiveConfig:
+  [ ] fail-fast on "NQ":
+  [ ] subscription-order test:
+  [ ] /api/setup gate row:
+  [ ] swallow grep:
+  [ ] build + tests:
+  [ ] histogram parity bootRun == harness:
+FILES TOUCHED OUTSIDE OWNERSHIP MAP (must be none):
+FABLE STAMP:
+COMMIT HASH / PR:
+
+────────────────────────────────────────────────────────────────────────────────
+A-02  AGENT 02 — OPUS — TIME & SESSION DOMAIN
+────────────────────────────────────────────────────────────────────────────────
+STATUS:            ⬜
+DATE:              ____-__-__
+ASSIGNED RC:       RC-02, RC-03
+EVIDENCE PER CRITERION:
+  [ ] SessionClassifier table test (count, PASS):
+  [ ] G1 instant → NY_PM prime:
+  [ ] Instant.now() audit:
+  [ ] M3 + kzClosed after (per session):
+  [ ] BLOCKING A/B reproduces old histogram:
+  [ ] lifecycle tests (3):
+  [ ] build + tests:
+BOUNDARY DECISIONS (with alternatives exposed as config):
+FABLE STAMP:
+COMMIT HASH / PR:
+
+────────────────────────────────────────────────────────────────────────────────
+A-03  AGENT 03 — OPUS — BIAS, MANIPULATION LEG, SWEEP & RAID
+────────────────────────────────────────────────────────────────────────────────
+STATUS:            ⬜
+DATE:              ____-__-__
+ASSIGNED RC:       RC-04, RC-05, RC-06, RC-07, RC-08
+EVIDENCE PER CRITERION:
+  [ ] bars-to-warm per TF before/after:
+  [ ] M2 truth table:
+  [ ] G1 bias BEARISH 11:30–15:00:
+  [ ] G1 M2b premium:
+  [ ] G1 sweep of 30640 + score + factors:
+  [ ] raid-score reachability table:
+  [ ] level parity 2026-09-28:
+  [ ] autopsy M2/M4 delta:
+  [ ] build + tests:
+RAID SCORE WEIGHT TABLE (final):
+FABLE STAMP:
+COMMIT HASH / PR:
+
+────────────────────────────────────────────────────────────────────────────────
+A-04  AGENT 04 — OPUS — DISPLACEMENT, FVG, MSS, OTE ARM & RR BAND
+────────────────────────────────────────────────────────────────────────────────
+STATUS:            ⬜
+DATE:              ____-__-__
+ASSIGNED RC:       RC-09, RC-10, RC-11, RC-12, RC-13 (band), RC-18
+EVIDENCE PER CRITERION:
+  [ ] G1 OTE zone [30605.50, 30673.00]:
+  [ ] G1 transcript with ET timestamps + entry/stop/T1:
+  [ ] G2, G3:
+  [ ] single displacement + single MSS wiring:
+  [ ] RR band tests:
+  [ ] displacement pass-rate ≥ 30%:
+  [ ] M7b kill share before/after + default mode:
+  [ ] OTE events in /api/setup:
+  [ ] autopsy OTE_ARMED arrivals ≥ 20:
+  [ ] build + tests:
+ANCHOR MODE CHOSEN + RESIDUAL (pts) PER MODE:
+FABLE STAMP:
+COMMIT HASH / PR:
+
+────────────────────────────────────────────────────────────────────────────────
+A-05  AGENT 05 — OPUS — POST-SIGNAL PIPELINE
+────────────────────────────────────────────────────────────────────────────────
+STATUS:            ⬜
+DATE:              ____-__-__
+ASSIGNED RC:       RC-13 (risk), RC-14, RC-15, RC-16, RC-17
+EVIDENCE PER CRITERION:
+  [ ] warmup timeout + not-dropped:
+  [ ] "unrealistic" removed / RR from RiskLimits:
+  [ ] sizer table 10/20/40/80/160 pts:
+  [ ] G1 sizing + $-risk:
+  [ ] SIM synthetic-signal FILLED < 5 s:
+  [ ] fresh SIM account in good standing:
+  [ ] multi-instrument MNQ+MES:
+  [ ] GateDecisionEvent publish sites ≥ 10:
+  [ ] flatten-by test:
+  [ ] autopsy signals == fills + explained:
+  [ ] build + tests:
+TOPSTEP MICRO-CONTRACT RULE IMPLEMENTED (+ source or "ASSUMPTION"):
+FABLE STAMP:
+COMMIT HASH / PR:
+BLOCKED (LIVE creds): TopstepX apiKey rejected (errorCode 3) — owner refresh.
+
+────────────────────────────────────────────────────────────────────────────────
+A-06  AGENT 06 — FABLE — INTEGRATION VERIFY
+────────────────────────────────────────────────────────────────────────────────
+STATUS / DATE:
+PR VERDICTS:  01: ____  02: ____  03: ____  04: ____  05: ____
+AFTER HISTOGRAM (path + totals):
+ALL-SESSIONS TRADE MATRIX v1:
+GOLDEN CASES G1/G2/G3:
+10-TRADE QUALITY AUDIT (count not-a-setup):
+REGRESSION (tests both modules, dashboard build, bootRun + API SIM trade):
+DEFECT LIST → AGENT 07:
+COMMIT HASH / PR:
+
+────────────────────────────────────────────────────────────────────────────────
+A-07  AGENT 07 — FABLE — GAP HUNT LOOP
+────────────────────────────────────────────────────────────────────────────────
+STATUS / DATE:
+ITERATION LOG:
+  k | starvation | RC-NN | sub-agent 05.k | expected delta | observed delta | merged
+FINAL S1–S6 CHECKS (all false):
+GATE MODE TABLE (M1..M9, M2b, M7b, RISK-*, WARMUP, SESSION → BLOCKING/SCORING):
+COMMIT HASHES / PRs:
+
+────────────────────────────────────────────────────────────────────────────────
+A-08  AGENT 08 — FABLE — FINAL SIGN-OFF
+────────────────────────────────────────────────────────────────────────────────
+STATUS / DATE:
+RISK ENVELOPE NUMBERS:
+QUALITY REPORT (per session, per tier):
+HONEST ASSESSMENT PARAGRAPH:
+DASHBOARD WHY-NO-TRADE VIEW EVIDENCE:
+RUNBOOK_V5.md + engine.properties (verbatim):
+FINAL LEDGER (paste):
+git log origin/Main --oneline -20 (paste):
+
+================================================================================
+APPENDIX B — OWNERSHIP MAP + GATE REFERENCE
+================================================================================
+
+B.1  GATE → OWNER → CURRENT MODE → TARGET MODE
+  M1   instrument ∈ {MNQ,MES,MGC}          Agent 01   BLOCKING → BLOCKING (fail-fast)
+  M2   HTF bias ≠ NEUTRAL & direction ok   Agent 03   BLOCKING → BLOCKING (reachable + correctly directed)
+  M2b  premium/discount vs equilibrium     Agent 03   BLOCKING → BLOCKING (correct range/side)
+  M3   inside killzone                     Agent 02   BLOCKING → SCORING (only NO_ENTRY/WEEKEND block)
+  M4   sweep present & raid ≥ floor        Agent 03   BLOCKING → BLOCKING (score reachable in every session)
+  M5   displacement + FVG                  Agent 04   BLOCKING → BLOCKING (one detector, calibrated, linked)
+  M6   MSS / CHoCH                         Agent 04   BLOCKING → BLOCKING (one detector, fresh window)
+  M7   OTE zone + PD array + entry + RR    Agent 04   BLOCKING → BLOCKING (chart parity, one RR band)
+  M7b  30m OTE confluence verdict          Agent 04   LOG → SCORING (measured; config to re-block)
+  M8   size ≥ minimum                      Agent 05   BLOCKING → BLOCKING (risk-derived size, config floor)
+  M9   lastGateFailed == null              Agent 05   BLOCKING → BLOCKING (cleared per attempt)
+  WARMUP                                   Agent 05   BLOCKING → BLOCKING (deterministic, timeout, candle-time)
+  RISK-*                                   Agent 05   BLOCKING → BLOCKING (one RR ceiling, numbers in reason)
+  NEWS / MARKET                            Agent 05   pass without a real calendar; every reject has a reason
+  ACCOUNT                                  Agent 05   fresh SIM passes; profit halt configurable
+  FLATTEN 14:45 CT                         Agent 02 (gate) + Agent 05 (execution safety net) — SACRED
+
+B.2  FILE OWNERSHIP — as listed in each agent's CONTEXT above. Shared files are
+     split by BLOCK. Fable (00/06/07/08): tests, harnesses, telemetry, docs,
+     dashboard Setup view, Appendix stamps. Never a trading gate.
+
+================================================================================
+APPENDIX C — FLAG REFERENCE (before Agent 01) → EngineConfig KEY (after)
+================================================================================
+  stdvOte.enabled true → strategy.stdvOte=true · (silent fallback) → strategy.legacyFallback=false
+  scalpMode.enabled false → scalp.enabled=false · scalp.allSessions → session.allSessions=true
+  (none) → session.gateMode=SCORING · scalp.killzoneSizeBoost → session.killzoneSizeBoost
+  scalp.minRaidScore 6 → raid.minScore.scalp=6; raid.minScore per instrument 5/5/6
+  scalp.rearmCooldownBars 5 → setup.rearmCooldownBars=5 (no killzone requirement in SCORING)
+  stdvOte.rearmOnInvalidated → setup.rearmOnInvalidated=true
+  stdvOte.setupExpiryBars → setup.expiryBars (from SWEEP_DONE) · stdvOte.oteWindowBars → ote.windowBars
+  stdvOte.mssFreshBars → mss.freshBars · stdvote.displacement.{atrMult,bodyPct,recentBars} → displacement.*
+  stdvote.detectorTimeframe → detector.timeframe · stdvote.symbol/.smt → engine.symbol/.smtSymbol
+  stdvote.multiInstrument → engine.multiInstrument · sim.warmBoot/sim.tape → sim.*
+  bias.hysteresis.enabled → bias.hysteresis=true · bias.neutralGraceBars → 3 · (none) → bias.voteRule=ADAPTIVE
+  bias.vote.mode → bias.vote.mode · ictlib.* · chart.* · trade.profile · confluence.weight.*
+  (none) → warmup.timeoutSeconds=120 · size.minMicros=1 · size.preferredMicros=5 · size.maxMicros=20
+  RiskLimits signalMinRr/MaxRr → risk.rrFloor (1.0 legacy / 0.8 scalp) · risk.rrCeiling=5.0
+  PropFirmRiskEngine "unrealistic" ceiling → REMOVED · (none) → risk.haltOnProfitTarget
+  (none) → news.blockWithoutCalendar=false · backfill.days → backfill.days=7
+  Precedence: -D > ENGINE_<KEY> env > ~/topstep-trading/engine.properties > classpath defaults > code.
+
+================================================================================
+APPENDIX D — ANTI-PATTERNS (each confirmed on tape or in code by Agent 00)
+================================================================================
+  D-01 wall-clock in a replayed decision — BaseEvent:16, WarmupGuard, LiveEngineRunner:659,827
+  D-02 flag read in one JVM not the other — 94 keys, bootRun forwards 0
+  D-03 sequential AND-chain with NEUTRAL default at the top — cfg C M2 60–89 %
+  D-04 two implementations of one concept — 2 displacement, 2 MSS, 2 RR bands, 2 sizers
+  D-05 window measured from the wrong state — expiry from BIAS_SET
+  D-06 stale diagnostic as a gate — M9 / lastGateFailed
+  D-07 size floor above the risk cap — 09-24 08:45 PRE_NY, 41 bars green, 0 emissions
+  D-08 terminal state without re-arm — legacy IN_TRADE after a risk denial (RC-16)
+  D-09 silent strategy fallback — StdvOteFactory
+  D-10 optional confluence implicitly required — raid score never > 5 without SMT/PDH/KZ
+  D-11 penalty for "wrong session" — RaidQualityScorer -1 timing
+  D-12 timezone mixing — three time systems, no DST test
+  D-13 tolerance/level bugs — phantom 1-bar trading day became PDH/PDL
+  D-14 handler subscribed after first event — EventBus.publish drops while !running
+  D-15 fill race — ExecutionEngine activeOrders ArrayList across threads
+  D-16 catch-and-swallow on the order path — 20+ sites (DIAGNOSIS §5)
+  D-17 stale AccountState halts — checkRiskLimits never runs in multi mode
+  D-18 news gate without a calendar — EventProximityChecker on Instant.now()
+  D-19 FVG fully inside a moving band — recordOteImpulse "no PD array" after one was found
+  D-20 RR computed once — validator vs risk engine disagree
+
+================================================================================
+APPENDIX E — GOLDEN CASES  (owner's screenshots, 2026-09-28, MNQ 5m; ET = PT + 3 h)
+================================================================================
+G1 — NY PM SHORT FROM THE 30,640 ORDER BLOCK
+  Dealing range HH 30759.25 (09:45 ET) → LL 30356.50 (11:00 ET); tape: 30759.25 / 30356.75.
+  Fib: 0.786 = 30673.00, 0.618 = 30605.50, 0.5 = 30558.00, 0.382 = 30510.25, 0.236 = 30451.50.
+  OTE band (short) 30605.50–30673.00. London high 30640.00 (tape: 04:00–06:00 ET window;
+  swept 14:52–14:58 ET, high 30650 at 14:53). Bearish OB ~30638–30650. Owner fills:
+  SELL 8 @ 30635.75, adds 8 @ 30591.50 / 8 @ 30582.75, buy-back 16 @ 30600.50.
+  Expected engine: bias BEARISH; sweep 30640 score ≥ 5; displacement 15:00 bar (44 pt,
+  1.66×ATR); MSS 15:05 close 30594.50 < 30600.75; OTE armed in [30605.50, 30673.00];
+  PD array = OB; entry ≈ 30635.75; stop ≈ 30675–30725; T1 30558; T2 30510; T3 30356.50;
+  RR(T1) ≈ 2.0 with a 39-pt stop; size risk-derived ($78/micro → 3 micros at $250).
+  Tolerance: entry ± 2, zone ± 1, T1 ± 1, transitions ± 1 bar.
+G2 — 2026-09-25 (owner wrote 09-27, a Sunday) NY AM: HH ~30926.50 → LL 30684 (marker 30721).
+  Expected: bearish sequence, OTE_ARMED with the same anchor rule; numbers recorded in A-04.
+G3 — 2026-09-28 LONDON 02:00–08:00 ET: range 30679.00–30531.00; sweeps of 30581.25 (06:30).
+  Expected: with SCORING the window is EVALUATED; a correct "no setup" is a PASS; a
+  killed valid setup is an RC. Today: 100 % of the window is await-rearm-kzClosed.
+
+================================================================================
+APPENDIX F — ALL-SESSIONS TRADE MATRIX  (Agent 06 v1 → Agent 07 v k → Agent 08)
+================================================================================
+Tape: real_MNQ_1m.json (7 days)  Symbol: MNQ (+MES SMT)  Config: DEFAULT (no -D)
+  SESSION   | bars | ≥BIAS | ≥MANIP | ≥SWEEP | ≥DISP | ≥MSS | ≥OTE | emitted | filled | closed | W/L | avgR | maxDD | S1?
+  ASIA      | 2179 |       |        |        |       |      |      |         |        |        |     |      |       |
+  LONDON    | 2160 |       |        |        |       |      |      |         |        |        |     |      |       |
+  PRE_NY    |  540 |       |        |        |       |      |      |         |        |        |     |      |       |
+  NY_AM     |  900 |       |        |        |       |      |      |         |        |        |     |      |       |
+  NY_LUNCH  |  540 |       |        |        |       |      |      |         |        |        |     |      |       |
+  NY_PM     |  810 |       |        |        |       |      |      |         |        |        |     |      |       |
+  PRE_ASIA  |  290 |       |        |        |       |      |      |         |        |        |     |      |       |
+  NO_ENTRY  |  410 |   —   |   —    |   —    |   —   |  —   |  —   |    0    |   0    |   —    |  —  |  —   |   —   | must be 0
+  WEEKEND   |    1 |   —   |   —    |   —    |   —   |  —   |  —   |    0    |   0    |   —    |  —  |  —   |   —   | must be 0
+BASELINE (Agent 00, every config): emitted 0 · filled 0 · closed 0.
+GREEN = S1..S6 all false AND NO_ENTRY/WEEKEND rows are 0 AND zero risk-envelope breaches.
+
+================================================================================
+APPENDIX G — GLOSSARY + QUICK CLI
+================================================================================
+  Funnel / Gate death / BLOCKING vs SCORING / Prime KZ / OTE / PD array / MSS /
+  STDV / DLL / MLL / Autopsy / Golden case — as in V4.
+  gh pr list --base Main --state open · gh pr view <n> --json state,mergedAt
+  AUTOPSY_DIR=... AUTOPSY_CONFIG=A ./gradlew :trading-engine:cleanTest :trading-engine:test --tests '*FunnelAutopsyHarness*'
+  AUTOPSY_PROPS="session.gateMode=BLOCKING"  /  "bias.voteRule=STRICT_3OF4"   # A/B
+  curl -s localhost:8080/api/status | jq .effectiveConfig · curl -s localhost:8080/api/setup | jq '.[-20:]'
+
+================================================================================
+  THE GOLDEN LOOP — STEP 1: re-read the ledger; take the first non-✅ agent;
+  obey its role; prove every criterion with a tape number; PR → Main →
+  Fable-verified merge → ledger → Appendix A; return to STEP 1. Do not stop
+  until every agent is ✅ and Appendix F is green.
+================================================================================
