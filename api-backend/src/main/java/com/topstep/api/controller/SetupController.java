@@ -193,7 +193,15 @@ public class SetupController {
             String lastGateFailed,
             Map<String, Object> pd,
             Map<String, Object> vote,
-            Map<String, Object> ote30m) {
+            Map<String, Object> ote30m,
+            // V5 Agent 08: session + dealing-range context for the dashboard
+            // "why no trade" strip. Range values are null (not NaN — Jackson
+            // would emit a non-JSON NaN token) until the range exists.
+            String sessionWindow,
+            boolean primeKillzone,
+            Double rangeHigh,
+            Double rangeLow,
+            Double rangeEq) {
 
         public static SetupSnapshotDto from(SetupContext ctx) {
             List<ProjectionDto> projs = new ArrayList<>();
@@ -222,7 +230,12 @@ public class SetupController {
                     ctx.lastGateFailed,
                     pdBlockFor(ctx.symbol),
                     voteBlockFor(ctx.symbol),
-                    ote30mBlockFor(ctx.symbol));
+                    ote30mBlockFor(ctx.symbol),
+                    ctx.sessionWindow,
+                    ctx.primeKillzone,
+                    finiteOrNull(ctx.rangeHigh),
+                    finiteOrNull(ctx.rangeLow),
+                    finiteOrNull(ctx.rangeEq));
         }
 
         public static SetupSnapshotDto idle(String symbol) {
@@ -234,7 +247,12 @@ public class SetupController {
                     0.0, 0.0, 0.0, 0, 0, null,
                     pdBlockFor(symbol),
                     voteBlockFor(symbol),
-                    ote30mBlockFor(symbol));
+                    ote30mBlockFor(symbol),
+                    null, false, null, null, null);
+        }
+
+        private static Double finiteOrNull(double d) {
+            return Double.isFinite(d) ? d : null;
         }
 
         /** M7b 30m-OTE confluence telemetry (V3 Agent 06). Null on cold start. */

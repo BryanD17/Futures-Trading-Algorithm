@@ -106,6 +106,26 @@ export interface SetupSnapshotDto {
   pd: PdGateDto | null;
   vote: BiasVoteDto | null;
   ote30m: Ote30mGateDto | null;
+  // V5 Agent 08 — session + dealing-range context. Optional so an older
+  // backend (pre-Agent-08 DTO) still type-checks and renders as "·".
+  sessionWindow?: string | null;
+  primeKillzone?: boolean;
+  rangeHigh?: number | null;
+  rangeLow?: number | null;
+  rangeEq?: number | null;
+}
+
+// V5 Agent 01 (RC-17) runtime gate decision row, from GET /api/setup.
+export interface GateDecisionDto {
+  symbol: string;
+  candleTime: string | null; // ISO-8601 instant (UTC)
+  session: string | null;
+  state: string | null;
+  gate: string;
+  reason: string | null;
+  numberA: number;
+  numberB: number;
+  publishedAt: string;
 }
 
 // M7b 30m-OTE confluence gate telemetry (V3 Agent 06). Null on cold start.
@@ -157,6 +177,8 @@ export interface PdGateDto {
 }
 
 export interface ActiveSetupListDto {
+  gateDecisions?: GateDecisionDto[];
+  gateCounts?: Record<string, number>;
   strategy: string;
   activeSymbols: string[];
 }
