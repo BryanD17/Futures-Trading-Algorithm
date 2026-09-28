@@ -60,27 +60,34 @@ public class PropFirmRiskEngine {
      */
     public RiskDecision evaluate(StrategySignalEvent signal, AccountState account, RiskLimits limits,
                                   double dynamicRiskPerTrade) {
+        String sym = signal.getSymbol();
 
-        // 1. Check Daily Loss Limit (DLL)
+        // 1. Check Daily Loss Limit (DLL) — SACRED.
         double netDailyPnl = account.getNetDailyPnl();
         if (netDailyPnl <= -limits.getMaxDailyLoss()) {
-            return RiskDecision.deny("Daily Loss Limit breached: " + String.format("%.2f", netDailyPnl));
+            return deny(signal, "RISK: Daily Loss Limit breached: " + String.format("%.2f", netDailyPnl)
+                    + " <= -" + String.format("%.2f", limits.getMaxDailyLoss()),
+                    netDailyPnl, -limits.getMaxDailyLoss());
         }
 
-        // 2. Check Max Loss Limit (MLL) - based on highest EOD balance
+        // 2. Check Max Loss Limit (MLL) - based on highest EOD balance — SACRED.
         double highestBalance = account.getHighestEndOfDayBalance();
         double currentEquity = account.getEquity();
         double totalDrawdown = highestBalance - currentEquity;
 
         if (totalDrawdown >= limits.getMaxLossLimit()) {
-            return RiskDecision.deny("Max Loss Limit breached: " + String.format("%.2f drawdown", totalDrawdown));
+            return deny(signal, "RISK: Max Loss Limit breached: " + String.format("%.2f drawdown", totalDrawdown)
+                    + " >= " + String.format("%.2f", limits.getMaxLossLimit()),
+                    totalDrawdown, limits.getMaxLossLimit());
         }
 
         // 3. Check remaining daily loss room
         double remainingDailyLoss = limits.getMaxDailyLoss() + netDailyPnl; // How much room left today
         if (remainingDailyLoss <= 0) {
-            return RiskDecision.deny("No daily loss room remaining");
+            return deny(signal, "RISK: No daily loss room remaining: " + String.format("%.2f", remainingDailyLoss),
+                    remainingDailyLoss, 0);
         }
+        double remainingMllRoom = limits.getMaxLossLimit() - totalDrawdown;
 
         // 3b. Trade-frequency gates (scalp discipline; ported semantics from
         // the Monte Carlo RiskProfile). A limit of 0 disables the gate, so
@@ -88,99 +95,110 @@ public class PropFirmRiskEngine {
         // these run before sizing so a blocked day never reaches the market.
         if (limits.getMaxTradesPerDay() > 0
                 && account.getTradesToday() >= limits.getMaxTradesPerDay()) {
-            return RiskDecision.deny("Max trades per day reached: "
-                    + account.getTradesToday() + " >= " + limits.getMaxTradesPerDay());
+            return deny(signal, "RISK: Max trades per day reached: "
+                    + account.getTradesToday() + " >= " + limits.getMaxTradesPerDay(),
+                    account.getTradesToday(), limits.getMaxTradesPerDay());
         }
         if (limits.getMaxConsecutiveLosses() > 0
                 && account.getConsecutiveLosses() >= limits.getMaxConsecutiveLosses()) {
-            return RiskDecision.deny("Max consecutive losses reached: "
-                    + account.getConsecutiveLosses() + " >= " + limits.getMaxConsecutiveLosses());
+            return deny(signal, "RISK: Max consecutive losses reached: "
+                    + account.getConsecutiveLosses() + " >= " + limits.getMaxConsecutiveLosses(),
+                    account.getConsecutiveLosses(), limits.getMaxConsecutiveLosses());
         }
 
-        // 4. Calculate position size based on risk per trade
+        // 4. Geometry.
         double stopDistance = Math.abs(signal.getEntryPrice() - signal.getStopPrice());
         if (stopDistance <= 0) {
-            return RiskDecision.deny("Invalid stop distance: " + stopDistance);
+            return deny(signal, "RISK: Invalid stop distance: " + stopDistance, stopDistance, 0);
         }
+        double tickValue = getTickValue(sym);
+        double tickSize = getTickSize(sym);
 
-        // Get tick value for the symbol
-        double tickValue = getTickValue(signal.getSymbol());
-
-        // Calculate risk in dollars per contract
-        double tickSize = getTickSize(signal.getSymbol());
-        double ticksAtRisk = stopDistance / tickSize;
-        double dollarRiskPerContract = ticksAtRisk * tickValue;
-
-        // Debug logging for position sizing
-        System.out.println("[POSITION SIZING] " + signal.getSymbol() +
-            ": stopDist=" + String.format("%.7f", stopDistance) +
+        // 5. SIZE — ONE sizer (V5 RC-14). The budget is the per-trade risk
+        //    capped by the DLL room AND the MLL room; the risk-derived size
+        //    comes from the SAME function the strategy used
+        //    (StdvOteSizer.riskDerived). The strategy's requested size is
+        //    HONOURED when it fits the envelope; it is never silently
+        //    re-sized — an oversize request is reduced LOUDLY (reason +
+        //    log) to the envelope, and a stop too wide for even
+        //    size.minMicros is DENIED with both dollar numbers.
+        double budget = com.topstep.trading.strategy.stdvote.StdvOteSizer.riskBudget(
+                dynamicRiskPerTrade, remainingDailyLoss, remainingMllRoom);
+        int hardCap = Math.min(limits.getMaxContracts(), RiskConfig.maxMicros());
+        int minMicros = RiskConfig.minMicros();
+        com.topstep.trading.strategy.stdvote.StdvOteSizer.RiskSize derived =
+                com.topstep.trading.strategy.stdvote.StdvOteSizer.riskDerived(
+                        budget, signal.getEntryPrice(), signal.getStopPrice(),
+                        tickSize, tickValue, minMicros, hardCap);
+        double dollarRiskPerContract = derived.perContract();
+        System.out.println("[POSITION SIZING] " + sym +
+            ": stopDist=" + String.format("%.4f", stopDistance) +
             ", tickSize=" + tickSize +
-            ", ticks=" + String.format("%.1f", ticksAtRisk) +
-            ", $/contract=$" + String.format("%.2f", dollarRiskPerContract));
-
-        if (dollarRiskPerContract <= 0) {
-            return RiskDecision.deny("Invalid risk calculation: " + dollarRiskPerContract);
+            ", ticks=" + String.format("%.1f", derived.stopTicks()) +
+            ", $/contract=$" + String.format("%.2f", dollarRiskPerContract) +
+            ", budget=$" + String.format("%.2f", budget) +
+            ", requested=" + signal.getQuantity());
+        if (derived.denied()) {
+            return deny(signal, derived.reason(), derived.needDollars(), derived.haveDollars());
+        }
+        // Envelope for the REQUESTED size: the risk-derived size times the
+        // killzone boost the strategy may apply AFTER it (RiskConfig
+        // .maxSizeBoost: 1.0 unless scalp mode), never above maxContracts /
+        // size.maxMicros, and never more $ than the DLL / MLL room.
+        double roomCap = Math.min(remainingDailyLoss, Double.isNaN(remainingMllRoom)
+                ? Double.POSITIVE_INFINITY : remainingMllRoom);
+        int roomContracts = (int) Math.floor(roomCap / dollarRiskPerContract + 1e-9);
+        int envelope = com.topstep.trading.strategy.stdvote.StdvOteSizer.applyBoost(
+                derived.contracts(), RiskConfig.maxSizeBoost(), hardCap);
+        envelope = Math.min(envelope, Math.min(hardCap, roomContracts));
+        int requested = signal.getQuantity();
+        int quantity;
+        String sizeNote;
+        if (requested <= 0) {
+            quantity = derived.contracts();
+            sizeNote = "risk-derived " + quantity;
+        } else if (requested <= envelope) {
+            quantity = requested;
+            sizeNote = "honoured requested " + requested + " (risk-derived " + derived.contracts()
+                    + ", envelope " + envelope + ")";
+        } else {
+            quantity = envelope;
+            sizeNote = "REDUCED requested " + requested + " -> " + envelope
+                    + " (risk-derived " + derived.contracts() + " @ $" + String.format("%.2f", dollarRiskPerContract)
+                    + "/micro, budget $" + String.format("%.2f", budget) + ", maxContracts " + limits.getMaxContracts() + ")";
+            System.out.println("[RISK-RESIZE] WARN " + sym + ": " + sizeNote);
+        }
+        if (quantity < minMicros) {
+            return deny(signal, String.format(
+                    "SIZE: stop too wide for risk budget (need $%.2f, have $%.2f)",
+                    minMicros * dollarRiskPerContract, Math.min(budget, roomCap)),
+                    minMicros * dollarRiskPerContract, Math.min(budget, roomCap));
         }
 
-        // Position size: Use dynamic risk (from PhaseAwareRiskCalculator) instead of static value
-        // CRITICAL: Still cap risk to remaining daily loss room to avoid exceeding DLL
-        double riskPerTrade = Math.min(dynamicRiskPerTrade, remainingDailyLoss);
-        int quantity = (int) Math.floor(riskPerTrade / dollarRiskPerContract);
-
-        // MINIMUM 1 CONTRACT: If calculation gives 0 but risk is within acceptable limit, allow 1 contract
-        // This prevents missing trades on instruments with naturally wider stops
-        // Use higher multiplier for high-tick-value instruments (SI, GC, NG)
-        if (quantity <= 0) {
-            double maxRiskMultiplier = getMaxRiskMultiplier(signal.getSymbol());
-            double maxAllowedRisk = riskPerTrade * maxRiskMultiplier;
-
-            // Use small tolerance (0.01) to handle floating point precision issues
-            // e.g., $1250.0000001 should be treated as equal to $1250.00
-            if (dollarRiskPerContract <= maxAllowedRisk + 0.01) {
-                // Risk is within acceptable limit - allow 1 contract with warning
-                quantity = 1;
-                System.out.println("[POSITION SIZING] " + signal.getSymbol() +
-                    ": Using minimum 1 contract (risk $" + String.format("%.2f", dollarRiskPerContract) +
-                    " exceeds budget $" + String.format("%.2f", riskPerTrade) +
-                    " but within " + String.format("%.0fx", maxRiskMultiplier) + " limit)");
-            } else {
-                // Risk is too high even for 1 contract
-                return RiskDecision.deny("Risk too high per contract: $" +
-                    String.format("%.2f", dollarRiskPerContract) + " > " +
-                    String.format("%.0fx", maxRiskMultiplier) + " budget $" +
-                    String.format("%.2f", maxAllowedRisk));
-            }
-        }
-
-        // 5. Enforce max contracts limit
-        if (quantity > limits.getMaxContracts()) {
-            quantity = limits.getMaxContracts();
-        }
-
-        // 6. Check total contracts limit
+        // 6. Check total contracts limit — SACRED (max contracts).
         int currentContracts = account.getTotalContracts();
         if (currentContracts + quantity > limits.getMaxTotalContracts()) {
-            return RiskDecision.deny("Would exceed max total contracts: " +
-                    (currentContracts + quantity) + " > " + limits.getMaxTotalContracts());
+            return deny(signal, "RISK: Would exceed max total contracts: " +
+                    (currentContracts + quantity) + " > " + limits.getMaxTotalContracts(),
+                    currentContracts + quantity, limits.getMaxTotalContracts());
         }
 
-        // 7. Verify minimum R:R ratio
+        // 7. R:R — ONE band (V5 RC-13): the floor is RiskLimits.rrFloor, the
+        //    same value the validator's M7 reads. There is NO second ceiling
+        //    here any more: the band's ceiling (rrCeiling) is enforced once,
+        //    by the validator against the final target.
         double targetDistance = Math.abs(signal.getTargetPrice() - signal.getEntryPrice());
         double rewardRiskRatio = targetDistance / stopDistance;
 
-        if (rewardRiskRatio < limits.getMinRiskRewardRatio()) {
-            return RiskDecision.deny("R:R too low: " + String.format("%.2f", rewardRiskRatio) +
-                    " < " + limits.getMinRiskRewardRatio());
-        }
-
-        if (rewardRiskRatio > limits.getMaxRiskRewardRatio()) {
-            return RiskDecision.deny("R:R too high (unrealistic): " + String.format("%.2f", rewardRiskRatio));
+        if (rewardRiskRatio + 1e-9 < limits.getRrFloor()) {
+            return deny(signal, "RISK: R:R too low: " + String.format("%.2f", rewardRiskRatio) +
+                    " < " + limits.getRrFloor(), rewardRiskRatio, limits.getRrFloor());
         }
 
         // 8. Build the order - round limit price to valid tick
         double roundedPrice = roundToTick(signal.getEntryPrice(), tickSize);
         Order order = Order.builder()
-                .symbol(signal.getSymbol())
+                .symbol(sym)
                 .side(signal.getSide())
                 .type(OrderType.LIMIT)
                 .quantity(quantity)
@@ -188,15 +206,44 @@ public class PropFirmRiskEngine {
                 .build();
 
         String approvalReason = String.format(
-                "Approved: %d contracts, $%.2f dynamic risk/trade (base $%.2f), R:R %.2f:1, DLL room: $%.2f",
+                "Approved: %d contracts (%s), $%.2f risk ($%.2f/micro), budget $%.2f (base $%.2f), R:R %.2f:1, DLL room: $%.2f",
                 quantity,
-                dynamicRiskPerTrade,
+                sizeNote,
+                quantity * dollarRiskPerContract,
+                dollarRiskPerContract,
+                budget,
                 limits.getRiskPerTrade(),
                 rewardRiskRatio,
                 remainingDailyLoss
         );
 
         return RiskDecision.allow(order, approvalReason);
+    }
+
+    // ── Telemetry (V5 RC-17): every deny publishes a GateDecisionEvent ──
+    private volatile com.topstep.trading.event.EventBus eventBus;
+    private final java.util.concurrent.atomic.AtomicLong denials = new java.util.concurrent.atomic.AtomicLong();
+
+    /** Optional: publish a GateDecisionEvent for every denial. */
+    public void setEventBus(com.topstep.trading.event.EventBus bus) {
+        this.eventBus = bus;
+    }
+
+    /** Total denials since construction (telemetry counter). */
+    public long getDenialCount() {
+        return denials.get();
+    }
+
+    private RiskDecision deny(StrategySignalEvent signal, String reason, double a, double b) {
+        denials.incrementAndGet();
+        String gate = reason.startsWith("SIZE") ? "SIZE" : "RISK";
+        com.topstep.trading.event.EventBus bus = this.eventBus;
+        if (bus != null) {
+            com.topstep.trading.event.EngineTelemetry.publish(bus, new com.topstep.trading.event.GateDecisionEvent(
+                    signal.getSymbol(), signal.getCandleTime(), null, "SIGNAL",
+                    gate, reason, a, b));
+        }
+        return RiskDecision.deny(reason);
     }
 
     /**

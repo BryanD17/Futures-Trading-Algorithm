@@ -249,10 +249,13 @@ class StdvOteValidatorTest {
     }
 
     @Test
-    @DisplayName("M8: size below 5 rejected with M8")
+    @DisplayName("M8: size below size.minMicros (default 1) rejected with M8; 1..4 now pass")
     void m8BelowFloor() {
+        SetupContext ok = happyMnqBullish();
+        ok.sizeRequest = 1;
+        assertThat(newValidator().validateStdvOte(ok).passed()).isTrue();
         SetupContext ctx = happyMnqBullish();
-        ctx.sizeRequest = 4;
+        ctx.sizeRequest = 0;
         ValidationResult r = newValidator().validateStdvOte(ctx);
         assertThat(r.passed()).isFalse();
         assertThat(r.getSummary()).isEqualTo("M8");

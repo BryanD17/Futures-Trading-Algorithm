@@ -236,7 +236,7 @@ class StdvOteStrategyTest {
         }
 
         @Test
-        @DisplayName("size below 5 makes tryEmit() return false (M8) and not emit")
+        @DisplayName("size below size.minMicros (1) makes tryEmit() return false (M8) and not emit")
         void belowFloorBlocksEmit() {
             StdvOteStrategy s = newStrategy("MNQ");
             SetupContext ctx = s.getSetupContext();
@@ -248,7 +248,7 @@ class StdvOteStrategyTest {
             s.recordMss();
             s.recordOteImpulse(19952, 19984, 0.25, true);
 
-            boolean emitted = s.tryEmit(0.25, 4, TradeTier.TIER_2, /* below floor */ 3);
+            boolean emitted = s.tryEmit(0.25, 4, TradeTier.TIER_2, /* below floor */ 0);
             assertThat(emitted).isFalse();
             assertThat(ctx.state).isEqualTo(SetupState.OTE_ARMED);
             assertThat(ctx.lastGateFailed).isEqualTo("M8");

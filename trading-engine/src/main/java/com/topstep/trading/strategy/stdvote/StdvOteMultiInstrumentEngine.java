@@ -96,6 +96,14 @@ public final class StdvOteMultiInstrumentEngine {
      */
     private volatile java.util.function.Consumer<Candle> candleTap;
 
+    // AGENT-05 (V5): routing telemetry — per target symbol, how many candles
+    // it received as its OWN primary feed and as an SMT feed; and how many
+    // dispatch errors were caught (a throw in one runner never stops the
+    // others or the tap).
+    private final Map<String, java.util.concurrent.atomic.AtomicLong> routedPrimary = new ConcurrentHashMap<>();
+    private final Map<String, java.util.concurrent.atomic.AtomicLong> routedSmt = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicLong dispatchErrors = new java.util.concurrent.atomic.AtomicLong();
+
     public StdvOteMultiInstrumentEngine(TradingConnector connector,
                                         EventBus eventBus,
                                         StrategyContext strategyContext) {
@@ -246,8 +254,10 @@ public final class StdvOteMultiInstrumentEngine {
         for (int i = allSymbols.size() - 1; i >= 0; i--) {
             try {
                 connector.unsubscribeMarketData(allSymbols.get(i));
-            } catch (RuntimeException ignored) {
-                // best-effort
+            } catch (RuntimeException e) {
+                // best-effort, but never silent (RC-17)
+                System.err.println("[" + getClass().getSimpleName() + "] ERROR unsubscribe "
+                        + allSymbols.get(i) + ": " + e);
             }
         }
 
@@ -255,8 +265,9 @@ public final class StdvOteMultiInstrumentEngine {
             try {
                 s.onSessionEnd();
                 s.shutdown();
-            } catch (RuntimeException ignored) {
-                // best-effort
+            } catch (RuntimeException e) {
+                // best-effort, but never silent (RC-17)
+                System.err.println("[" + getClass().getSimpleName() + "] ERROR shutting down a strategy: " + e);
             }
         }
         strategies.clear();
@@ -283,33 +294,81 @@ public final class StdvOteMultiInstrumentEngine {
         String symbol = candle.getSymbol();
         if (symbol == null) return;
 
-        // Runner tap first: chart-in-memory + warmup staleness tracking see
-        // every candle (backfill replay and live alike) before routing.
-        java.util.function.Consumer<Candle> tap = candleTap;
-        if (tap != null) {
-            tap.accept(candle);
-        }
-
-        // Direct routing to the symbol's own strategy if it's active.
-        StdvOteRunnerStrategy own = strategies.get(symbol);
-        if (own != null) {
-            own.onCandle(candle, strategyContext);
-        }
-
-        // SMT routing: any active strategy whose correlate equals this symbol.
-        for (Map.Entry<String, String> e : smtBySymbol.entrySet()) {
-            String activeSym = e.getKey();
-            String correlate = e.getValue();
-            if (correlate == null || correlate.isBlank()) continue;
-            if (!correlate.trim().equals(symbol)) continue;
-            // Don't double-feed: if the active strategy already received
-            // this candle as its own (above), skip.
-            if (symbol.equals(activeSym)) continue;
-            StdvOteRunnerStrategy target = strategies.get(activeSym);
-            if (target != null) {
-                target.onSmtCandle(candle);
+        // The signal a strategy emits while processing this candle carries
+        // the candle's MARKET time (RC-15 deterministic warmup).
+        com.topstep.trading.event.SignalCandleClock.set(candle.getTimestamp());
+        try {
+            // Runner tap first: chart-in-memory + warmup tracking + execution
+            // housekeeping see every candle (backfill replay and live alike)
+            // before routing.
+            java.util.function.Consumer<Candle> tap = candleTap;
+            if (tap != null) {
+                try {
+                    tap.accept(candle);
+                } catch (RuntimeException e) {
+                    dispatchErrors.incrementAndGet();
+                    System.err.println("[" + getClass().getSimpleName() + "] ERROR in candle tap for "
+                            + symbol + " " + candle.getTimestamp() + ": " + e);
+                    e.printStackTrace();
+                }
             }
+
+            // Direct routing to the symbol's own strategy if it's active —
+            // each runner receives ONLY its own symbol as a primary candle.
+            StdvOteRunnerStrategy own = strategies.get(symbol);
+            if (own != null) {
+                routedPrimary.computeIfAbsent(symbol, k -> new java.util.concurrent.atomic.AtomicLong()).incrementAndGet();
+                try {
+                    own.onCandle(candle, strategyContext);
+                } catch (RuntimeException e) {
+                    dispatchErrors.incrementAndGet();
+                    System.err.println("[" + getClass().getSimpleName() + "] ERROR in " + symbol
+                            + " strategy for candle " + candle.getTimestamp() + ": " + e);
+                    e.printStackTrace();
+                }
+            }
+
+            // SMT routing: any active strategy whose correlate equals this symbol.
+            for (Map.Entry<String, String> e : smtBySymbol.entrySet()) {
+                String activeSym = e.getKey();
+                String correlate = e.getValue();
+                if (correlate == null || correlate.isBlank()) continue;
+                if (!correlate.trim().equals(symbol)) continue;
+                // Don't double-feed: if the active strategy already received
+                // this candle as its own (above), skip.
+                if (symbol.equals(activeSym)) continue;
+                StdvOteRunnerStrategy target = strategies.get(activeSym);
+                if (target != null) {
+                    routedSmt.computeIfAbsent(activeSym, k -> new java.util.concurrent.atomic.AtomicLong()).incrementAndGet();
+                    try {
+                        target.onSmtCandle(candle);
+                    } catch (RuntimeException ex) {
+                        dispatchErrors.incrementAndGet();
+                        System.err.println("[" + getClass().getSimpleName() + "] ERROR routing SMT "
+                                + symbol + " -> " + activeSym + ": " + ex);
+                    }
+                }
+            }
+        } finally {
+            com.topstep.trading.event.SignalCandleClock.clear();
         }
+    }
+
+    /** Candles routed to {@code symbol}'s runner as its own primary feed. */
+    public long routedPrimaryCount(String symbol) {
+        java.util.concurrent.atomic.AtomicLong c = routedPrimary.get(symbol);
+        return c == null ? 0 : c.get();
+    }
+
+    /** Candles routed to {@code symbol}'s runner as its SMT correlate feed. */
+    public long routedSmtCount(String symbol) {
+        java.util.concurrent.atomic.AtomicLong c = routedSmt.get(symbol);
+        return c == null ? 0 : c.get();
+    }
+
+    /** Exceptions caught (and logged at ERROR) while dispatching candles. */
+    public long getDispatchErrorCount() {
+        return dispatchErrors.get();
     }
 
     /** Active strategy lookup (post-start). */

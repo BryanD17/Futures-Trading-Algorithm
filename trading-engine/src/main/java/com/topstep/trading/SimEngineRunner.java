@@ -112,6 +112,10 @@ public class SimEngineRunner {
     // suppress every signal in accelerated SIM runs.
     private volatile boolean warmupComplete = false;
     private volatile java.time.Instant warmupCompletedAt = null;
+    /** AGENT-05 (V5 RC-15): per-symbol readiness + timeout, candle-time based. */
+    private volatile WarmupGuard.Tracker warmup;
+    /** AGENT-05: signals dropped by the warmup guard in this runner. */
+    private final java.util.concurrent.atomic.AtomicLong warmupDrops = new java.util.concurrent.atomic.AtomicLong();
 
     /**
      * Create a new SIM engine with default Topstep 50K configuration.
@@ -126,18 +130,32 @@ public class SimEngineRunner {
      * Create a new SIM engine with custom configuration.
      */
     public SimEngineRunner(double startingBalance, RiskLimits riskLimits) {
+        this(startingBalance, riskLimits, new MockConnector(startingBalance));
+    }
+
+    /**
+     * AGENT-05: connector-injecting constructor (tests drive a scripted
+     * connector with deterministic candle times; production uses the
+     * MockConnector via the constructors above).
+     */
+    SimEngineRunner(double startingBalance, RiskLimits riskLimits, TradingConnector connector) {
         // Initialize account
         this.accountState = new AccountState(startingBalance);
         this.riskLimits = riskLimits;
 
         // Initialize trading components
-        this.connector = new MockConnector(startingBalance);
+        this.connector = connector;
         this.executionEngine = new ExecutionEngine(accountState);
         this.riskEngine = new PropFirmRiskEngine();
         this.eventBus = new EventBus();
-        // Publish PositionClosedEvent from the sim close funnel (scalp-mode
-        // re-arm subscribes to it; no-op for legacy consumers).
+        // Publish PositionClosedEvent from the sim close funnel (the runner's
+        // re-arm / latch release subscribes to it in BOTH modes, RC-16).
         this.executionEngine.setEventBus(eventBus);
+        // AGENT-05 (V5 RC-17): every risk deny publishes a GateDecisionEvent;
+        // the execution path carries the 14:45 CT flatten safety net and the
+        // SIM order TTL (order.ttlBars).
+        this.riskEngine.setEventBus(eventBus);
+        this.executionEngine.setFlattenSafetyNet(true);
         this.strategyContext = new DefaultStrategyContext(accountState);
 
         if (MULTI_INSTRUMENT_ENABLED) {
@@ -184,10 +202,17 @@ public class SimEngineRunner {
             // engine has to hang off it too.
             multiEngine.setCandleTap(candle -> {
                 verifyWiringAtFirstCandle(candle);
+                WarmupGuard.Tracker w = warmup;
+                if (w != null) w.onCandle(candle.getSymbol(), candle.getTimestamp());
                 chartEngine.onCandle(candle);
                 strategyContext.setCurrentTime(candle.getTimestamp());
                 executionEngine.onNewCandle(candle);
                 publishSetupDecision(candle);
+                // AGENT-05 (DIAGNOSIS §5): multi mode never ran the account
+                // checks — DLL/MLL breach never stopped SIM. It does now.
+                if (running.get()) {
+                    checkRiskLimits();
+                }
             });
             multiEngine.setChartEngine(chartEngine);
             multiEngine.setIctLibEngine(ictLibEngine);
@@ -256,6 +281,11 @@ public class SimEngineRunner {
             // subscriptions for all active + SMT-only symbols; single-symbol
             // mode subscribes the legacy way.
             String subscribedSymbols;
+            java.util.List<String> required = (multiEngine != null)
+                    ? multiEngine.symbolsForSubscription()
+                    : java.util.List.of(DEFAULT_SYMBOL);
+            warmup = new WarmupGuard.Tracker(required,
+                    com.topstep.trading.risk.RiskConfig.warmupTimeoutSeconds());
             if (multiEngine != null) {
                 multiEngine.start();
                 subscribedSymbols = String.join(",", multiEngine.symbolsForSubscription());
@@ -266,9 +296,15 @@ public class SimEngineRunner {
 
             // All subscriptions have returned — the synchronous SIM warm
             // boot (synthetic backfill) is finished. Signals may now trade.
+            // AGENT-05 (V5 RC-15): synchronous warm boot done -> later candles
+            // are LIVE; warmup completes when every required feed delivered
+            // one live candle, or after warmup.timeoutSeconds with a WARN.
+            warmup.beginLive();
             warmupCompletedAt = java.time.Instant.now();
             warmupComplete = true;
-            System.out.println("✓ SIM warmup complete — synthetic replay done, strategy signals live");
+            System.out.println("✓ SIM warm boot returned — signals trade once every feed is live "
+                    + "(required=" + required + ", timeout="
+                    + com.topstep.trading.risk.RiskConfig.warmupTimeoutSeconds() + "s)");
 
             running.set(true);
 
@@ -373,6 +409,8 @@ public class SimEngineRunner {
 
         try {
             verifyWiringAtFirstCandle(candle);
+            WarmupGuard.Tracker w = warmup;
+            if (w != null) w.onCandle(candle.getSymbol(), candle.getTimestamp());
             // Chart-in-memory first: the internal 30m chart sees every
             // candle this runner processes (single-instrument path; the
             // multi-engine path feeds the chart via its candle tap).
@@ -384,9 +422,15 @@ public class SimEngineRunner {
             // Process through execution engine first (fills, stops, targets)
             executionEngine.onNewCandle(candle);
 
-            // Feed to strategy (only if not paused)
+            // Feed to strategy (only if not paused). The signal inherits
+            // this candle's MARKET time (SignalCandleClock, RC-15).
             if (!paused.get()) {
-                strategy.onCandle(candle, strategyContext);
+                com.topstep.trading.event.SignalCandleClock.set(candle.getTimestamp());
+                try {
+                    strategy.onCandle(candle, strategyContext);
+                } finally {
+                    com.topstep.trading.event.SignalCandleClock.clear();
+                }
             }
 
             // Check risk limits
@@ -417,28 +461,42 @@ public class SimEngineRunner {
 
     private void handleStrategySignal(StrategySignalEvent signal) {
         publishSignalDecision(signal, "SIGNAL received");
-        // ── WARMUP GUARD layer 1 (SIM): nothing trades until every
-        // subscription (and its synchronous synthetic warm boot) returned.
-        if (!warmupComplete) {
-            System.out.println("[Warmup] SIM: suppressing signal during warm-boot replay: "
-                + signal.getSignalType() + " " + signal.getSymbol());
-            releaseUnexecutedSignal(signal, "warmup suppression");
-            return;
-        }
-
-        // ── layer 2 (SIM): the EventBus is async — a signal CREATED during
-        // the warm boot can be dequeued after the flag flipped.
-        if (WarmupGuard.createdDuringWarmup(signal.getTimestamp(), warmupCompletedAt)) {
-            System.out.println("[Warmup] SIM: suppressing signal created during warm-boot replay: "
-                + signal.getSignalType() + " " + signal.getSymbol()
-                + " (created=" + signal.getTimestamp() + ")");
-            releaseUnexecutedSignal(signal, "created during warm-boot replay");
+        // ── WARMUP GUARD (V5 RC-15, deterministic): nothing trades until
+        // every required feed delivered a live candle (or the timeout
+        // fired with a WARN), and a signal whose CANDLE time precedes the
+        // warmup-completion candle is replay-era — dropped, published,
+        // counted.
+        WarmupGuard.Tracker w = warmup;
+        String warmupDrop = (w == null)
+                ? "WARMUP: engine not started"
+                : w.dropReason(signal.getCandleTime(), signal.getTimestamp());
+        if (warmupDrop != null) {
+            warmupDrops.incrementAndGet();
+            WarmupGuard.recordDrop();
+            System.out.println("[Warmup] SIM: dropping " + signal.getSignalType() + " "
+                    + signal.getSymbol() + " — " + warmupDrop);
+            publishGate(signal, "WARMUP", warmupDrop, epoch(signal.getCandleTime()),
+                    w == null ? Double.NaN : epoch(w.completionCandleTime()));
+            releaseLatch(signal, "warmup suppression");
             return;
         }
 
         if (paused.get()) {
             System.out.println("\n⏸ Signal ignored (paused): " + signal.getReason());
-            releaseUnexecutedSignal(signal, "paused");
+            publishGate(signal, "PAUSED", "ENGINE: paused — signal not executed", Double.NaN, Double.NaN);
+            releaseLatch(signal, "paused");
+            return;
+        }
+
+        // ── FLATTEN / NO-ENTRY safety net (defence in depth; SACRED):
+        // no new entry inside 14:45–17:00 CT, whatever the session gate said.
+        java.time.Instant entryTime = signal.getCandleTime() != null
+                ? signal.getCandleTime() : strategyContext.getCurrentTime();
+        if (com.topstep.trading.risk.RiskConfig.inNoEntryBlock(entryTime)) {
+            String why = "FLATTEN: no new entries 14:45-17:00 CT (signal candle " + entryTime + ")";
+            System.out.println("\n❌ Signal DENIED: " + why);
+            publishGate(signal, "FLATTEN", why, epoch(entryTime), Double.NaN);
+            releaseLatch(signal, "no-entry block");
             return;
         }
 
@@ -449,9 +507,12 @@ public class SimEngineRunner {
             System.out.println("\n✓ Signal APPROVED: " + signal.getReason());
             System.out.println("  " + decision.getReason());
 
-            // Submit order to execution engine
+            // Submit order to execution engine. The signal's candle time
+            // lets the engine replay a candle that raced ahead of this
+            // (async) handler, so the fill is never lost (RC-17).
             Order order = decision.getOrder();
-            executionEngine.submitOrder(order, signal.getStopPrice(), signal.getTargetPrice());
+            executionEngine.submitOrder(order, signal.getStopPrice(), signal.getTargetPrice(),
+                    signal.getCandleTime());
             publishSignalDecision(signal, "APPROVED: " + decision.getReason());
 
             // Record signal context for trade journal enrichment
@@ -464,7 +525,9 @@ public class SimEngineRunner {
         } else {
             System.out.println("\n❌ Signal DENIED: " + signal.getReason());
             System.out.println("  Reason: " + decision.getReason());
-            releaseUnexecutedSignal(signal, "risk engine deny: " + decision.getReason());
+            // PropFirmRiskEngine already published the RISK/SIZE GateDecisionEvent
+            // (with its two numbers) — release the latch without a duplicate row.
+            releaseLatch(signal, "risk engine deny: " + decision.getReason());
         }
     }
 
@@ -554,8 +617,8 @@ public class SimEngineRunner {
                 : lw.contains("warm") || lw.contains("stale") ? "WARMUP"
                 : lw.contains("pause") ? "PAUSED"
                 : "RISK";
-        // AGENT-05: signal events carry the BaseEvent wall-clock stamp (D-01); switch to candle time when it exists.
-        java.time.Instant t = signal.getTimestamp();
+        // AGENT-05 (RC-15): candle time when the signal carries one (D-01 fixed).
+        java.time.Instant t = signal.getCandleTime() != null ? signal.getCandleTime() : signal.getTimestamp();
         com.topstep.trading.event.EngineTelemetry.publish(eventBus,
                 new com.topstep.trading.event.GateDecisionEvent(signal.getSymbol(), t,
                         com.topstep.trading.event.EngineTelemetry.sessionOf(t),
@@ -579,8 +642,11 @@ public class SimEngineRunner {
             return;
         }
 
-        // Check if profit target met
-        if (riskEngine.hasMetProfitTarget(accountState, riskLimits)) {
+        // Check if profit target met — SIM default: keep trading
+        // (risk.haltOnProfitTarget, LIVE true / SIM false). DLL/MLL above
+        // ALWAYS stop the engine.
+        if (com.topstep.trading.risk.RiskConfig.haltOnProfitTarget(false)
+                && riskEngine.hasMetProfitTarget(accountState, riskLimits)) {
             System.out.println("\n✓ PROFIT TARGET REACHED!");
             System.out.println("  Total PnL: $" + String.format("%.2f", accountState.getRealizedPnL()));
             System.out.println("  Profit Target: $" + String.format("%.2f", riskLimits.getProfitTarget()));
@@ -612,6 +678,44 @@ public class SimEngineRunner {
         System.out.println("  Total Unrealized PnL: $" + String.format("%.2f", accountState.getUnrealizedPnL()));
         System.out.println("  Completed Trades: " + executionEngine.getCompletedTrades().size());
         System.out.println("  Open Positions: " + accountState.getPositions().size());
+    }
+
+    private void publishGate(StrategySignalEvent signal, String gate, String reason, double a, double b) {
+        java.time.Instant t = signal.getCandleTime() != null ? signal.getCandleTime() : signal.getTimestamp();
+        com.topstep.trading.event.EngineTelemetry.publish(eventBus, new com.topstep.trading.event.GateDecisionEvent(
+                signal.getSymbol(), t, com.topstep.trading.event.EngineTelemetry.sessionOf(t),
+                "SIGNAL", gate, reason, a, b));
+    }
+
+    /**
+     * AGENT-05: release the strategy latch when the denying gate already
+     * published its own GateDecisionEvent (with numbers) — no duplicate row.
+     */
+    private void releaseLatch(StrategySignalEvent signal, String why) {
+        System.out.println("[SignalRelease] SIM " + signal.getSymbol() + ": " + why
+                + " — releasing strategy latch (no order/position created)");
+        eventBus.publish(new com.topstep.trading.event.PositionClosedEvent(
+                signal.getSymbol(), 0.0, false, java.time.Instant.now()));
+    }
+
+    private static double epoch(java.time.Instant t) {
+        return t == null ? Double.NaN : t.getEpochSecond();
+    }
+
+    /** Signals dropped by the warmup guard (AGENT-01: expose on /api/status). */
+    public long getWarmupDroppedSignals() {
+        return warmupDrops.get();
+    }
+
+    /** True once every required feed is live (or the warmup timeout fired). */
+    public boolean isWarmupComplete() {
+        WarmupGuard.Tracker w = warmup;
+        return w != null && w.poll();
+    }
+
+    /** Test hook: the runner's bus (synthetic-signal integration test). */
+    EventBus getEventBusForTest() {
+        return eventBus;
     }
 
     /**

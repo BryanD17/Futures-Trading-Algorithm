@@ -48,14 +48,15 @@ class ScalpConfigTest {
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
         RiskLimits legacy = ScalpConfig.activeRiskLimits();
         assertThat(legacy.getRiskPerTrade()).isEqualTo(250.0);
-        assertThat(legacy.getMinRiskRewardRatio()).isEqualTo(3.0);
+        // V5 ONE band (RC-13): legacy floor 1.0, ceiling 5.0.
+        assertThat(legacy.getMinRiskRewardRatio()).isEqualTo(1.0);
         assertThat(legacy.getMaxTradesPerDay()).isZero();
 
         System.setProperty(ScalpConfig.ENABLED_PROPERTY, "true");
         RiskLimits scalp = ScalpConfig.activeRiskLimits();
         assertThat(scalp.getRiskPerTrade()).isEqualTo(150.0);
         assertThat(scalp.getMinRiskRewardRatio()).isEqualTo(0.8);
-        assertThat(scalp.getMaxRiskRewardRatio()).isEqualTo(1.5);
+        assertThat(scalp.getMaxRiskRewardRatio()).isEqualTo(5.0);
         assertThat(scalp.getMaxTradesPerDay()).isEqualTo(6);
         assertThat(scalp.getMaxConsecutiveLosses()).isEqualTo(3);
     }

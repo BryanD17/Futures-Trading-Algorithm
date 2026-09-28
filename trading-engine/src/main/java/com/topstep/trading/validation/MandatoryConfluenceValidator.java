@@ -644,22 +644,31 @@ public class MandatoryConfluenceValidator {
             confirmations.add("M7b: 30m OTE confluence — " + d.reason());
         }
 
-        // M8 — sized order at floor or above.
-        if (ctx.sizeRequest < spec.minMicros()) {
+        // M8 — sized order inside the CONFIGURED band (AGENT-05, V5 RC-14):
+        // size.minMicros (default 1) .. size.maxMicros (default 20). The size
+        // is risk-derived upstream (StdvOteSizer.riskDerived); a stop too wide
+        // for the budget never reaches here (the runner denies it with a
+        // "SIZE: ..." GateDecisionEvent). The old hard floor of 5 is gone.
+        int m8Min = com.topstep.trading.risk.RiskConfig.minMicros();
+        int m8Max = Math.min(com.topstep.trading.risk.RiskConfig.maxMicros(), spec.maxMicros());
+        if (ctx.sizeRequest < m8Min) {
             return ValidationResult.fail(
                     java.util.List.of("M8: size " + ctx.sizeRequest
-                            + " < instrument floor " + spec.minMicros()), "M8");
+                            + " < configured minimum " + m8Min + " (size.minMicros)"), "M8");
         }
-        if (ctx.sizeRequest > spec.maxMicros()) {
+        if (ctx.sizeRequest > m8Max) {
             return ValidationResult.fail(
                     java.util.List.of("M8: size " + ctx.sizeRequest
-                            + " > instrument ceiling " + spec.maxMicros()), "M8");
+                            + " > configured maximum " + m8Max + " (size.maxMicros)"), "M8");
         }
         confirmations.add("M8: size=" + ctx.sizeRequest);
 
-        // M9 — risk pre-flight (the strategy is the gatekeeper; validator
-        // trusts the pre-check via ctx.lastGateFailed staying null at this
-        // point. Real risk engine integration lands in SA5.)
+        // M9 — risk pre-flight. AGENT-05 (V5 RC-16): lastGateFailed is
+        // cleared PER ATTEMPT — StdvOteStrategy.tryEmit wipes its own stale
+        // diagnostics and the runner clears a stale value before every emit
+        // attempt (StdvOteRunnerStrategy.tryEmitOrder) — so M9 only fails on
+        // a pre-flight failure raised during THIS attempt, never on a
+        // diagnostic left over from an earlier bar (anti-pattern D-06).
         if (ctx.lastGateFailed != null) {
             return ValidationResult.fail(
                     java.util.List.of("M9: risk pre-flight failed earlier (" + ctx.lastGateFailed + ")"),

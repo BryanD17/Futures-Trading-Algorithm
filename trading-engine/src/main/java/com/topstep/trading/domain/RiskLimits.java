@@ -15,20 +15,16 @@ public final class RiskLimits {
     private final int maxContracts;              // Maximum contracts per position
     private final int maxTotalContracts;         // Maximum total contracts across all positions
     private final double riskPerTrade;           // Risk amount per trade (1R)
-    private final double minRiskRewardRatio;     // Minimum R:R (e.g., 1.0 for 1:1)
-    private final double maxRiskRewardRatio;     // Maximum R:R (e.g., 5.0 for 1:5)
+    // -- ONE RR band (V5 RC-13, AGENT-05 risk half / AGENT-04 validator half)
+    // rrFloor / rrCeiling are the SINGLE truth read by the validator (M7)
+    // and PropFirmRiskEngine. The historical pairs
+    // minRiskRewardRatio/maxRiskRewardRatio and signalMinRr/signalMaxRr are
+    // kept as ALIASES (getters and builder setters) so existing callers
+    // compile; they can no longer disagree.
+    private final double rrFloor;                // risk.rrFloor (1.0 legacy / 0.8 scalp)
+    private final double rrCeiling;              // risk.rrCeiling (5.0)
     private final LocalTime flattenByTime;       // Must be flat by this time
     private final boolean allowWeekendTrading;   // Allow trading on weekends
-
-    // ── Signal-validator RR band (STDV+OTE M7 gate) ─────────────────────────
-    // Decoupled from min/maxRiskRewardRatio on purpose: the legacy validator
-    // floor has always been 2.0 while topstep50k().minRiskRewardRatio is 3.0.
-    // Wiring the validator to minRiskRewardRatio would silently tighten legacy
-    // emission from 2.0 → 3.0. The builder defaults [2.0, +infinity) reproduce
-    // today's effective legacy behaviour byte-for-byte; only the scalp profile
-    // overrides them.
-    private final double signalMinRr;            // Validator M7 RR floor
-    private final double signalMaxRr;            // Validator M7 RR ceiling
 
     // ── Trade-frequency gates (scalp discipline; ported semantics from the
     //    Monte Carlo RiskProfile). 0 = gate disabled (legacy profiles). ─────
@@ -43,12 +39,10 @@ public final class RiskLimits {
         this.maxContracts = builder.maxContracts;
         this.maxTotalContracts = builder.maxTotalContracts;
         this.riskPerTrade = builder.riskPerTrade;
-        this.minRiskRewardRatio = builder.minRiskRewardRatio;
-        this.maxRiskRewardRatio = builder.maxRiskRewardRatio;
+        this.rrFloor = builder.rrFloor;
+        this.rrCeiling = builder.rrCeiling;
         this.flattenByTime = builder.flattenByTime;
         this.allowWeekendTrading = builder.allowWeekendTrading;
-        this.signalMinRr = builder.signalMinRr;
-        this.signalMaxRr = builder.signalMaxRr;
         this.maxTradesPerDay = builder.maxTradesPerDay;
         this.maxConsecutiveLosses = builder.maxConsecutiveLosses;
     }
@@ -66,12 +60,10 @@ public final class RiskLimits {
                 .maxContracts(maxContracts)
                 .maxTotalContracts(maxTotalContracts)
                 .riskPerTrade(riskPerTrade)
-                .minRiskRewardRatio(minRiskRewardRatio)
-                .maxRiskRewardRatio(maxRiskRewardRatio)
+                .rrFloor(rrFloor)
+                .rrCeiling(rrCeiling)
                 .flattenByTime(flattenByTime)
                 .allowWeekendTrading(allowWeekendTrading)
-                .signalMinRr(signalMinRr)
-                .signalMaxRr(signalMaxRr)
                 .maxTradesPerDay(maxTradesPerDay)
                 .maxConsecutiveLosses(maxConsecutiveLosses);
     }
@@ -90,14 +82,20 @@ public final class RiskLimits {
      */
     public int getMaxPositions() { return Math.max(1, maxTotalContracts / maxContracts); }
     public double getRiskPerTrade() { return riskPerTrade; }
-    public double getMinRiskRewardRatio() { return minRiskRewardRatio; }
-    public double getMaxRiskRewardRatio() { return maxRiskRewardRatio; }
+    /** THE RR floor (validator M7 vs T1 and PropFirmRiskEngine). */
+    public double getRrFloor() { return rrFloor; }
+    /** THE RR ceiling (validator M7 vs the final target). */
+    public double getRrCeiling() { return rrCeiling; }
+    /** Alias of {@link #getRrFloor()} (V5: one band). */
+    public double getMinRiskRewardRatio() { return rrFloor; }
+    /** Alias of {@link #getRrCeiling()} (V5: one band). */
+    public double getMaxRiskRewardRatio() { return rrCeiling; }
     public LocalTime getFlattenByTime() { return flattenByTime; }
     public boolean isAllowWeekendTrading() { return allowWeekendTrading; }
-    /** Validator (M7) RR floor for signal emission; independent of the risk-engine band. */
-    public double getSignalMinRr() { return signalMinRr; }
-    /** Validator (M7) RR ceiling for signal emission; {@code Double.POSITIVE_INFINITY} = no ceiling. */
-    public double getSignalMaxRr() { return signalMaxRr; }
+    /** Alias of {@link #getRrFloor()} (V5: validator and risk engine share one band). */
+    public double getSignalMinRr() { return rrFloor; }
+    /** Alias of {@link #getRrCeiling()} (V5: validator and risk engine share one band). */
+    public double getSignalMaxRr() { return rrCeiling; }
     /** Max trades allowed per trading day; {@code 0} disables the gate (legacy profiles). */
     public int getMaxTradesPerDay() { return maxTradesPerDay; }
     /** Max consecutive losses before trading is blocked; {@code 0} disables the gate. */
@@ -120,8 +118,8 @@ public final class RiskLimits {
                 .maxContracts(5)
                 .maxTotalContracts(10)
                 .riskPerTrade(250.0)           // 25% of DLL per trade
-                .minRiskRewardRatio(3.0)       // TIGHTENED: Minimum 3:1 R:R (was 2:1)
-                .maxRiskRewardRatio(6.0)       // Maximum 6:1 R:R
+                .rrFloor(com.topstep.trading.risk.RiskConfig.rrFloorLegacy())   // V5 one band: 1.0
+                .rrCeiling(com.topstep.trading.risk.RiskConfig.rrCeiling())     // V5 one band: 5.0
                 .flattenByTime(LocalTime.of(15, 10)) // 3:10 PM CT (Topstep rule)
                 .allowWeekendTrading(false)
                 .build();
@@ -144,8 +142,8 @@ public final class RiskLimits {
                 .maxContracts(10)
                 .maxTotalContracts(20)
                 .riskPerTrade(500.0)           // 25% of DLL per trade
-                .minRiskRewardRatio(3.0)       // TIGHTENED: Minimum 3:1 R:R (was 2:1)
-                .maxRiskRewardRatio(6.0)       // Maximum 6:1 R:R
+                .rrFloor(com.topstep.trading.risk.RiskConfig.rrFloorLegacy())   // V5 one band: 1.0
+                .rrCeiling(com.topstep.trading.risk.RiskConfig.rrCeiling())     // V5 one band: 5.0
                 .flattenByTime(LocalTime.of(15, 10)) // 3:10 PM CT
                 .allowWeekendTrading(false)
                 .build();
@@ -168,8 +166,8 @@ public final class RiskLimits {
                 .maxContracts(15)
                 .maxTotalContracts(30)
                 .riskPerTrade(750.0)           // 25% of DLL per trade
-                .minRiskRewardRatio(3.0)       // TIGHTENED: Minimum 3:1 R:R (was 2:1)
-                .maxRiskRewardRatio(6.0)       // Maximum 6:1 R:R
+                .rrFloor(com.topstep.trading.risk.RiskConfig.rrFloorLegacy())   // V5 one band: 1.0
+                .rrCeiling(com.topstep.trading.risk.RiskConfig.rrCeiling())     // V5 one band: 5.0
                 .flattenByTime(LocalTime.of(15, 10)) // 3:10 PM CT
                 .allowWeekendTrading(false)
                 .build();
@@ -182,8 +180,9 @@ public final class RiskLimits {
      * MLL $2,000, 15:10 CT flatten) — those are NEVER weakened. What changes:
      *
      * <ul>
-     *   <li>RR band [0.8, 1.5] — both the risk-engine band and the validator
-     *       signal band, matching the 1R-capped scalp target model.</li>
+     *   <li>RR band: floor 0.8 (risk.rrFloor.scalp), ceiling 5.0
+     *       (risk.rrCeiling) - V5 ONE band shared by the validator and the
+     *       risk engine (the old [0.8, 1.5] second band is gone).</li>
      *   <li>{@code riskPerTrade} $150 — deliberately NOT the legacy $250:
      *       with a $1,000 DLL and multiple trades per day, $250+ per trade
      *       makes a DLL breach a near-certainty on a normal losing streak
@@ -204,10 +203,8 @@ public final class RiskLimits {
                 .maxContracts(20)              // Instrument micro band ceiling [5, 20]
                 .maxTotalContracts(20)         // One position at a time at full size
                 .riskPerTrade(150.0)           // See javadoc: DLL survival at 6 trades/day
-                .minRiskRewardRatio(0.8)       // Scalp band floor
-                .maxRiskRewardRatio(1.5)       // Scalp band ceiling (1R-capped targets)
-                .signalMinRr(0.8)              // Validator M7 band = same scalp band
-                .signalMaxRr(1.5)
+                .rrFloor(com.topstep.trading.risk.RiskConfig.rrFloorScalp())    // V5 one band: 0.8
+                .rrCeiling(com.topstep.trading.risk.RiskConfig.rrCeiling())     // V5 one band: 5.0
                 .maxTradesPerDay(6)            // Trade #7 of the day is rejected
                 .maxConsecutiveLosses(3)       // 4th trade after 3 straight losses rejected
                 .flattenByTime(LocalTime.of(15, 10)) // 3:10 PM CT (Topstep rule, unchanged)
@@ -217,8 +214,8 @@ public final class RiskLimits {
 
     @Override
     public String toString() {
-        return String.format("RiskLimits{maxDailyLoss=%.2f, trailingDrawdown=%.2f, maxContracts=%d, riskPerTrade=%.2f}",
-                maxDailyLoss, trailingDrawdown, maxContracts, riskPerTrade);
+        return String.format("RiskLimits{maxDailyLoss=%.2f, trailingDrawdown=%.2f, maxContracts=%d, riskPerTrade=%.2f, rr=[%.2f, %.2f]}",
+                maxDailyLoss, trailingDrawdown, maxContracts, riskPerTrade, rrFloor, rrCeiling);
     }
 
     public static Builder builder() {
@@ -233,16 +230,11 @@ public final class RiskLimits {
         private int maxContracts = 5;
         private int maxTotalContracts = 10;
         private double riskPerTrade = 250.0;
-        private double minRiskRewardRatio = 2.0;
-        private double maxRiskRewardRatio = 5.0;
+        // V5 one band: defaults from risk.rrFloor / risk.rrCeiling.
+        private double rrFloor = com.topstep.trading.risk.RiskConfig.rrFloorLegacy();
+        private double rrCeiling = com.topstep.trading.risk.RiskConfig.rrCeiling();
         private LocalTime flattenByTime = LocalTime.of(15, 10);
         private boolean allowWeekendTrading = false;
-        // Validator band defaults reproduce the legacy effective behaviour
-        // exactly: floor 2.0 (the historical MIN_RR_FLOOR_STDV_OTE), no
-        // ceiling. Legacy factory methods inherit these without any change
-        // to their source.
-        private double signalMinRr = 2.0;
-        private double signalMaxRr = Double.POSITIVE_INFINITY;
         // Frequency gates default OFF (0) so legacy profiles enforce neither.
         private int maxTradesPerDay = 0;
         private int maxConsecutiveLosses = 0;
@@ -282,14 +274,26 @@ public final class RiskLimits {
             return this;
         }
 
-        public Builder minRiskRewardRatio(double minRiskRewardRatio) {
-            this.minRiskRewardRatio = minRiskRewardRatio;
+        /** THE RR floor (validator + risk engine). */
+        public Builder rrFloor(double rrFloor) {
+            this.rrFloor = rrFloor;
             return this;
         }
 
-        public Builder maxRiskRewardRatio(double maxRiskRewardRatio) {
-            this.maxRiskRewardRatio = maxRiskRewardRatio;
+        /** THE RR ceiling (validator, final target). */
+        public Builder rrCeiling(double rrCeiling) {
+            this.rrCeiling = rrCeiling;
             return this;
+        }
+
+        /** Alias of {@link #rrFloor(double)} (V5 one band). */
+        public Builder minRiskRewardRatio(double minRiskRewardRatio) {
+            return rrFloor(minRiskRewardRatio);
+        }
+
+        /** Alias of {@link #rrCeiling(double)} (V5 one band). */
+        public Builder maxRiskRewardRatio(double maxRiskRewardRatio) {
+            return rrCeiling(maxRiskRewardRatio);
         }
 
         public Builder flattenByTime(LocalTime flattenByTime) {
@@ -302,14 +306,14 @@ public final class RiskLimits {
             return this;
         }
 
+        /** Alias of {@link #rrFloor(double)} (V5 one band). */
         public Builder signalMinRr(double signalMinRr) {
-            this.signalMinRr = signalMinRr;
-            return this;
+            return rrFloor(signalMinRr);
         }
 
+        /** Alias of {@link #rrCeiling(double)} (V5 one band). */
         public Builder signalMaxRr(double signalMaxRr) {
-            this.signalMaxRr = signalMaxRr;
-            return this;
+            return rrCeiling(signalMaxRr);
         }
 
         public Builder maxTradesPerDay(int maxTradesPerDay) {

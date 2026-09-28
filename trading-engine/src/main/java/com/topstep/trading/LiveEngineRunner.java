@@ -142,6 +142,11 @@ public class LiveEngineRunner {
     private volatile boolean warmupComplete = false;
     private volatile Instant warmupCompletedAt = null;
     private static final long STALE_SIGNAL_THRESHOLD_SECONDS = 5 * 60;
+    /** AGENT-05 (V5 RC-15): per-symbol readiness + timeout, candle-time based. */
+    private volatile WarmupGuard.Tracker warmup;
+    private final java.util.concurrent.atomic.AtomicLong warmupDrops = new java.util.concurrent.atomic.AtomicLong();
+    /** AGENT-05: errors caught on the signal -> order path (never silent). */
+    private final java.util.concurrent.atomic.AtomicLong orderPathErrors = new java.util.concurrent.atomic.AtomicLong();
 
     // ── CHART-IN-MEMORY ─────────────────────────────────────────────────
     // The bot's own 30m chart per instrument (candles + OTE overlay), fed
@@ -232,6 +237,8 @@ public class LiveEngineRunner {
         this.executionEngine.setSimulationEnabled(false); // live mode relies on broker fills only
         this.riskEngine = new PropFirmRiskEngine();
         this.eventBus = new EventBus();
+        // AGENT-05 (V5 RC-17): every risk deny publishes a GateDecisionEvent.
+        this.riskEngine.setEventBus(eventBus);
         // Publish PositionClosedEvent from any ExecutionEngine close (live
         // closes normally flow through the bracket handlers below, which
         // publish it themselves).
@@ -240,6 +247,7 @@ public class LiveEngineRunner {
         // Initialize bracket order manager for OCO SL/TP management
         if (this.connector instanceof TopstepConnector) {
             this.bracketManager = new BracketOrderManager((TopstepConnector) this.connector);
+            this.bracketManager.setEventBus(eventBus); // AGENT-05: protective failures -> telemetry
             this.bracketManager.setListener(new BracketOrderManager.BracketListener() {
                 @Override
                 public void onStopLossFilled(BracketOrderManager.BracketOrder bracket, double fillPrice) {
@@ -455,8 +463,16 @@ public class LiveEngineRunner {
             stdvOteMultiEngine.setCandleTap(c -> {
                 verifyWiringAtFirstCandle(c);
                 lastCandleTs.put(c.getSymbol(), c.getTimestamp());
+                WarmupGuard.Tracker w = warmup;
+                if (w != null) w.onCandle(c.getSymbol(), c.getTimestamp());
                 chartEngine.onCandle(c);
                 publishSetupDecision(c);
+                // AGENT-05 (DIAGNOSIS §5): in STDV multi mode onMarketData
+                // never ran, so day rollover, executionEngine.onNewCandle and
+                // the breakeven trigger were skipped. They run here now.
+                if (running.get()) {
+                    candleHousekeeping(c);
+                }
             });
             stdvOteMultiEngine.setChartEngine(chartEngine);
             stdvOteMultiEngine.setIctLibEngine(ictLibEngine);
@@ -621,6 +637,16 @@ public class LiveEngineRunner {
             // Start the appropriate engine mode. STDV+OTE multi-instrument
             // wins if enabled; otherwise legacy multi-instrument; otherwise
             // single-symbol fallback.
+            java.util.List<String> required;
+            if (stdvOteMultiEngine != null) {
+                required = stdvOteMultiEngine.symbolsForSubscription();
+            } else if (MULTI_INSTRUMENT_MODE && multiEngine != null) {
+                required = java.util.List.of();
+            } else {
+                required = java.util.List.of(DEFAULT_SYMBOL, SMT_SYMBOL);
+            }
+            warmup = new WarmupGuard.Tracker(required,
+                    com.topstep.trading.risk.RiskConfig.warmupTimeoutSeconds());
             if (stdvOteMultiEngine != null) {
                 System.out.println("\n[STDV+OTE MULTI-INSTRUMENT] Starting engine...");
                 stdvOteMultiEngine.start();
@@ -655,9 +681,19 @@ public class LiveEngineRunner {
             // All initial subscriptions have returned — and the historical
             // backfill runs synchronously inside startMarketDataPolling, so
             // replay is finished. Real-time signals may now create orders.
+            // AGENT-05 (V5 RC-15): backfill replay done -> later candles are
+            // LIVE. Warmup completes when every required feed delivered one
+            // live candle, or after warmup.timeoutSeconds with a WARN naming
+            // the missing symbol.
+            warmup.beginLive();
             warmupCompletedAt = Instant.now();
             warmupComplete = true;
-            System.out.println("✓ Warmup complete — historical replay done, strategy signals live");
+            System.out.println("✓ Historical replay done — signals trade once every feed is live (required="
+                    + required + ", timeout=" + com.topstep.trading.risk.RiskConfig.warmupTimeoutSeconds() + "s)");
+            scheduler.scheduleAtFixedRate(() -> {
+                WarmupGuard.Tracker w = warmup;
+                if (w != null) w.poll();
+            }, 5, 5, TimeUnit.SECONDS);
 
             // Schedule flatten-by-time check (every minute)
             scheduler.scheduleAtFixedRate(
@@ -721,38 +757,10 @@ public class LiveEngineRunner {
             // symbol BEFORE any strategy dispatch (staleness reference).
             lastCandleTs.put(candle.getSymbol(), candle.getTimestamp());
 
-            // Update context time
-            strategyContext.setCurrentTime(candle.getTimestamp());
+            WarmupGuard.Tracker w = warmup;
+            if (w != null) w.onCandle(candle.getSymbol(), candle.getTimestamp());
 
-            // === Convex Payoff: Detect new trading day and sync lifecycle equity ===
-            LocalDate candleDate = candle.getTimestamp()
-                .atZone(CT_ZONE).toLocalDate();
-            if (lastTradingDate == null || !candleDate.equals(lastTradingDate)) {
-                if (lastTradingDate != null) {
-                    // End of previous day: record daily PnL
-                    double dayPnl = accountState.getNetDailyPnl();
-                    lifecycle.onDayEnd(dayPnl);
-                    System.out.println("[LIFECYCLE] New trading day detected. Previous day PnL: $" +
-                        String.format("%.2f", dayPnl));
-                }
-                tradesToday = 0;
-                lastTradingDate = candleDate;
-            }
-
-            // Sync lifecycle equity from live account state on every candle
-            lifecycle.syncEquityFromLive(accountState.getEquity());
-            lifecycle.updateIntradayPnl(accountState.getNetDailyPnl());
-
-            // Process through execution engine first (fills, stops, targets)
-            executionEngine.onNewCandle(candle);
-
-            // Check price-based breakeven trigger for single-contract runner positions
-            // (e.g., 1 MGC contract running to full tier target, needs breakeven at 1R)
-            if (bracketManager != null) {
-                String symbol = candle.getSymbol();
-                double tickSize = InstrumentCharacteristics.getProfile(symbol).getTickSize();
-                bracketManager.checkPriceBreakevenTrigger(symbol, candle.getClose(), tickSize);
-            }
+            candleHousekeeping(candle);
 
             // Feed to appropriate engine (only if not paused and not flattening)
             if (!paused.get() && !flatteningPositions.get()) {
@@ -763,8 +771,14 @@ public class LiveEngineRunner {
                     // Legacy multi-instrument mode
                     multiEngine.onMarketData(candle);
                 } else {
-                    // Single-instrument mode: use fallback strategy
-                    strategy.onCandle(candle, strategyContext);
+                    // Single-instrument mode: use fallback strategy. The
+                    // signal inherits this candle's MARKET time (RC-15).
+                    com.topstep.trading.event.SignalCandleClock.set(candle.getTimestamp());
+                    try {
+                        strategy.onCandle(candle, strategyContext);
+                    } finally {
+                        com.topstep.trading.event.SignalCandleClock.clear();
+                    }
                 }
             }
             publishSetupDecision(candle);
@@ -776,8 +790,61 @@ public class LiveEngineRunner {
     }
 
     /**
-     * Handle strategy signal event.
+     * AGENT-05: per-candle housekeeping shared by EVERY candle path (single
+     * mode onMarketData and the STDV multi-instrument candle tap): context
+     * time, trading-day rollover + lifecycle sync, execution-engine candle
+     * (prices / unrealized P&amp;L), the price-based breakeven trigger and the
+     * 14:45 CT flatten safety net.
      */
+    private void candleHousekeeping(Candle candle) {
+        // Update context time
+        strategyContext.setCurrentTime(candle.getTimestamp());
+
+        // === Convex Payoff: Detect new trading day and sync lifecycle equity ===
+        LocalDate candleDate = candle.getTimestamp()
+            .atZone(CT_ZONE).toLocalDate();
+        if (lastTradingDate == null || !candleDate.equals(lastTradingDate)) {
+            if (lastTradingDate != null) {
+                // End of previous day: record daily PnL
+                double dayPnl = accountState.getNetDailyPnl();
+                lifecycle.onDayEnd(dayPnl);
+                System.out.println("[LIFECYCLE] New trading day detected. Previous day PnL: $" +
+                    String.format("%.2f", dayPnl));
+            }
+            tradesToday = 0;
+            lastTradingDate = candleDate;
+        }
+
+        // Sync lifecycle equity from live account state on every candle
+        lifecycle.syncEquityFromLive(accountState.getEquity());
+        lifecycle.updateIntradayPnl(accountState.getNetDailyPnl());
+
+        // Process through execution engine first (fills, stops, targets)
+        executionEngine.onNewCandle(candle);
+
+        // Check price-based breakeven trigger for single-contract runner positions
+        // (e.g., 1 MGC contract running to full tier target, needs breakeven at 1R)
+        if (bracketManager != null) {
+            String symbol = candle.getSymbol();
+            double tickSize = InstrumentCharacteristics.getProfile(symbol).getTickSize();
+            bracketManager.checkPriceBreakevenTrigger(symbol, candle.getClose(), tickSize);
+        }
+
+        // 14:45–17:00 CT safety net (defence in depth, SACRED): a LIVE
+        // candle inside the block with an open position flattens it.
+        WarmupGuard.Tracker wg = warmup;
+        if (wg != null && wg.isComplete()
+                && com.topstep.trading.risk.RiskConfig.inNoEntryBlock(candle.getTimestamp())
+                && !flatteningPositions.get()
+                && accountState.hasPosition(candle.getSymbol())) {
+            com.topstep.trading.event.EngineTelemetry.publish(eventBus, new com.topstep.trading.event.GateDecisionEvent(
+                    candle.getSymbol(), candle.getTimestamp(), null, "IN_POSITION", "FLATTEN",
+                    "FLATTEN: 14:45 CT execution safety net (candle " + candle.getTimestamp() + ")",
+                    Double.NaN, Double.NaN));
+            flattenAllPositions("14:45 CT safety net");
+        }
+    }
+
     /**
      * Release the strategy's post-emission latch when a signal dies without
      * an order or position (2026-07-27 no-trade fix). The STDV+OTE core
@@ -802,40 +869,53 @@ public class LiveEngineRunner {
 
     private void handleStrategySignal(StrategySignalEvent signal) {
         publishSignalDecision(signal, "SIGNAL received");
-        // ── WARMUP GUARD layer 1: nothing trades until every initial
-        // subscription (and its synchronous historical backfill) returned.
-        if (!warmupComplete) {
-            System.out.println("[Warmup] Suppressing signal during startup warmup: "
-                + signal.getSignalType() + " " + signal.getSymbol());
-            releaseUnexecutedSignal(signal, "warmup suppression");
+        // ── WARMUP GUARD (V5 RC-15, deterministic): every required feed live
+        // (or timeout + WARN), and the signal's CANDLE time not before the
+        // warmup-completion candle. Dropped signals publish + count.
+        WarmupGuard.Tracker w = warmup;
+        String warmupDrop = (w == null)
+                ? "WARMUP: engine not started"
+                : w.dropReason(signal.getCandleTime(), signal.getTimestamp());
+        if (warmupDrop == null) {
+            // Staleness (LIVE only): the signal's candle (or, for a legacy
+            // signal without one, its symbol's latest candle) must be recent
+            // vs wall clock — never "no candle for some OTHER symbol".
+            Instant ref = signal.getCandleTime() != null
+                    ? signal.getCandleTime() : lastCandleTs.get(signal.getSymbol());
+            if (WarmupGuard.isStaleSignal(ref, Instant.now(), STALE_SIGNAL_THRESHOLD_SECONDS)) {
+                warmupDrop = "WARMUP: stale signal (candle " + ref + " older than "
+                        + STALE_SIGNAL_THRESHOLD_SECONDS + "s vs wall clock)";
+            }
+        }
+        if (warmupDrop != null) {
+            warmupDrops.incrementAndGet();
+            WarmupGuard.recordDrop();
+            System.out.println("[Warmup] dropping " + signal.getSignalType() + " " + signal.getSymbol()
+                    + " — " + warmupDrop);
+            publishGate(signal, "WARMUP", warmupDrop,
+                    signal.getCandleTime() == null ? Double.NaN : signal.getCandleTime().getEpochSecond(),
+                    (w == null || w.completionCandleTime() == null) ? Double.NaN
+                            : w.completionCandleTime().getEpochSecond());
+            releaseLatch(signal, "warmup suppression");
             return;
         }
 
-        // The EventBus is async: a signal created during replay can be
-        // dequeued after the flag flipped. Suppress those too.
-        if (WarmupGuard.createdDuringWarmup(signal.getTimestamp(), warmupCompletedAt)) {
-            System.out.println("[Warmup] Suppressing signal created during historical replay: "
-                + signal.getSignalType() + " " + signal.getSymbol()
-                + " (created=" + signal.getTimestamp() + ")");
-            releaseUnexecutedSignal(signal, "created during warmup replay");
-            return;
-        }
-
-        // ── WARMUP GUARD layer 2: staleness — if the most recent candle for
-        // this symbol is > 5 minutes behind wall-clock, the signal came from
-        // historical/replayed data and must not create an order.
-        Instant lastTs = lastCandleTs.get(signal.getSymbol());
-        if (WarmupGuard.isStaleSignal(lastTs, Instant.now(), STALE_SIGNAL_THRESHOLD_SECONDS)) {
-            System.out.println("[Warmup] Suppressing signal from historical/stale data: "
-                + signal.getSignalType() + " " + signal.getSymbol()
-                + " (lastCandle=" + lastTs + ")");
-            releaseUnexecutedSignal(signal, "stale-data suppression");
+        // ── FLATTEN / NO-ENTRY safety net (SACRED): no new entry inside
+        // 14:45–17:00 CT whatever the session gate said.
+        Instant entryTime = signal.getCandleTime() != null ? signal.getCandleTime() : Instant.now();
+        if (com.topstep.trading.risk.RiskConfig.inNoEntryBlock(entryTime)) {
+            String why = "FLATTEN: no new entries 14:45-17:00 CT (signal candle " + entryTime + ")";
+            System.out.println("\n❌ LIVE Signal DENIED: " + why);
+            publishGate(signal, "FLATTEN", why, entryTime.getEpochSecond(), Double.NaN);
+            releaseLatch(signal, "no-entry block");
             return;
         }
 
         if (paused.get() || killSwitchActive.get() || flatteningPositions.get()) {
             System.out.println("\n⏸ Signal ignored (paused/kill/flattening): " + signal.getReason());
-            releaseUnexecutedSignal(signal, "paused/kill/flattening");
+            publishGate(signal, "PAUSED", "ENGINE: paused / kill switch / flattening — signal not executed",
+                    Double.NaN, Double.NaN);
+            releaseLatch(signal, "paused/kill/flattening");
             return;
         }
 
@@ -905,7 +985,9 @@ public class LiveEngineRunner {
             if (!riskManagerDecision.isApproved()) {
                 System.out.println("\n❌ LIVE Signal BLOCKED by TradingRiskManager: " + signal.getReason());
                 System.out.println("  Reason: " + riskManagerDecision.getReason());
-                releaseUnexecutedSignal(signal, "TradingRiskManager block");
+                publishGate(signal, "RISK", "RISK: TradingRiskManager — " + riskManagerDecision.getReason(),
+                        Double.NaN, Double.NaN);
+                releaseLatch(signal, "TradingRiskManager block");
                 return;
             }
 
@@ -914,7 +996,8 @@ public class LiveEngineRunner {
             if (conditionIssue != null) {
                 System.out.println("\n❌ LIVE Signal SKIPPED: " + signal.getReason());
                 System.out.println("  Reason: " + conditionIssue);
-                releaseUnexecutedSignal(signal, "market conditions");
+                publishGate(signal, "MARKET", "MARKET: " + conditionIssue, Double.NaN, Double.NaN);
+                releaseLatch(signal, "market conditions");
                 return;
             }
         }
@@ -942,7 +1025,9 @@ public class LiveEngineRunner {
         if (!riskCalc.isTradingAllowed()) {
             System.out.println("\n❌ Signal DENIED by PhaseAwareRiskCalculator: " + signal.getReason());
             System.out.println("  Reason: " + riskCalc.getBlockReason());
-            releaseUnexecutedSignal(signal, "PhaseAwareRiskCalculator deny: " + riskCalc.getBlockReason());
+            publishGate(signal, "RISK", "RISK: PhaseAwareRiskCalculator — " + riskCalc.getBlockReason(),
+                    riskCalc.getRiskDollars(), Double.NaN);
+            releaseLatch(signal, "PhaseAwareRiskCalculator deny");
             return;
         }
 
@@ -987,16 +1072,20 @@ public class LiveEngineRunner {
 
             } catch (Exception e) {
                 com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.submitOrder", e);
-                System.err.println("❌ Order submission failed: " + e.getMessage());
+                orderPathErrors.incrementAndGet();
+                System.err.println("❌ ERROR Order submission failed: " + e.getMessage());
+                publishGate(signal, "ORDER", "ORDER: submission failed — " + e.getMessage(),
+                        Double.NaN, Double.NaN);
                 // The order never reached the market — free the strategy.
                 executionEngine.removeOrder(signal.getSymbol());
-                releaseUnexecutedSignal(signal, "order submission failed");
+                releaseLatch(signal, "order submission failed");
             }
 
         } else {
             System.out.println("\n❌ Signal DENIED by PropFirmRiskEngine: " + signal.getReason());
             System.out.println("  Reason: " + decision.getReason());
-            releaseUnexecutedSignal(signal, "PropFirmRiskEngine deny: " + decision.getReason());
+            // PropFirmRiskEngine already published RISK/SIZE with its numbers.
+            releaseLatch(signal, "PropFirmRiskEngine deny: " + decision.getReason());
         }
     }
 
@@ -1072,8 +1161,8 @@ public class LiveEngineRunner {
                 : lw.contains("pause") ? "PAUSED"
                 : lw.contains("broker") || lw.contains("submission") || lw.contains("unfilled") ? "EXEC"
                 : "RISK";
-        // AGENT-05: signal events carry the BaseEvent wall-clock stamp (D-01); switch to candle time when it exists.
-        Instant t = signal.getTimestamp();
+        // AGENT-05 (RC-15): candle time when the signal carries one (D-01 fixed).
+        Instant t = signal.getCandleTime() != null ? signal.getCandleTime() : signal.getTimestamp();
         com.topstep.trading.event.EngineTelemetry.publish(eventBus,
                 new com.topstep.trading.event.GateDecisionEvent(signal.getSymbol(), t,
                         com.topstep.trading.event.EngineTelemetry.sessionOf(t), "SIGNAL", gate, w,
@@ -1162,7 +1251,8 @@ public class LiveEngineRunner {
      */
     private void submitProtectiveOrders(StrategySignalEvent signal, int quantity, double fillPrice, String entryOrderId) {
         if (bracketManager == null) {
-            System.err.println("  ❌ BracketOrderManager not available - position is UNPROTECTED!");
+            System.err.println("  ❌ ERROR BracketOrderManager not available - position is UNPROTECTED!");
+            emergencyFlattenUnprotected(signal, quantity, fillPrice, "no bracket manager");
             return;
         }
 
@@ -1181,7 +1271,8 @@ public class LiveEngineRunner {
         // bracket (DIAGNOSIS_V5 §5 LiveEngineRunner:1080-1137) — execution-path
         // safety net (flatten / protective stop + ERROR counter) is Agent 05's.
         if (stopPrice <= 0 || targetPrice <= 0) {
-            System.err.println("  ❌ Invalid bracket prices for " + symbol + " (stop=" + stopPrice + ", target=" + targetPrice + ")");
+            System.err.println("  ❌ ERROR Invalid bracket prices for " + symbol + " (stop=" + stopPrice + ", target=" + targetPrice + ")");
+            emergencyFlattenUnprotected(signal, quantity, fillPrice, "invalid bracket prices");
             return;
         }
 
@@ -1204,21 +1295,25 @@ public class LiveEngineRunner {
         if (isLong) {
             // LONG: stopPrice < fillPrice < targetPrice
             if (stopPrice >= fillPrice) {
-                System.err.println("  ❌ Invalid LONG bracket: stop (" + stopPrice + ") >= fill (" + fillPrice + ")");
+                System.err.println("  ❌ ERROR Invalid LONG bracket: stop (" + stopPrice + ") >= fill (" + fillPrice + ")");
+                emergencyFlattenUnprotected(signal, quantity, fillPrice, "invalid LONG bracket geometry");
                 return;
             }
             if (targetPrice <= fillPrice) {
-                System.err.println("  ❌ Invalid LONG bracket: target (" + targetPrice + ") <= fill (" + fillPrice + ")");
+                System.err.println("  ❌ ERROR Invalid LONG bracket: target (" + targetPrice + ") <= fill (" + fillPrice + ")");
+                emergencyFlattenUnprotected(signal, quantity, fillPrice, "invalid LONG bracket geometry");
                 return;
             }
         } else {
             // SHORT: targetPrice < fillPrice < stopPrice
             if (stopPrice <= fillPrice) {
-                System.err.println("  ❌ Invalid SHORT bracket: stop (" + stopPrice + ") <= fill (" + fillPrice + ")");
+                System.err.println("  ❌ ERROR Invalid SHORT bracket: stop (" + stopPrice + ") <= fill (" + fillPrice + ")");
+                emergencyFlattenUnprotected(signal, quantity, fillPrice, "invalid SHORT bracket geometry");
                 return;
             }
             if (targetPrice >= fillPrice) {
-                System.err.println("  ❌ Invalid SHORT bracket: target (" + targetPrice + ") >= fill (" + fillPrice + ")");
+                System.err.println("  ❌ ERROR Invalid SHORT bracket: target (" + targetPrice + ") >= fill (" + fillPrice + ")");
+                emergencyFlattenUnprotected(signal, quantity, fillPrice, "invalid SHORT bracket geometry");
                 return;
             }
         }
@@ -1337,7 +1432,8 @@ public class LiveEngineRunner {
         double priceDiff = (entrySide == OrderSide.BUY)
             ? (exitPrice - entryPrice)
             : (entryPrice - exitPrice);
-        return priceDiff * quantity * tickValue;
+        // AGENT-05 (V5 RC-17): points / tickSize * tickValue (was points * tickValue).
+        return priceDiff / getTickSize(symbol) * quantity * tickValue;
     }
 
     /**
@@ -1439,11 +1535,16 @@ public class LiveEngineRunner {
             return;
         }
 
-        // Get flatten-by time from risk limits (in CT)
+        // Get flatten-by time from risk limits (in CT). AGENT-05 (V5, SACRED
+        // 14:45–17:00 CT block): the EARLIER of RiskLimits.flattenByTime and
+        // the 14:45 CT safety net, through 17:00 CT (Globex reopen).
         LocalTime flattenByTime = riskLimits.getFlattenByTime();
+        if (com.topstep.trading.risk.RiskConfig.FLATTEN_SAFETY_NET_CT.isBefore(flattenByTime)) {
+            flattenByTime = com.topstep.trading.risk.RiskConfig.FLATTEN_SAFETY_NET_CT;
+        }
 
-        // Check if we need to flatten (between flattenByTime and 4 PM CT)
-        if (now.isAfter(flattenByTime) && now.isBefore(LocalTime.of(16, 0))) {
+        // Check if we need to flatten (between flattenByTime and 5 PM CT)
+        if (!now.isBefore(flattenByTime) && now.isBefore(com.topstep.trading.risk.RiskConfig.NO_ENTRY_END_CT)) {
             if (!accountState.getPositions().isEmpty()) {
                 System.out.println("\n⏰ FLATTEN-BY-TIME TRIGGERED!");
                 System.out.println("  Time: " + now + " CT");
@@ -1985,6 +2086,69 @@ public class LiveEngineRunner {
     }
 
     // === Convex Payoff Optimization getters ===
+    private void publishGate(StrategySignalEvent signal, String gate, String reason, double a, double b) {
+        Instant t = signal.getCandleTime() != null ? signal.getCandleTime() : signal.getTimestamp();
+        com.topstep.trading.event.EngineTelemetry.publish(eventBus, new com.topstep.trading.event.GateDecisionEvent(
+                signal.getSymbol(), t, com.topstep.trading.event.EngineTelemetry.sessionOf(t),
+                "SIGNAL", gate, reason, a, b));
+    }
+
+    /**
+     * AGENT-05: release the strategy latch when the denying gate already
+     * published its own GateDecisionEvent (with numbers) — no duplicate row.
+     */
+    private void releaseLatch(StrategySignalEvent signal, String why) {
+        System.out.println("[SignalRelease] " + signal.getSymbol() + ": " + why
+                + " — releasing strategy latch (no order/position created)");
+        eventBus.publish(new com.topstep.trading.event.PositionClosedEvent(
+                signal.getSymbol(), 0.0, false, Instant.now()));
+    }
+
+    /**
+     * AGENT-05 (V5 RC-17): a filled entry that cannot get a bracket is NEVER
+     * left unprotected — close it by MARKET, book the P&amp;L, publish the
+     * close + a GateDecisionEvent "BRACKET", log at ERROR.
+     */
+    private void emergencyFlattenUnprotected(StrategySignalEvent signal, int quantity, double fillPrice, String why) {
+        orderPathErrors.incrementAndGet();
+        String symbol = signal.getSymbol();
+        System.err.println("[LIVE] ERROR " + symbol + " position UNPROTECTED (" + why + ") — flattening " + quantity + " by MARKET");
+        publishGate(signal, "BRACKET", "BRACKET: position unprotected (" + why + ") — flattened by market",
+                quantity, fillPrice);
+        if (quantity <= 0) return;
+        final OrderSide entrySide = signal.getSide();
+        OrderSide closeSide = entrySide == OrderSide.BUY ? OrderSide.SELL : OrderSide.BUY;
+        try {
+            Order close = new Order(symbol, closeSide, OrderType.MARKET, quantity, 0.0);
+            connector.submitOrder(close, (id, status, price, qty) -> {
+                if (status == OrderStatus.FILLED && price != null) {
+                    double pnl = calculatePnl(symbol, fillPrice, price, quantity, entrySide);
+                    accountState.recordRealizedPnL(pnl);
+                    accountState.recordTradeCompleted(pnl);
+                    accountState.closePosition(symbol);
+                    eventBus.publish(new com.topstep.trading.event.PositionClosedEvent(
+                            symbol, pnl, pnl > 0, Instant.now()));
+                }
+            });
+        } catch (Exception e) {
+            System.err.println("[LIVE] CRITICAL emergency flatten FAILED for " + symbol + ": " + e.getMessage()
+                    + " — MANUAL INTERVENTION REQUIRED");
+            activateKillSwitch("unprotected position could not be flattened: " + symbol);
+        }
+    }
+
+    /** Signals dropped by the warmup guard (AGENT-01: expose on /api/status). */
+    public long getWarmupDroppedSignals() { return warmupDrops.get(); }
+
+    /** Errors caught on the signal -> order path. */
+    public long getOrderPathErrorCount() { return orderPathErrors.get(); }
+
+    /** True once every required feed is live (or the warmup timeout fired). */
+    public boolean isWarmupComplete() {
+        WarmupGuard.Tracker w = warmup;
+        return w != null && w.poll();
+    }
+
     public AccountLifecycle getLifecycle() { return lifecycle; }
     public PhaseAwareRiskCalculator getRiskCalculator() { return riskCalculator; }
     public RiskProfile getRiskProfile() { return riskProfile; }

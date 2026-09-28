@@ -316,6 +316,11 @@ public class MockConnector implements TradingConnector {
      * Simulate order fill.
      */
     private void simulateFill(Order order, OrderListener listener) {
+        // AGENT-05: a cancelled order (listener removed) must not fill.
+        if (!orderListeners.containsKey(order.getOrderId())) {
+            logger.info("Mock order {} no longer working (cancelled) — no fill", order.getOrderId());
+            return;
+        }
         // Randomly decide if order gets filled (90% success rate)
         if (random.nextDouble() < 0.9) {
             double fillPrice;
@@ -325,8 +330,13 @@ public class MockConnector implements TradingConnector {
                 fillPrice = currentPrices.getOrDefault(order.getSymbol(), 5000.0);
             }
 
-            listener.onOrderFilled(order, order.getQuantity(), fillPrice);
-            logger.info("Mock order filled: {} @ {}", order.getOrderId(), fillPrice);
+            try {
+                listener.onOrderFilled(order, order.getQuantity(), fillPrice);
+                logger.info("Mock order filled: {} @ {}", order.getOrderId(), fillPrice);
+            } catch (RuntimeException e) {
+                // Never swallow: a throwing fill handler is an ERROR (RC-17).
+                logger.error("ERROR in fill listener for mock order {}: {}", order.getOrderId(), e.toString(), e);
+            }
         } else {
             listener.onOrderRejected(order, "Mock rejection for testing");
             logger.info("Mock order rejected: {}", order.getOrderId());

@@ -226,8 +226,6 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** V2 Agent 06: identity (taggedAt) of the last REACTED zone already
      *  counted as chartReacted_machineSilent — one count per zone. */
     private Instant lastChartOnlyZoneTag;
-    /** Buffer-based sizer, wired in scalp mode when account state is available. */
-    private final StdvOteSizer sizer = new StdvOteSizer();
     private final double sizerSafetyCushion;
     /** OTE entry math (same instance the core uses; pure). */
     private final OteEntryCalculator oteCalculator;
@@ -251,18 +249,19 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private final AtomicBoolean pendingPositionClosed = new AtomicBoolean(false);
     /** True from signal emission until a PositionClosedEvent for this symbol. */
     private volatile boolean positionOpen = false;
+    /** AGENT-05 (RC-16): account trade count / day at emission — a release
+     *  with no completed trade since then means the signal never executed. */
+    private int tradesAtEmit = -1;
+    private java.time.LocalDate tradingDayAtEmit;
+    /** AGENT-05 (RC-16): a position for this symbol was observed after emission. */
+    private boolean positionSeenSinceEmit = false;
+    /** AGENT-05: last SIZE denial published (one GateDecisionEvent per distinct reason). */
+    private String lastSizeDenial;
     /** Bars left before a re-arm may fire; -1 = no re-arm pending. */
     private int rearmCooldownRemaining = -1;
     /** Previous candle's state, to detect INVALIDATED transitions. */
     private SetupState lastSeenState = SetupState.IDLE;
 
-    // Tier-driven fixed size table (first-cut sizing; replaced by the full
-    // buffer-based formula in StdvOteSizer once the runner exposes equity —
-    // SA3 scope, see class javadoc).
-    private static final int SIZE_TIER_4 = 18;
-    private static final int SIZE_TIER_3 = 14;
-    private static final int SIZE_TIER_2 = 10;
-    private static final int SIZE_TIER_1 = 6;
 
     /**
      * Timeframe on which the ENTRY ANATOMY (displacement, FVG, MSS/CHoCH)
@@ -583,18 +582,21 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             // sweep time too — one floor, checked where the sweep is taken.
             core.setLegacyMinRaidScore(spec.raidMinQuality());
         }
+        // AGENT-05 (V5 RC-16): observe the position-close funnels in BOTH
+        // modes. Legacy used to subscribe only in scalp mode, so a legacy
+        // signal the risk engine denied (released via a synthetic
+        // PositionClosedEvent) left the machine IN_TRADE for 200 minutes.
+        // The handler only flips a flag — all state mutation happens on the
+        // candle thread (SetupContext is thread-confined).
+        if (eventBus != null) {
+            eventBus.subscribe(PositionClosedEvent.class, evt -> {
+                if (this.symbol.equals(evt.getSymbol())) {
+                    pendingPositionClosed.set(true);
+                }
+            });
+        }
         if (scalpMode) {
             core.enableScalpMode(ScalpConfig.targetCalculator(), ScalpConfig.minRaidScore());
-            // Re-arm trigger (SA4): observe the position-close funnels via
-            // the bus. The handler only flips a flag — all state mutation
-            // happens on the candle thread (SetupContext is thread-confined).
-            if (eventBus != null) {
-                eventBus.subscribe(PositionClosedEvent.class, evt -> {
-                    if (this.symbol.equals(evt.getSymbol())) {
-                        pendingPositionClosed.set(true);
-                    }
-                });
-            }
             System.out.println("[StdvOteRunnerStrategy] SCALP MODE ACTIVE for " + symbol
                     + " (1R-capped targets, band ["
                     + activeRiskLimits.getSignalMinRr() + ", "
@@ -1143,6 +1145,23 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private void processLegacyRearm(SetupContext ctx, StrategyContext context,
                                     boolean inKillzone) {
         rearmBiasGuard.observeBias(lastBias); // AGENT-02: bias-event bookkeeping first
+        // AGENT-05 (V5 RC-16): the latch. A position observed after emission
+        // marks the signal as EXECUTED (IN_TRADE stays terminal in legacy —
+        // one-trade discipline). A release event (PositionClosedEvent) for a
+        // signal that NEVER executed — risk deny, warmup drop, order failure,
+        // SIM order TTL — invalidates the setup so the normal legacy re-arm
+        // applies instead of sitting IN_TRADE until setupExpiryBars.
+        if (ctx.state == SetupState.IN_TRADE && context != null && context.hasPosition(symbol)) {
+            positionSeenSinceEmit = true;
+        }
+        if (pendingPositionClosed.compareAndSet(true, false)) {
+            positionOpen = false;
+            if (ctx.state == SetupState.IN_TRADE && !executedSinceEmit(context)) {
+                System.out.println("[" + symbol + "] signal released without execution"
+                        + " — legacy latch cleared, setup invalidated for re-arm");
+                core.invalidate("signal not executed (released)");
+            }
+        }
         if (ctx.state == SetupState.INVALIDATED && rearmCooldownRemaining < 0) {
             if (suppressDuplicateBiasInvalidation(ctx, context)) {
                 return;
@@ -1187,6 +1206,21 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** Test/telemetry hook: duplicate bias invalidations suppressed so far. */
     int suppressedDuplicateInvalidationsForTest() {
         return rearmBiasGuard.suppressedCount();
+    }
+
+    /**
+     * AGENT-05 (RC-16): did the emitted signal become a real position? True
+     * when a position was observed after emission or the account completed
+     * a trade since emission (same trading day).
+     */
+    private boolean executedSinceEmit(StrategyContext context) {
+        if (positionSeenSinceEmit) return true;
+        AccountState account = (context != null) ? context.getAccountState() : null;
+        if (account == null || tradesAtEmit < 0) return false;
+        if (tradingDayAtEmit != null && !tradingDayAtEmit.equals(account.getCurrentTradingDay())) {
+            return false;
+        }
+        return account.getTradesToday() > tradesAtEmit;
     }
 
     /** All re-arm gates outside the cooldown itself. */
@@ -1756,87 +1790,117 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 || (context != null && context.hasPosition(symbol)))) {
             return;
         }
-        int size = scalpMode ? scalpSize(ctx, tier, context) : sizeForTier(tier);
+        // AGENT-05 (V5 RC-16): M9 is cleared PER ATTEMPT — a diagnostic left
+        // by an earlier bar must never veto this bar's attempt (D-06).
+        ctx.lastGateFailed = null;
+        int size = scalpMode ? scalpSize(ctx, tier, context) : sizeForTier(ctx, tier, context);
         if (size <= 0) {
-            // Sizer stand-down (never 1–4 micros): skip this bar; the OTE
-            // window keeps counting and the setup expires/invalidates
-            // normally if conditions do not improve.
+            // SIZE deny (stop too wide for the risk budget even at
+            // size.minMicros): published once per distinct reason as a
+            // GateDecisionEvent; the OTE window keeps counting and the setup
+            // expires/invalidates normally if conditions do not improve.
             return;
         }
         // tryEmit runs the validator; if it passes, a signal is published.
         // On failure the OTE window simply keeps counting in onCandle — the
         // previous extra barsInOte++ here double-counted and halved the
-        // window (SA1 audit finding).
-        boolean emitted = core.tryEmit(spec.tickSize(), stopBufferTicks, tier, size);
-        if (emitted && scalpMode) {
-            // Track the open position for the no-overlap rule; cleared only
-            // by this symbol's PositionClosedEvent.
+        // window (SA1 audit finding). The signal carries the CANDLE time
+        // (SignalCandleClock) for the deterministic warmup guard (RC-15).
+        java.time.Instant prevClock = com.topstep.trading.event.SignalCandleClock.current();
+        if (lastCandleInstant != null) {
+            com.topstep.trading.event.SignalCandleClock.set(lastCandleInstant);
+        }
+        boolean emitted;
+        try {
+            emitted = core.tryEmit(spec.tickSize(), stopBufferTicks, tier, size);
+        } finally {
+            com.topstep.trading.event.SignalCandleClock.set(prevClock);
+        }
+        if (emitted) {
+            // Latch (both modes, RC-16): cleared by this symbol's
+            // PositionClosedEvent (real close or synthetic release).
             positionOpen = true;
+            positionSeenSinceEmit = false;
+            AccountState account = (context != null) ? context.getAccountState() : null;
+            tradesAtEmit = (account != null) ? account.getTradesToday() : -1;
+            tradingDayAtEmit = (account != null) ? account.getCurrentTradingDay() : null;
+            lastSizeDenial = null;
         }
     }
 
     /**
-     * Scalp-mode size selection (SA4): route through {@link StdvOteSizer}
-     * when account/equity state is available from the {@link StrategyContext}.
-     *
-     * <p>Mapping onto the sizer's buffer-based formula:
-     * <ul>
-     *   <li>{@code equity} — live account equity;</li>
-     *   <li>{@code mllFloor} — highest EOD balance − MLL (the Topstep bust
-     *       line from the active {@link RiskLimits});</li>
-     *   <li>{@code riskFraction} — capped so the risk budget never exceeds
-     *       the profile's {@code riskPerTrade} ($150 on topstep50kScalp) NOR
-     *       the sizer's canonical 12% of available room;</li>
-     *   <li>{@code topstepMicroMax} — the risk engine's
-     *       {@code maxContracts}, so runner sizing can never exceed it.</li>
-     * </ul>
-     * The sizer itself clamps to the instrument band [5, 20] and returns 0
-     * (stand down) rather than 1–4 micros. Without account state (no
-     * context), sizing falls back to the bounded tier table — flagged in
-     * SA4_frequency_gates.md.
+     * Scalp-mode size (V5 RC-14): the ONE risk-derived rule
+     * ({@link StdvOteSizer#riskDerived}) against the profile's
+     * {@code riskPerTrade} capped by the DLL/MLL room, clamped to
+     * [size.minMicros, min(size.maxMicros, maxContracts)], THEN the prime
+     * killzone boost (never above the cap). Returns 0 only for a SIZE deny.
      */
     private int scalpSize(SetupContext ctx, TradeTier tier, StrategyContext context) {
-        AccountState account = (context != null) ? context.getAccountState() : null;
-        if (account == null || ctx.ote == null || Double.isNaN(ctx.pdArrayInOte)) {
-            return sizeForTier(tier); // bounded fallback ([5, 20] clamp)
+        double boost = 1.0;
+        if (killzoneSizeBoost > 1.0 && lastCandleInstant != null
+                && isPrimeKillzone(lastCandleInstant)) {
+            boost = killzoneSizeBoost;
+        }
+        return riskDerivedSize(ctx, tier, context, boost);
+    }
+
+    /**
+     * Legacy-mode size (V5 RC-14): the SAME risk-derived path as scalp mode
+     * (no killzone boost). The old fixed tier table (18/14/10/6 micros) sent
+     * sizes the risk engine then silently re-sized — gone.
+     */
+    private int sizeForTier(SetupContext ctx, TradeTier tier, StrategyContext context) {
+        return riskDerivedSize(ctx, tier, context, 1.0);
+    }
+
+    /** The one sizing path for both modes; 0 = SIZE deny (published). */
+    private int riskDerivedSize(SetupContext ctx, TradeTier tier, StrategyContext context,
+                                double boost) {
+        int cap = Math.min(Math.min(com.topstep.trading.risk.RiskConfig.maxMicros(), spec.maxMicros()),
+                activeRiskLimits.getMaxContracts());
+        if (ctx.ote == null || Double.isNaN(ctx.pdArrayInOte)) {
+            // Geometry unknown: size.preferredMicros is the preference (the
+            // validator's M7 will reject this attempt anyway).
+            return Math.min(cap, com.topstep.trading.risk.RiskConfig.preferredMicros());
         }
         double entry = oteCalculator.chooseEntry(
                 ctx.ote, OptionalDouble.of(ctx.pdArrayInOte), spec.tickSize());
         double stop = oteCalculator.stopPrice(ctx.ote, spec.tickSize(), stopBufferTicks);
-        double equity = account.getEquity();
-        double mllFloor = account.getHighestEndOfDayBalance()
-                - activeRiskLimits.getMaxLossLimit();
-        double availableRoom = equity - mllFloor - sizerSafetyCushion;
-        double riskFraction = StdvOteSizer.DEFAULT_RISK_FRACTION;
-        if (availableRoom > 0) {
-            riskFraction = Math.min(riskFraction,
-                    activeRiskLimits.getRiskPerTrade() / availableRoom);
+        double dllRoom = Double.NaN;
+        double mllRoom = Double.NaN;
+        AccountState account = (context != null) ? context.getAccountState() : null;
+        if (account != null) {
+            dllRoom = activeRiskLimits.getMaxDailyLoss() + account.getNetDailyPnl();
+            mllRoom = activeRiskLimits.getMaxLossLimit()
+                    - (account.getHighestEndOfDayBalance() - account.getEquity());
         }
-        // Killzone size boost (scalp.killzoneSizeBoost, clamp [1.0, 2.0]):
-        // rides the sizer's multiplier slot, so the result is floored and
-        // re-clamped against the tier cap, topstepMicroMax, and the [5, 20]
-        // band — the boost can request more size, never bypass a cap. The
-        // PropFirmRiskEngine still evaluates the final signal.
-        double sizeMultiplier = 1.0;
-        if (killzoneSizeBoost > 1.0 && lastCandleInstant != null
-                && isPrimeKillzone(lastCandleInstant)) {
-            sizeMultiplier = killzoneSizeBoost;
-        }
-        StdvOteSizer.SizingDecision decision = sizer.decide(
-                new StdvOteSizer.SizeRequest(entry, stop, spec, tier),
-                new StdvOteSizer.SizeContext(equity, mllFloor, sizerSafetyCushion,
-                        riskFraction, /* multiplier: 1.0 or killzone boost */ sizeMultiplier,
-                        activeRiskLimits.getMaxContracts()));
-        if (!decision.shouldTrade()) {
-            System.out.println("[" + symbol + "] SCALP sizer stand-down: "
-                    + decision.reason() + " (" + decision.detail() + ")");
+        double budget = StdvOteSizer.riskBudget(activeRiskLimits.getRiskPerTrade(), dllRoom, mllRoom);
+        StdvOteSizer.RiskSize rs = StdvOteSizer.riskDerived(budget, entry, stop,
+                spec.tickSize(), spec.tickValue(),
+                com.topstep.trading.risk.RiskConfig.minMicros(), cap);
+        if (rs.denied()) {
+            if (!rs.reason().equals(lastSizeDenial)) {
+                lastSizeDenial = rs.reason();
+                System.out.println("[" + symbol + "] " + rs.reason()
+                        + " — entry " + entry + " stop " + stop + " (" + tier + ")");
+                if (eventBus != null) {
+                    com.topstep.trading.event.EngineTelemetry.publish(eventBus, new com.topstep.trading.event.GateDecisionEvent(
+                            symbol, lastCandleInstant, null, String.valueOf(ctx.state),
+                            "SIZE", rs.reason(), rs.needDollars(), rs.haveDollars()));
+                }
+            }
             return 0;
         }
-        if (sizeMultiplier > 1.0) {
-            System.out.println("[" + symbol + "] KILLZONE SIZE BOOST x" + sizeMultiplier
-                    + " -> " + decision.contracts() + " micros (all caps still applied)");
+        int size = rs.contracts();
+        if (boost > 1.0) {
+            int boosted = StdvOteSizer.applyBoost(size, boost, cap);
+            if (boosted != size) {
+                System.out.println("[" + symbol + "] KILLZONE SIZE BOOST x" + boost
+                        + " -> " + boosted + " micros (risk-derived " + size + ", cap " + cap + ")");
+            }
+            size = boosted;
         }
-        return decision.contracts();
+        return size;
     }
 
     private TradeTier computeTier(SetupContext ctx) {
@@ -1865,20 +1929,6 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // (legacy OR scalp) there is no "no qualifying tier" outcome.
         return com.topstep.trading.strategy.VariantSelector.resolveStdvOteTier(
                 ctx.raidScore, opt, smtOk);
-    }
-
-    private int sizeForTier(TradeTier tier) {
-        int s;
-        switch (tier) {
-            case TIER_4: s = SIZE_TIER_4; break;
-            case TIER_3: s = SIZE_TIER_3; break;
-            case TIER_2: s = SIZE_TIER_2; break;
-            case TIER_1: s = SIZE_TIER_1; break;
-            default:     s = spec.minMicros();
-        }
-        if (s < spec.minMicros()) s = spec.minMicros();
-        if (s > spec.maxMicros()) s = spec.maxMicros();
-        return s;
     }
 
     /** Read a double system property with a safe fallback (stdvOte.* pattern). */

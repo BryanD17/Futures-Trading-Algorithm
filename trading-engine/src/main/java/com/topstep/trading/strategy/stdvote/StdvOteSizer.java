@@ -3,32 +3,33 @@ package com.topstep.trading.strategy.stdvote;
 import com.topstep.trading.strategy.TradeTier;
 
 /**
- * Buffer-based position sizer for the STDV+OTE strategy.
+ * THE position sizer for the STDV+OTE pipeline (V5 RC-14: ONE sizer).
  *
- * <p>Implements the canonical formula from {@code STDV_OTE_MODEL.md} §6 /
- * Appendix W.1:
- *
+ * <h2>The rule ({@link #riskDerived})</h2>
  * <pre>
- * available_room   = equity - mll_floor - safety_cushion
- * risk_per_trade$  = available_room * riskFraction              (default 0.12)
- * stop_points      = |entry - stop|
- * per_contract_risk = stop_points * pointValue
- * raw_contracts    = floor(risk_per_trade$ / per_contract_risk)
- * sized = clamp(min(raw_contracts, tierCap), 5, 20)
- * sized = min(sized, topstepMicroMax)
- * sized = floor(sized * newsMultiplier)
- * if sized &lt; 5  -&gt; SKIP (returns 0)
+ * stopTicks   = |entry - stop| / tickSize
+ * perContract = stopTicks * tickValue                 ($ risk of ONE micro)
+ * size        = floor(riskDollars / perContract)
+ * size        = min(size, maxMicros)                  (size.maxMicros, default 20)
+ * if size &lt; minMicros (size.minMicros, default 1) -&gt; DENY
+ *     "SIZE: stop too wide for risk budget (need $X, have $Y)"
  * </pre>
+ * {@code size.preferredMicros} (default 5) is a PREFERENCE used only when
+ * geometry is unknown — never a floor. A killzone boost is applied AFTER
+ * the risk-derived size ({@link #applyBoost}) and never above maxMicros or
+ * the Topstep cap. PropFirmRiskEngine re-derives with this same function
+ * and honours the strategy's requested size (it never silently re-sizes).
  *
- * <p>The sizer is pure — given the same inputs it returns the same output.
- * It never reads global state. The instrument's hard ceiling
- * ({@link TradeableInstrument.Spec#maxMicros()}) AND the configurable
- * {@code topstepMicroMax} both apply; the lower wins. A tier with no
- * cap (TIER_4) defaults to the instrument ceiling.
+ * <p>MNQ ($0.50/tick, 4 ticks/pt = $2/pt) at $250: stop 10/20/40/80 pts →
+ * 12/6/3/1 micros; 160 pts ($320/micro) → DENY.
  *
- * <p>The sizer NEVER returns 1..4 micros. Either it returns &gt;= 5 or it
- * returns 0 (skip). Sub-floor results are the strategy's signal to log the
- * block and stand down.
+ * <h2>Buffer-based wrapper ({@link #decide})</h2>
+ * The STDV_OTE_MODEL.md §6 buffer formula only chooses the DOLLAR budget
+ * ({@code available_room * riskFraction}); contracts come from
+ * {@link #riskDerived}, then the tier cap / Topstep cap / news multiplier
+ * apply. Its floor is the instrument spec's {@code minMicros}
+ * (= size.minMicros, default 1) — the old hard [5, 20] floor that stood
+ * the 2026-09-24 08:45 PRE_NY setup down for 41 bars is gone.
  */
 public final class StdvOteSizer {
 
@@ -73,7 +74,82 @@ public final class StdvOteSizer {
 
     /** Full sizer outcome with the reason a 0-size happened. */
     public record SizingDecision(int contracts, SkipReason reason, String detail) {
-        public boolean shouldTrade() { return contracts >= 5; }
+        public boolean shouldTrade() {
+            return reason == SkipReason.OK && contracts >= 1;
+        }
+    }
+
+    /**
+     * Outcome of the risk-derived rule. {@code denied} carries a
+     * "SIZE: ..." reason with the two dollar numbers ({@code needDollars}
+     * = minMicros x perContract, {@code haveDollars} = the budget).
+     */
+    public record RiskSize(int contracts, boolean denied, String reason,
+                           double haveDollars, double needDollars,
+                           double perContract, double stopTicks) {
+        public boolean ok() { return !denied && contracts >= 1; }
+    }
+
+    /**
+     * THE sizing rule (see class javadoc). Pure.
+     *
+     * @param riskDollars per-trade $ budget (already capped by DLL/MLL room by the caller)
+     * @param minMicros   size.minMicros
+     * @param maxMicros   hard ceiling (min of size.maxMicros, maxContracts, Topstep cap)
+     */
+    public static RiskSize riskDerived(double riskDollars, double entry, double stop,
+                                       double tickSize, double tickValue,
+                                       int minMicros, int maxMicros) {
+        double stopPts = Math.abs(entry - stop);
+        if (!(stopPts > 0) || !(tickSize > 0) || !(tickValue > 0)) {
+            return new RiskSize(0, true,
+                    "SIZE: degenerate geometry (stop distance " + stopPts + ")",
+                    riskDollars, Double.NaN, Double.NaN, 0);
+        }
+        double stopTicks = stopPts / tickSize;
+        // Guard float noise: 39.999999 ticks is 40 ticks.
+        stopTicks = Math.round(stopTicks * 1e6) / 1e6;
+        double perContract = stopTicks * tickValue;
+        int floor = Math.max(1, minMicros);
+        double need = floor * perContract;
+        if (!(riskDollars > 0)) {
+            return new RiskSize(0, true, String.format(
+                    "SIZE: no risk budget (need $%.2f, have $%.2f)", need, riskDollars),
+                    riskDollars, need, perContract, stopTicks);
+        }
+        long raw = (long) Math.floor(riskDollars / perContract + 1e-9);
+        if (raw < floor) {
+            return new RiskSize(0, true, String.format(
+                    "SIZE: stop too wide for risk budget (need $%.2f, have $%.2f)", need, riskDollars),
+                    riskDollars, need, perContract, stopTicks);
+        }
+        int cap = Math.max(floor, maxMicros);
+        int size = (int) Math.min(raw, cap);
+        return new RiskSize(size, false, String.format(
+                "SIZE: %d micros = floor($%.2f / (%.2f ticks x $%.2f)) [band %d..%d]",
+                size, riskDollars, stopTicks, perContract / stopTicks, floor, cap),
+                riskDollars, need, perContract, stopTicks);
+    }
+
+    /**
+     * Killzone boost AFTER the risk-derived size: floor(size x boost), never
+     * above {@code cap} (maxMicros / Topstep cap) and never below the input.
+     */
+    public static int applyBoost(int size, double boost, int cap) {
+        if (size <= 0 || !(boost > 1.0)) return size;
+        int boosted = (int) Math.floor(size * Math.min(2.0, boost));
+        return Math.max(size, Math.min(boosted, cap));
+    }
+
+    /**
+     * The per-trade $ budget both the strategy and the risk engine size
+     * against: min(riskPerTrade, DLL room, MLL room). Never loosens a rail.
+     */
+    public static double riskBudget(double riskPerTrade, double dllRoom, double mllRoom) {
+        double b = riskPerTrade;
+        if (!Double.isNaN(dllRoom)) b = Math.min(b, dllRoom);
+        if (!Double.isNaN(mllRoom)) b = Math.min(b, mllRoom);
+        return b;
     }
 
     /**
@@ -106,28 +182,26 @@ public final class StdvOteSizer {
             return new SizingDecision(0, SkipReason.DEGENERATE_GEOMETRY,
                     "stop equals entry");
         }
-        double perContractRisk = stopPts * spec.pointValue();
-
-        long raw = (long) Math.floor(riskBudget / perContractRisk);
         int tierCap = tierCap(req.tier, ceiling);
         int topstepCap = (ctx.topstepMicroMax() > 0)
                 ? Math.min(ctx.topstepMicroMax(), ceiling)
                 : ceiling;
         int effectiveCap = Math.min(tierCap, topstepCap);
 
-        int sized = (int) Math.min(raw, effectiveCap);
-        sized = clamp(sized, floor, effectiveCap);
+        // ONE rule: contracts come from riskDerived(); this wrapper only
+        // chose the dollar budget above.
+        RiskSize rs = riskDerived(riskBudget, req.entry, req.stop,
+                spec.tickSize(), spec.tickValue(), floor, effectiveCap);
+        if (rs.denied()) {
+            return new SizingDecision(0, SkipReason.BELOW_FLOOR,
+                    rs.reason() + " (risk_budget=" + riskBudget
+                            + " per_contract=" + rs.perContract() + " floor=" + floor + ")");
+        }
+        int sized = rs.contracts();
 
         // Apply the news multiplier; rounds DOWN by floor().
         double multiplied = sized * Math.max(0.0, ctx.newsMultiplier());
         int afterNews = (int) Math.floor(multiplied);
-
-        if (raw < floor) {
-            return new SizingDecision(0, SkipReason.BELOW_FLOOR,
-                    "raw=" + raw + " < floor=" + floor
-                            + " (risk_budget=" + riskBudget
-                            + " per_contract=" + perContractRisk + ")");
-        }
         if (afterNews < floor) {
             return new SizingDecision(0, SkipReason.NEWS_MULTIPLIER_TOO_LOW,
                     "after_news=" + afterNews + " < floor=" + floor
@@ -137,7 +211,8 @@ public final class StdvOteSizer {
         // Final clamp again to be safe vs the cap.
         int contracts = clamp(afterNews, floor, effectiveCap);
         return new SizingDecision(contracts, SkipReason.OK,
-                "raw=" + raw + " tierCap=" + tierCap + " topstepCap=" + topstepCap);
+                "risk_budget=" + riskBudget + " per_contract=" + rs.perContract()
+                        + " tierCap=" + tierCap + " topstepCap=" + topstepCap);
     }
 
     /**

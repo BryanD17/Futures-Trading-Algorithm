@@ -561,6 +561,15 @@ public class EngineFacade {
     }
 
     /**
+     * AGENT-05 (V5 RC-15): signals dropped by the warmup guard — this
+     * process (all runners) — for GET /api/status.
+     */
+    // AGENT-01: expose on /api/status
+    public long getWarmupDroppedSignals() {
+        return WarmupGuard.droppedSignals();
+    }
+
+    /**
      * Check if account is in good standing (not breached).
      */
     public boolean isAccountInGoodStanding() {

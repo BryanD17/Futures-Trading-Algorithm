@@ -191,7 +191,41 @@ public class MacroNewsManager {
             log.debug("MacroNewsManager not running, allowing trade for {}", instrument);
             return TradeGatingDecision.allow();  // Fail open if not running
         }
-        return proximityChecker.checkGating(instrument, now);
+        // AGENT-05 (V5, anti-pattern D-18): a Mock/absent calendar is not a
+        // calendar — it must never block a trade unless the operator opts in
+        // with news.blockWithoutCalendar=true.
+        if (!hasRealCalendar() && !com.topstep.trading.risk.RiskConfig.newsBlockWithoutCalendar()) {
+            log.debug("NEWS: calendar provider {} is Mock/unhealthy — non-blocking for {}",
+                    calendarProvider.getClass().getSimpleName(), instrument);
+            return TradeGatingDecision.allow();
+        }
+        TradeGatingDecision d = proximityChecker.checkGating(instrument, now);
+        if (d.getAction() != GatingAction.ALLOW) {
+            String reason = "NEWS: " + d.getAction() + " — " + d.getReason();
+            log.info("{} {}", instrument, reason);
+            com.topstep.trading.event.EventBus bus = this.gateBus;
+            if (bus != null) {
+                com.topstep.trading.event.EngineTelemetry.publish(bus, new com.topstep.trading.event.GateDecisionEvent(
+                        instrument, now, null, "SIGNAL", "NEWS", reason,
+                        d.getSizeMultiplier(), Double.NaN));
+            }
+        }
+        return d;
+    }
+
+    /** AGENT-05: optional bus for NEWS GateDecisionEvents. */
+    private volatile com.topstep.trading.event.EventBus gateBus;
+
+    public void setGateDecisionBus(com.topstep.trading.event.EventBus bus) {
+        this.gateBus = bus;
+    }
+
+    /**
+     * True when the calendar is a real provider (not the Mock) and healthy.
+     */
+    public boolean hasRealCalendar() {
+        return !(calendarProvider instanceof com.topstep.trading.news.calendar.MockCalendarProvider)
+                && calendarProvider.isHealthy();
     }
 
     /**

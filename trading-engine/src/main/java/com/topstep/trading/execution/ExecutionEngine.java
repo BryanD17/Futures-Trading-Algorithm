@@ -12,6 +12,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * ExecutionEngine handles order execution and position management.
@@ -71,6 +72,20 @@ public class ExecutionEngine {
     // Controls whether this engine simulates fills (true for backtest/sim, false for live)
     private boolean simulationEnabled = true;
 
+    // ── AGENT-05 (V5 RC-17) ───────────────────────────────────────────
+    /** SIM resting-order time-to-live in feed bars (order.ttlBars); 0 = off. */
+    private int orderTtlBars = com.topstep.trading.risk.RiskConfig.orderTtlBars();
+    /** Bars each resting order (by orderId) has waited. */
+    private final Map<String, Integer> orderAgeBars = new ConcurrentHashMap<>();
+    /** Recent candles per symbol, replayed for an order submitted AFTER the
+     *  next candle already arrived (async EventBus race). */
+    private final Map<String, java.util.Deque<Candle>> recentCandles = new ConcurrentHashMap<>();
+    private static final int RECENT_CANDLES = 5;
+    /** Execution-path 14:45 CT flatten / no-fill safety net (defence in depth). */
+    private volatile boolean flattenSafetyNet = false;
+    private final java.util.concurrent.atomic.AtomicLong ttlCancels = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong safetyNetFlattens = new java.util.concurrent.atomic.AtomicLong();
+
     public ExecutionEngine(AccountState accountState) {
         this.accountState = accountState;
         // CRITICAL: Use ConcurrentHashMap for thread-safe access from multiple threads
@@ -117,6 +132,26 @@ public class ExecutionEngine {
         this.eventBus = eventBus;
     }
 
+    /** SIM order TTL in bars (order.ttlBars); {@code <= 0} disables it. */
+    public void setOrderTtlBars(int bars) {
+        this.orderTtlBars = bars;
+    }
+
+    public int getOrderTtlBars() { return orderTtlBars; }
+
+    /**
+     * Enable the execution-path 14:45 CT safety net: inside the Topstep
+     * 14:45–17:00 CT block no resting entry may fill (it is cancelled) and
+     * any open simulated position is flattened at the bar close. The
+     * strategy/session gate is the primary guard; this is defence in depth.
+     */
+    public void setFlattenSafetyNet(boolean enabled) {
+        this.flattenSafetyNet = enabled;
+    }
+
+    public long getTtlCancelCount() { return ttlCancels.get(); }
+    public long getSafetyNetFlattenCount() { return safetyNetFlattens.get(); }
+
     /**
      * Enable/disable simulation behaviors (limit fills, stop/target checks, trailing) for live mode.
      */
@@ -141,20 +176,62 @@ public class ExecutionEngine {
     /**
      * Accept a new approved order for execution.
      */
-    public void submitOrder(Order order) {
+    public synchronized void submitOrder(Order order) {
         if (order == null) {
             throw new IllegalArgumentException("Order cannot be null");
         }
 
         order.updateStatus(OrderStatus.SUBMITTED);
-        // CRITICAL: Support multiple orders per symbol by using a list
-        activeOrders.computeIfAbsent(order.getSymbol(), k -> new ArrayList<>()).add(order);
+        // CRITICAL: Support multiple orders per symbol by using a list.
+        // AGENT-05 (D-15): CopyOnWriteArrayList — orders are added on the
+        // EventBus worker thread and iterated on the market-data thread.
+        activeOrders.computeIfAbsent(order.getSymbol(), k -> new CopyOnWriteArrayList<>()).add(order);
+        orderAgeBars.put(order.getOrderId(), 0);
+    }
+
+    /**
+     * AGENT-05 (V5 RC-17): submit with the CANDLE time of the signal that
+     * produced the order. Candles for the symbol that the market-data thread
+     * already processed AFTER that candle (the async EventBus let the next
+     * bar arrive first) are replayed for fills / stops / targets, so a fill
+     * is never lost to the race.
+     */
+    public synchronized void submitOrder(Order order, double stopPrice, double targetPrice,
+                                         Instant signalCandleTime) {
+        submitOrder(order, stopPrice, targetPrice);
+        replayMissedCandles(order.getSymbol(), signalCandleTime);
+    }
+
+    /** Enhanced twin of {@link #submitOrder(Order, double, double, Instant)}. */
+    public synchronized void submitOrderEnhanced(Order order, double stopPrice, double targetPrice,
+                                                 TradeTier tier, double[][] partialProfitTargets,
+                                                 Instant signalCandleTime) {
+        submitOrderEnhanced(order, stopPrice, targetPrice, tier, partialProfitTargets);
+        replayMissedCandles(order.getSymbol(), signalCandleTime);
+    }
+
+    private void replayMissedCandles(String symbol, Instant after) {
+        if (!simulationEnabled || after == null) return;
+        java.util.Deque<Candle> recent = recentCandles.get(symbol);
+        if (recent == null) return;
+        List<Candle> missed = new ArrayList<>();
+        synchronized (recent) {
+            for (Candle c : recent) {
+                if (c.getTimestamp() != null && c.getTimestamp().isAfter(after)) missed.add(c);
+            }
+        }
+        for (Candle c : missed) {
+            System.out.println("[ExecutionEngine] replaying " + symbol + " candle " + c.getTimestamp()
+                    + " for an order submitted after it arrived (fill race guard)");
+            checkOrderFills(c);
+            checkStopTargetHits(c);
+        }
     }
 
     /**
      * Submit order with stop and target levels (original method for compatibility).
      */
-    public void submitOrder(Order order, double stopPrice, double targetPrice) {
+    public synchronized void submitOrder(Order order, double stopPrice, double targetPrice) {
         submitOrder(order);
 
         EnhancedOrderLevels levels = new EnhancedOrderLevels(
@@ -171,7 +248,7 @@ public class ExecutionEngine {
     /**
      * Submit order with enhanced levels including tier and partial profit targets.
      */
-    public void submitOrderEnhanced(Order order, double stopPrice, double targetPrice,
+    public synchronized void submitOrderEnhanced(Order order, double stopPrice, double targetPrice,
                                     TradeTier tier, double[][] partialProfitTargets) {
         submitOrder(order);
 
@@ -190,13 +267,29 @@ public class ExecutionEngine {
     /**
      * Process a new candle - check for fills and update PnL.
      */
-    public void onNewCandle(Candle candle) {
+    public synchronized void onNewCandle(Candle candle) {
         // CRITICAL: Track last price for live PnL display
         lastPrices.put(candle.getSymbol(), candle.getClose());
+        java.util.Deque<Candle> recent = recentCandles.computeIfAbsent(
+                candle.getSymbol(), k -> new java.util.ArrayDeque<>());
+        synchronized (recent) {
+            recent.addLast(candle);
+            while (recent.size() > RECENT_CANDLES) recent.removeFirst();
+        }
 
         if (simulationEnabled) {
+            // AGENT-05: 14:45–17:00 CT safety net (defence in depth).
+            if (flattenSafetyNet && com.topstep.trading.risk.RiskConfig.inNoEntryBlock(candle.getTimestamp())) {
+                applyFlattenSafetyNet(candle);
+                updateUnrealizedPnl(candle);
+                return;
+            }
+
             // Check for entry fills
             checkOrderFills(candle);
+
+            // AGENT-05: SIM order TTL — a resting entry never lives forever.
+            expireStaleOrders(candle);
 
             // Check for partial profit targets
             checkPartialProfitTargets(candle);
@@ -229,12 +322,12 @@ public class ExecutionEngine {
             return;
         }
 
-        // Iterate using Iterator to allow removal during iteration
-        Iterator<Order> iterator = orders.iterator();
-        while (iterator.hasNext()) {
-            Order order = iterator.next();
+        // AGENT-05: iterate a snapshot (CopyOnWriteArrayList) and remove by
+        // identity — safe against concurrent submitOrder on another thread.
+        for (Order order : orders) {
             if (!order.isActive()) {
-                iterator.remove();
+                orders.remove(order);
+                orderAgeBars.remove(order.getOrderId());
                 continue;
             }
 
@@ -257,7 +350,8 @@ public class ExecutionEngine {
 
             if (filled) {
                 executeFill(order, fillPrice, candle.getTimestamp());
-                iterator.remove();
+                orders.remove(order);
+                orderAgeBars.remove(order.getOrderId());
             }
         }
 
@@ -490,7 +584,8 @@ public class ExecutionEngine {
         // Calculate realized PnL for this partial
         double tickValue = tickValues.getOrDefault(symbol, 12.50);
         double priceDiff = position.isLong() ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
-        double realizedPnl = priceDiff * quantity * tickValue;
+        // AGENT-05 (V5 RC-17): points / tickSize * tickValue (was points * tickValue).
+        double realizedPnl = priceDiff / ContractSpecs.tickSize(symbol) * quantity * tickValue;
 
         // Update account with realized PnL
         accountState.recordRealizedPnL(realizedPnl);
@@ -516,7 +611,8 @@ public class ExecutionEngine {
         // Calculate realized PnL
         double tickValue = tickValues.getOrDefault(symbol, 12.50);
         double priceDiff = position.isLong() ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
-        double realizedPnl = priceDiff * quantity * tickValue;
+        // AGENT-05 (V5 RC-17): points / tickSize * tickValue (was points * tickValue).
+        double realizedPnl = priceDiff / ContractSpecs.tickSize(symbol) * quantity * tickValue;
 
         // Create trade record enriched with signal context
         Trade trade = Trade.builder()
@@ -569,10 +665,84 @@ public class ExecutionEngine {
      * Update unrealized PnL based on current candle prices.
      */
     private void updateUnrealizedPnl(Candle candle) {
-        Map<String, Double> currentPrices = new HashMap<>();
+        // AGENT-05: seed every open position with its last known price so a
+        // candle for one symbol does not zero another symbol's unrealized P&L.
+        Map<String, Double> currentPrices = new HashMap<>(lastPrices);
         currentPrices.put(candle.getSymbol(), candle.getClose());
 
         accountState.updateUnrealizedPnL(currentPrices, tickValues);
+    }
+
+    /**
+     * AGENT-05 (V5 RC-17): cancel resting SIM entry orders older than
+     * {@code order.ttlBars} feed bars. The strategy latch is released with a
+     * synthetic PositionClosedEvent (no position ever existed) and the
+     * cancellation is published as a GateDecisionEvent "ORDER_TTL".
+     */
+    private void expireStaleOrders(Candle candle) {
+        if (orderTtlBars <= 0) return;
+        List<Order> orders = activeOrders.get(candle.getSymbol());
+        if (orders == null || orders.isEmpty()) return;
+        for (Order order : orders) {
+            int age = orderAgeBars.merge(order.getOrderId(), 1, Integer::sum);
+            if (age > orderTtlBars) {
+                cancelResting(order, candle, "ORDER_TTL",
+                        "SIM order TTL: unfilled after " + (age - 1) + " bars (order.ttlBars=" + orderTtlBars + ")",
+                        age - 1, orderTtlBars);
+                ttlCancels.incrementAndGet();
+            }
+        }
+    }
+
+    private void cancelResting(Order order, Candle candle, String gate, String reason, double a, double b) {
+        String symbol = order.getSymbol();
+        List<Order> orders = activeOrders.get(symbol);
+        if (orders != null) {
+            orders.remove(order);
+            if (orders.isEmpty()) activeOrders.remove(symbol);
+        }
+        orderAgeBars.remove(order.getOrderId());
+        order.updateStatus(OrderStatus.CANCELED);
+        if (!accountState.hasPosition(symbol)) {
+            orderLevels.remove(symbol);
+        }
+        System.out.println("[ExecutionEngine] " + gate + " cancel " + symbol + " " + order.getSide()
+                + " @ " + order.getLimitPrice() + " — " + reason);
+        if (eventBus != null) {
+            com.topstep.trading.event.EngineTelemetry.publish(eventBus, new com.topstep.trading.event.GateDecisionEvent(
+                    symbol, candle.getTimestamp(), null, "ORDER_RESTING", gate, reason, a, b));
+            // No position was created: release the strategy's latch.
+            eventBus.publish(new PositionClosedEvent(symbol, 0.0, false, candle.getTimestamp()));
+        }
+    }
+
+    /** 14:45–17:00 CT: cancel resting entries, flatten open SIM positions at the close. */
+    private void applyFlattenSafetyNet(Candle candle) {
+        String symbol = candle.getSymbol();
+        List<Order> orders = activeOrders.get(symbol);
+        if (orders != null) {
+            for (Order order : orders) {
+                cancelResting(order, candle, "FLATTEN",
+                        "FLATTEN: resting entry cancelled inside the 14:45-17:00 CT no-entry block", 0, 0);
+            }
+        }
+        if (accountState.hasPosition(symbol)) {
+            Position position = accountState.getPosition(symbol);
+            if (position != null && !position.isFlat()) {
+                safetyNetFlattens.incrementAndGet();
+                System.out.println("[ExecutionEngine] FLATTEN safety net: closing " + symbol
+                        + " at " + candle.getClose() + " (" + candle.getTimestamp() + ", 14:45 CT rule)");
+                closePosition(position, candle.getClose(), candle.getTimestamp(),
+                        "FLATTEN 14:45 CT safety net");
+                orderLevels.remove(symbol);
+                if (eventBus != null) {
+                    com.topstep.trading.event.EngineTelemetry.publish(eventBus, new com.topstep.trading.event.GateDecisionEvent(
+                            symbol, candle.getTimestamp(), null, "IN_POSITION", "FLATTEN",
+                            "FLATTEN: position closed by the 14:45 CT execution safety net",
+                            position.getQuantity(), candle.getClose()));
+                }
+            }
+        }
     }
 
     /**
@@ -634,7 +804,8 @@ public class ExecutionEngine {
      * Get all active orders for a symbol.
      */
     public List<Order> getActiveOrdersList(String symbol) {
-        return activeOrders.getOrDefault(symbol, new ArrayList<>());
+        List<Order> l = activeOrders.get(symbol);
+        return l == null ? new ArrayList<>() : new ArrayList<>(l);
     }
 
     /**
