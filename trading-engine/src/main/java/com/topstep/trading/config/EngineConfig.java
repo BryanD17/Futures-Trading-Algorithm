@@ -105,6 +105,13 @@ public final class EngineConfig {
         // setup state machine windows
         k.add(key("detector.timeframe", Type.INT, "5", "entry-anatomy detector timeframe minutes (1|3|5|15)", "stdvote.detectorTimeframe"));
         k.add(key("setup.expiryBars", Type.INT, "40", "setup expiry in detector bars", "stdvOte.setupExpiryBars"));
+        // V5 Agent 02 lifecycle keys (SessionConfig) + Agent 05.1 PHASED budgets (minutes = 1m feed bars)
+        k.add(key("setup.expiryAnchor", Type.ENUM, null, "PHASED | SWEEP_DONE_TOTAL (alias SWEEP_DONE) | BIAS_SET; default PHASED (SCORING) / BIAS_SET (BLOCKING)"));
+        k.add(key("setup.expiryMinutes", Type.INT, null, "SWEEP_DONE_TOTAL / BIAS_SET single budget in minutes (wins over setup.expiryBars)"));
+        k.add(key("setup.preSweepExpiryMinutes", Type.INT, "480", "BIAS_SET/MANIP_DONE budget in minutes (PHASED + SWEEP_DONE_TOTAL)"));
+        k.add(key("setup.expiry.sweepToDisplacement", Type.INT, "60", "PHASED: SWEEP_DONE -> DISPLACED budget, minutes (Agent 05.1)"));
+        k.add(key("setup.expiry.displacementToMss", Type.INT, "60", "PHASED: DISPLACED -> MSS_CONFIRMED budget, minutes (Agent 05.1)"));
+        k.add(key("setup.expiry.mssToOte", Type.INT, "240", "PHASED: MSS_CONFIRMED -> OTE_ARMED budget, minutes; backstop to the OTE 1.0 invalidation (Agent 05.1)"));
         k.add(key("ote.windowBars", Type.INT, "8", "OTE window in detector bars", "stdvOte.oteWindowBars"));
         k.add(key("mss.freshBars", Type.INT, "30", "MSS freshness in detector bars", "stdvOte.mssFreshBars"));
         k.add(key("setup.entryTimeoutBars", Type.INT, null, "unfilled-entry timeout in feed bars (default 2 x OTE window)", "stdvOte.entryTimeoutBars"));

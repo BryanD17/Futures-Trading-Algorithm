@@ -260,6 +260,32 @@ public final class StdvOteStrategy implements TradingStrategy {
     // The BIAS_SET anchor is the pre-V5 behaviour, byte-identical; it is the
     // core default (unit tests constructing the core directly) and the
     // runner selects it with session.gateMode=BLOCKING for A/B.
+    //
+    // V5 Agent 05.1 (starvation S2) — PHASED anchor (SCORING default). On
+    // the real tape 85 of 104 swept setups died "expired" exactly 61 feed
+    // bars after the sweep; 21 of them had already confirmed the MSS and
+    // were 2-46 bars into waiting for the retrace, 30-70 pts from the band.
+    // One 60-min budget for sweep -> displacement -> MSS -> retrace killed
+    // progressing setups. PHASED gives each post-sweep phase its own budget,
+    // reset on every forward state transition:
+    //   SWEEP_DONE    -> DISPLACED      setup.expiry.sweepToDisplacement (60)
+    //   DISPLACED     -> MSS_CONFIRMED  setup.expiry.displacementToMss   (60)
+    //   MSS_CONFIRMED -> OTE_ARMED      setup.expiry.mssToOte            (240)
+    //   OTE_ARMED     -> emit           ote.windowBars (runner, Agent 04) —
+    //                                   no core time budget in this phase
+    // The MSS->OTE budget is a backstop: the OTE 1.0 invalidation (close
+    // beyond the range extreme) is the real gate of that phase.
+    // BAR-LEVEL RULE (identical to the SWEEP_DONE stamp): the state machine
+    // advances in the runner's record* hooks AFTER this method, on bar B
+    // (barIndex == B once this method returned on that bar). The next
+    // onCandle sees the new state with no stamp and stamps phaseAtBar = B,
+    // then increments. After n further bars, elapsed = barIndex - phaseAtBar
+    // = n. The phase survives while elapsed <= budget and INVALIDATES on the
+    // first bar where elapsed > budget, i.e. the (budget+1)-th bar after the
+    // transition bar ("expired: MSS_CONFIRMED→OTE 241 > 240 min"). Several
+    // states crossed on one bar stamp once, for the state finally reached.
+    // States only move forward, so a stamp is never re-used after a reset.
+    // SWEEP_DONE_TOTAL is Agent 02's single budget, kept for A/B.
 
     private com.topstep.trading.strategy.session.SessionConfig.ExpiryAnchor expiryAnchor =
             com.topstep.trading.strategy.session.SessionConfig.ExpiryAnchor.BIAS_SET;
@@ -269,6 +295,13 @@ public final class StdvOteStrategy implements TradingStrategy {
     private long preSweepExpiryBars;
     /** Bar index at which the setup reached SWEEP_DONE; -1 = not (yet) swept. */
     private long sweepAtBar = -1;
+    /** PHASED budgets (feed bars); 0 disables that phase's budget. */
+    private long sweepToDisplacementBars = com.topstep.trading.strategy.session.SessionConfig.DEFAULT_SWEEP_TO_DISPLACEMENT_MINUTES;
+    private long displacementToMssBars = com.topstep.trading.strategy.session.SessionConfig.DEFAULT_DISPLACEMENT_TO_MSS_MINUTES;
+    private long mssToOteBars = com.topstep.trading.strategy.session.SessionConfig.DEFAULT_MSS_TO_OTE_MINUTES;
+    /** State whose phase clock is running, and the bar it was entered (see BAR-LEVEL RULE). */
+    private SetupState phaseState = null;
+    private long phaseAtBar = -1;
 
     /** Runner wiring: choose the expiry anchor and its budgets (feed bars). */
     void configureExpiry(com.topstep.trading.strategy.session.SessionConfig.ExpiryAnchor anchor,
@@ -277,6 +310,28 @@ public final class StdvOteStrategy implements TradingStrategy {
                 ? com.topstep.trading.strategy.session.SessionConfig.ExpiryAnchor.BIAS_SET : anchor;
         this.huntExpiryBars = Math.max(0L, huntBars);
         this.preSweepExpiryBars = Math.max(0L, preSweepBars);
+    }
+
+    /** Runner wiring: PHASED budgets in feed bars (minutes on the 1m feed). */
+    void configurePhaseBudgets(long sweepToDisplacement, long displacementToMss, long mssToOte) {
+        this.sweepToDisplacementBars = Math.max(0L, sweepToDisplacement);
+        this.displacementToMssBars = Math.max(0L, displacementToMss);
+        this.mssToOteBars = Math.max(0L, mssToOte);
+    }
+
+    /** Configured expiry anchor (tests / API). */
+    com.topstep.trading.strategy.session.SessionConfig.ExpiryAnchor expiryAnchor() {
+        return expiryAnchor;
+    }
+
+    /** PHASED budgets {sweep->displacement, displacement->MSS, MSS->OTE} in feed bars (tests / API). */
+    long[] phaseBudgetBars() {
+        return new long[] {sweepToDisplacementBars, displacementToMssBars, mssToOteBars};
+    }
+
+    /** Bar index at which the current phase was entered, or -1 (tests / API). */
+    long phaseAtBar() {
+        return phaseAtBar;
     }
 
     /** Bar index of the SWEEP_DONE arrival of the live setup, or -1 (tests / API). */
@@ -304,6 +359,14 @@ public final class StdvOteStrategy implements TradingStrategy {
         } else if (sweepAtBar < 0) {
             sweepAtBar = barIndex;
         }
+        // Phase clock (PHASED anchor): restamp on every state change.
+        if (!live) {
+            phaseState = null;
+            phaseAtBar = -1;
+        } else if (s != phaseState) {
+            phaseState = s;
+            phaseAtBar = barIndex;
+        }
         barIndex++;
         // SA5 will read detector outputs here and call the record* hooks.
         // SA4 implements the per-bar housekeeping (expiry only).
@@ -325,6 +388,23 @@ public final class StdvOteStrategy implements TradingStrategy {
                     && setup.createdAtBar > 0
                     && barIndex - setup.createdAtBar > setupExpiryBars) {
                 invalidate("expired (" + setupExpiryBars + " bars without progress)");
+            }
+            return;
+        }
+        if (postSweep && expiryAnchor
+                == com.topstep.trading.strategy.session.SessionConfig.ExpiryAnchor.PHASED) {
+            long budget;
+            String phase;
+            switch (s) {
+                case SWEEP_DONE:    budget = sweepToDisplacementBars; phase = "SWEEP_DONE→DISPLACEMENT"; break;
+                case DISPLACED:     budget = displacementToMssBars;   phase = "DISPLACED→MSS"; break;
+                case MSS_CONFIRMED: budget = mssToOteBars;            phase = "MSS_CONFIRMED→OTE"; break;
+                default:            budget = 0L; phase = null; // OTE_ARMED: runner's ote.windowBars
+            }
+            setup.expiresAtBar = budget > 0 ? phaseAtBar + budget : 0L;
+            long elapsed = barIndex - phaseAtBar;
+            if (budget > 0 && elapsed > budget) {
+                invalidate("expired: " + phase + " " + elapsed + " > " + budget + " min");
             }
             return;
         }

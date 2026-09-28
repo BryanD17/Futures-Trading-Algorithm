@@ -18,7 +18,13 @@ import com.topstep.trading.strategy.stdvote.ScalpConfig;
  *   setup.expiryMinutes          minutes from the anchor     (wins over expiryBars)
  *   setup.expiryBars             DETECTOR bars from anchor   default 12 on 5m (= 60 min)
  *   setup.preSweepExpiryMinutes  BIAS_SET/MANIP_DONE budget  default 480 (8 h)
- *   setup.expiryAnchor           SWEEP_DONE | BIAS_SET       default SWEEP_DONE (SCORING) / BIAS_SET (BLOCKING)
+ *   setup.expiryAnchor           PHASED | SWEEP_DONE_TOTAL | BIAS_SET
+ *                                default PHASED (SCORING) / BIAS_SET (BLOCKING);
+ *                                "SWEEP_DONE" is accepted as an alias of SWEEP_DONE_TOTAL
+ *   setup.expiry.sweepToDisplacement  PHASED: SWEEP_DONE -&gt; DISPLACED budget, min   default 60
+ *   setup.expiry.displacementToMss    PHASED: DISPLACED -&gt; MSS_CONFIRMED budget, min default 60
+ *   setup.expiry.mssToOte             PHASED: MSS_CONFIRMED -&gt; OTE_ARMED budget, min default 240
+ *   (OTE_ARMED -&gt; emit stays ote.windowBars, owned by Agent 04's runner block)
  *   setup.rearmCooldownBars      feed bars                   default scalp.rearmCooldownBars (5)
  * </pre>
  * Read at call time (never cached statically) so harness/test JVMs that set
@@ -35,6 +41,13 @@ public final class SessionConfig {
     public static final String PRE_SWEEP_EXPIRY_MINUTES = "setup.preSweepExpiryMinutes";
     public static final String EXPIRY_ANCHOR = "setup.expiryAnchor";
     public static final String REARM_COOLDOWN_BARS = "setup.rearmCooldownBars";
+    /** V5 Agent 05.1 (S2): phase-aware budgets, minutes (= 1m feed bars). */
+    public static final String EXPIRY_SWEEP_TO_DISPLACEMENT = "setup.expiry.sweepToDisplacement";
+    public static final String EXPIRY_DISPLACEMENT_TO_MSS = "setup.expiry.displacementToMss";
+    public static final String EXPIRY_MSS_TO_OTE = "setup.expiry.mssToOte";
+    public static final int DEFAULT_SWEEP_TO_DISPLACEMENT_MINUTES = 60;
+    public static final int DEFAULT_DISPLACEMENT_TO_MSS_MINUTES = 60;
+    public static final int DEFAULT_MSS_TO_OTE_MINUTES = 240;
     /** Pre-V5 key, still honoured (now measured from the configured anchor). */
     public static final String LEGACY_EXPIRY_BARS = "stdvOte.setupExpiryBars";
 
@@ -45,8 +58,21 @@ public final class SessionConfig {
     /** Pre-V5 expiry: 40 DETECTOR bars from BIAS_SET. */
     public static final int LEGACY_DEFAULT_EXPIRY_DETECTOR_BARS = 40;
 
-    /** Where the hunting budget is measured from. */
-    public enum ExpiryAnchor { SWEEP_DONE, BIAS_SET }
+    /**
+     * Where the hunting budget is measured from.
+     * <ul>
+     *   <li>{@code PHASED} (V5 Agent 05.1, SCORING default): one budget PER
+     *       post-sweep phase, each counted from the arrival in that phase
+     *       (SWEEP_DONE -&gt; DISPLACED -&gt; MSS_CONFIRMED -&gt; OTE_ARMED);</li>
+     *   <li>{@code SWEEP_DONE_TOTAL} (Agent 02, legacy A/B): ONE budget for
+     *       the whole hunt, counted from the SWEEP_DONE arrival;</li>
+     *   <li>{@code BIAS_SET} (pre-V5, BLOCKING default): ONE budget from BIAS_SET.</li>
+     * </ul>
+     */
+    public enum ExpiryAnchor { PHASED, SWEEP_DONE_TOTAL, BIAS_SET }
+
+    /** Phase budgets in feed bars (minutes on the 1m feed); 0 disables a phase. */
+    public record PhaseBudgets(int sweepToDisplacement, int displacementToMss, int mssToOte) {}
 
     /** Configured mode ({@code session.gateMode}, default SCORING). */
     public static SessionGateMode gateMode() {
@@ -79,21 +105,24 @@ public final class SessionConfig {
     public static ExpiryAnchor expiryAnchor(SessionGateMode mode) {
         String raw = cfg().getRaw(EXPIRY_ANCHOR);
         if (raw != null && !raw.isBlank()) {
+            String v = raw.trim().toUpperCase();
+            if (v.equals("SWEEP_DONE")) return ExpiryAnchor.SWEEP_DONE_TOTAL; // Agent 02 name
             try {
-                return ExpiryAnchor.valueOf(raw.trim().toUpperCase());
+                return ExpiryAnchor.valueOf(v);
             } catch (IllegalArgumentException e) {
                 System.out.println("[SESSION] unknown setup.expiryAnchor '" + raw
                         + "' — using the mode default");
             }
         }
-        return mode == SessionGateMode.BLOCKING ? ExpiryAnchor.BIAS_SET : ExpiryAnchor.SWEEP_DONE;
+        return mode == SessionGateMode.BLOCKING ? ExpiryAnchor.BIAS_SET : ExpiryAnchor.PHASED;
     }
 
     /**
      * Hunting budget in FEED (1m) bars = minutes. Precedence:
      * setup.expiryMinutes &gt; setup.expiryBars (alias stdvOte.setupExpiryBars)
      * x detector minutes &gt; anchor default
-     * (SWEEP_DONE: 60 min; BIAS_SET: 40 detector bars, the pre-V5 value).
+     * (SWEEP_DONE_TOTAL: 60 min; BIAS_SET: 40 detector bars, the pre-V5 value).
+     * Unused by the PHASED anchor (see {@link #phaseBudgets()}).
      */
     public static int expiryFeedBars(int detectorMinutes, ExpiryAnchor anchor) {
         int det = Math.max(1, detectorMinutes);
@@ -106,7 +135,23 @@ public final class SessionConfig {
                 : DEFAULT_EXPIRY_MINUTES;
     }
 
-    /** Pre-sweep budget in feed bars (minutes); only used with the SWEEP_DONE anchor. */
+    /**
+     * PHASED budgets in feed bars (minutes on the 1m feed). Each key is read
+     * independently; unset keys take the V5 Agent 05.1 defaults 60 / 60 / 240.
+     */
+    public static PhaseBudgets phaseBudgets() {
+        return new PhaseBudgets(
+                minutesOr(EXPIRY_SWEEP_TO_DISPLACEMENT, DEFAULT_SWEEP_TO_DISPLACEMENT_MINUTES),
+                minutesOr(EXPIRY_DISPLACEMENT_TO_MSS, DEFAULT_DISPLACEMENT_TO_MSS_MINUTES),
+                minutesOr(EXPIRY_MSS_TO_OTE, DEFAULT_MSS_TO_OTE_MINUTES));
+    }
+
+    private static int minutesOr(String key, int dflt) {
+        Integer v = intOrNull(key);
+        return v != null ? Math.max(0, v) : dflt;
+    }
+
+    /** Pre-sweep budget in feed bars (minutes); used by the PHASED and SWEEP_DONE_TOTAL anchors. */
     public static int preSweepExpiryFeedBars() {
         Integer v = intOrNull(PRE_SWEEP_EXPIRY_MINUTES);
         return v != null ? Math.max(0, v) : DEFAULT_PRE_SWEEP_EXPIRY_MINUTES;
