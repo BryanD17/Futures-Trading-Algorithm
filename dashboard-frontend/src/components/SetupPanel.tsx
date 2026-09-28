@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import ConfluencePanel from './ConfluencePanel';
+import WhyNoTradePanel from './WhyNoTradePanel';
 import './SetupPanel.css';
 import { SetupApi } from '../services/setupApi';
 import { ChartApi } from '../services/chartApi';
@@ -95,6 +96,11 @@ export default function SetupPanel() {
           Backend disconnected — retrying… ({error})
         </div>
       )}
+
+      {/* V5 Agent 08 — gate decisions + current setup strip. Mounted
+          outside the snapshot guard so it renders even while the per-symbol
+          snapshot is still loading. */}
+      <WhyNoTradePanel symbol={symbol} />
 
       {loading && !snapshot && <div className="setup-empty">Waiting for engine…</div>}
 

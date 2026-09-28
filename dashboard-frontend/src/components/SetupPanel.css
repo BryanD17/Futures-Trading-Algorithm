@@ -344,3 +344,76 @@
 
 /* M2b premium/discount gate stats (V3 Agent 02) */
 .pd-gate-stats { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+/* ─── V5 Agent 08 — "why no trade" panel ─────────────────────────────── */
+.setup-panel .why-no-trade { margin-bottom: 1rem; }
+.why-no-trade h3 { display: flex; align-items: baseline; gap: 0.75rem; }
+.why-no-trade .wnt-refresh { font-size: 0.75rem; color: var(--muted); font-weight: normal; }
+.wnt-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.wnt-strip.empty { color: var(--muted); }
+.wnt-strip > div { display: flex; flex-direction: column; min-width: 0; }
+.wnt-strip dt { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.wnt-strip dd { margin: 0; font-weight: 600; }
+.wnt-strip .bad dd { color: var(--bad); }
+.wnt-strip .bull { color: var(--bull); }
+.wnt-strip .bear { color: var(--bear); }
+.wnt-prime {
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  font-size: 0.7rem;
+  border-radius: 3px;
+  background: var(--warn);
+  color: #1a1d23;
+}
+.wnt-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; }
+.wnt-chip.hot { border-color: var(--warn); color: var(--warn); }
+.wnt-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.wnt-filters select,
+.wnt-filters button {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.15rem 0.4rem;
+}
+.wnt-filters button { cursor: pointer; }
+.wnt-filters button:hover { background: var(--surface-2); }
+.wnt-count { margin-left: auto; }
+.wnt-table-wrap { overflow-x: auto; max-height: 32rem; overflow-y: auto; }
+.wnt-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.wnt-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  text-align: left;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.wnt-table td { padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+.wnt-table .num { text-align: right; }
+.wnt-table .mono,
+.wnt-strip .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.wnt-table .gate-cell { font-weight: 600; white-space: nowrap; }
+.wnt-table .reason-cell { color: var(--muted); }
+.wnt-table tr.hot { background: rgba(255, 212, 59, 0.08); }
+.wnt-table tr.hot .gate-cell { color: var(--warn); }
+.wnt-date { color: var(--accent); }
