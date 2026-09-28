@@ -123,6 +123,8 @@ public final class EngineConfig {
         k.add(key("ote.fib705", Type.DOUBLE, "0.705", "OTE sweet spot (Agent 04)"));
         k.add(key("ote.fib79", Type.DOUBLE, "0.786", "OTE band far edge (Agent 04)"));
         k.add(key("ote.stopMode", Type.ENUM, "BAND", "OTE stop BAND (beyond 0.786 / PD array) | ORIGIN (beyond 1.0) (Agent 04)"));
+        k.add(key("ote.entryModel", Type.ENUM, "IMPULSE_LEG", "OTE entry model IMPULSE_LEG (M5/M6 on the dealing-range impulse, arm on the OTE-band sweep) | POST_SWEEP (new displacement+MSS after the sweep) (Agent 05.2)"));
+        k.add(key("ote.impulseLeg.minSweepFib", Type.DOUBLE, "0.705", "IMPULSE_LEG: dealing-range fib the sweep extreme must reach (Agent 05.2)"));
         k.add(key("risk.rrFloor", Type.DOUBLE, "1.0", "ONE RR band: floor vs T1, legacy profile (Agent 04; risk engine: Agent 05)"));
         k.add(key("risk.rrFloor.scalp", Type.DOUBLE, "0.8", "ONE RR band: floor vs T1, scalp profile (Agent 04)"));
         k.add(key("risk.rrCeiling", Type.DOUBLE, "5.0", "ONE RR band: ceiling vs final target, both profiles (Agent 04)"));
@@ -612,6 +614,8 @@ public final class EngineConfig {
         out.add("OTE (Agent 04): anchor=" + getString("ote.anchorMode", "DEALING_RANGE")
                 + " fibs=" + getDouble("ote.fib62", 0.618) + "/" + getDouble("ote.fib705", 0.705)
                 + "/" + getDouble("ote.fib79", 0.786) + " M7b=" + getString("ote30m.mode", "SCORING")
+                + " entryModel=" + getString("ote.entryModel", "IMPULSE_LEG")
+                + " (minSweepFib " + getDouble("ote.impulseLeg.minSweepFib", 0.705) + ")"
                 + " | ONE RR band legacy [" + getDouble("risk.rrFloor", 1.0) + ", " + getDouble("risk.rrCeiling", 5.0)
                 + "] scalp [" + getDouble("risk.rrFloor.scalp", 0.8) + ", " + getDouble("risk.rrCeiling", 5.0) + "]");
         out.add("BACKFILL: 1m " + getInt("backfill.days", 3) + " day(s) [clamped 1..7], HTF "

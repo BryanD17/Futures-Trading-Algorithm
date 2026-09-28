@@ -56,6 +56,11 @@ public final class OteSetupDriver {
     private final int linkBars;
     private final int mssFreshBars;
     private final OteAnchorMode anchorMode;
+    /** V5 Agent 05.2: IMPULSE_LEG | POST_SWEEP (read at construction, like the other OTE keys). */
+    private final String entryModel;
+    private final double minSweepFib;
+    /** Minimum upper (short) / lower (long) wick share for the rejection-wick PD array. */
+    static final double REJECTION_WICK_MIN = 0.5;
 
     // Never re-consume a displacement across setups.
     private Instant consumedDisplacementTs;
@@ -71,6 +76,13 @@ public final class OteSetupDriver {
     private SetupState prevState = SetupState.IDLE;
     private boolean invalidationPublished;
     private String lastStall;
+    // V5 Agent 05.2 - impulse-leg setup state.
+    private boolean impulseMode;
+    private double impulseSweptLevel = Double.NaN;
+    private Candle sweepBar;
+    /** Retrace extreme since the FIRST sweep of this SWEEP_DONE episode (survives sweep refreshes). */
+    private double episodeHigh = Double.NaN;
+    private double episodeLow = Double.NaN;
 
     public OteSetupDriver(String symbol, double tickSize, DisplacementDetector displacement,
                           EventBus bus, int detectorTfMinutes) {
@@ -83,6 +95,8 @@ public final class OteSetupDriver {
         this.linkBars = OteConfig.fvgLinkBars();
         this.mssFreshBars = OteConfig.mssFreshBars();
         this.anchorMode = OteConfig.anchorMode();
+        this.entryModel = OteConfig.entryModel();
+        this.minSweepFib = OteConfig.impulseMinSweepFib();
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -95,13 +109,16 @@ public final class OteSetupDriver {
         if (ctx != null && ctx.sweep != null) {
             Instant ts = ctx.sweep.getTimestamp();
             if (sweepTs == null || !sweepTs.equals(ts)) {
+                newSweep(ctx);
                 sweepTs = ts;
                 postSweepHigh = Math.max(ctx.sweep.getSweptLevel(), c.getHigh());
                 postSweepLow = Math.min(ctx.sweep.getSweptLevel(), c.getLow());
+                sweepBar = c;
             } else {
                 postSweepHigh = Math.max(postSweepHigh, c.getHigh());
                 postSweepLow = Math.min(postSweepLow, c.getLow());
             }
+            trackEpisode(ctx.sweep.getSweptLevel(), c);
         }
     }
 
@@ -113,7 +130,9 @@ public final class OteSetupDriver {
         long idx = pd.onBar(c);
         if (observed != null) {
             mssEvents.addLast(new MssEvent(observed.isBullish, observed.breakLevel, c.getTimestamp(), idx));
-            while (mssEvents.size() > 50) mssEvents.removeFirst();
+            // 200: the impulse-leg model (05.2) looks back to the leg that
+            // created the dealing range (G1: 09:30-10:45 ET, read at 14:53).
+            while (mssEvents.size() > 200) mssEvents.removeFirst();
         }
     }
 
@@ -123,8 +142,20 @@ public final class OteSetupDriver {
 
     /** @return null on success (or no-op), else the stall reason. */
     public String tryRecordDisplacement(StdvOteStrategy core, MarketBias bias) {
+        return tryRecordDisplacement(core, bias, null);
+    }
+
+    /**
+     * Step 10. V5 Agent 05.2: with {@code ote.entryModel=IMPULSE_LEG} the
+     * impulse-leg model is tried first ({@link #tryImpulseLegEntry}); when it
+     * does not apply the POST_SWEEP sequence runs exactly as before.
+     */
+    public String tryRecordDisplacement(StdvOteStrategy core, MarketBias bias, Candle candle) {
         SetupContext ctx = core.getSetupContext();
         if (ctx.state != SetupState.SWEEP_DONE) return null;
+        if (candle != null && OteConfig.ENTRY_MODEL_IMPULSE_LEG.equals(entryModel)) {
+            if (tryImpulseLegEntry(core, bias, candle)) return null;
+        }
         boolean bullish = bias == MarketBias.BULLISH;
         // The displacement bar must END after the sweep (the bar containing
         // the sweep qualifies: sweep-and-displace candle).
@@ -154,6 +185,242 @@ public final class OteSetupDriver {
             dispIdx = idx;
             linked = link.get();
             orderBlock = pd.orderBlock(idx, bullish, linkBars).orElse(null);
+        }
+        return null;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // V5 Agent 05.2 — IMPULSE_LEG entry model
+    // ══════════════════════════════════════════════════════════════════════
+
+    /**
+     * The OTE model: the displacement and the structure break are the IMPULSE
+     * LEG that created the dealing range (G1: HH 30759.25 09:30 ET bar -> LL
+     * 30356.75 10:45 ET bar); the retrace INTO the range's OTE band with a
+     * liquidity sweep and a PD-array rejection IS the entry. When the recorded
+     * sweep's level lies inside the band (and its extreme reaches
+     * {@code ote.impulseLeg.minSweepFib}, not beyond the 1.0), M5 and M6 are
+     * PROVEN on the leg with the same detectors - never skipped:
+     * <ul>
+     *   <li>M5: at least one displacement of THE detector (same rule, same
+     *       thresholds) in the bias direction on a leg bar, AND a
+     *       same-direction FVG whose middle candle is inside the leg
+     *       ({@code IMPULSE_FVG});</li>
+     *   <li>M6: an MSS of THE MSS detector on a leg bar at/after that
+     *       displacement: the leg closed beyond the last opposing swing;</li>
+     *   <li>M7: the zone is the dealing-range band; ARM on this bar (price is
+     *       already in the band); ALARM in {@link #alarm} on the rejection.</li>
+     * </ul>
+     * Records every number in {@link SetupContext} (validator + CSV) and, on
+     * success, walks SWEEP_DONE -> DISPLACED -> MSS_CONFIRMED -> OTE_ARMED on
+     * this candle. Returns false (verdict in {@code ctx.impulseLegVerdict})
+     * when the model does not apply - the caller then runs POST_SWEEP.
+     */
+    boolean tryImpulseLegEntry(StdvOteStrategy core, MarketBias bias, Candle candle) {
+        SetupContext ctx = core.getSetupContext();
+        if (bias == MarketBias.NEUTRAL || ctx.sweep == null) return false;
+        boolean bullish = bias == MarketBias.BULLISH;
+        if (anchorMode != OteAnchorMode.DEALING_RANGE) {
+            ctx.impulseLegVerdict = "n/a: anchorMode " + anchorMode;
+            return false;
+        }
+        // A short needs a buyside (HIGH) sweep, a long a sellside (LOW) sweep.
+        if (ctx.sweep.isBullish() != bullish) {
+            ctx.impulseLegVerdict = "sweep-direction-mismatch";
+            return false;
+        }
+        Optional<OteAnchorRangeTracker.Leg> legOpt = OteAnchorRangeTracker.fromContext(ctx);
+        if (legOpt.isEmpty()) {
+            ctx.impulseLegVerdict = "no-dealing-range";
+            return false;
+        }
+        OteAnchorRangeTracker.Leg leg = legOpt.get();
+        Optional<OteZone> zoneOpt = ote.buildZone(leg.low(), leg.high(), bullish, tick);
+        if (zoneOpt.isEmpty()) {
+            ctx.impulseLegVerdict = "no-zone";
+            return false;
+        }
+        OteZone z = zoneOpt.get();
+        double lo = Math.min(z.f62(), z.f79());
+        double hi = Math.max(z.f62(), z.f79());
+        double level = ctx.sweep.getSweptLevel();
+        // Keep the post-sweep extreme in step with a sweep recorded /
+        // refreshed on THIS candle (onFeedCandle ran before step 9).
+        Instant ts = ctx.sweep.getTimestamp();
+        if (ts != null && (sweepTs == null || !sweepTs.equals(ts))) {
+            newSweep(ctx);
+            sweepTs = ts;
+            postSweepHigh = Math.max(level, candle.getHigh());
+            postSweepLow = Math.min(level, candle.getLow());
+            sweepBar = candle;
+        }
+        trackEpisode(level, candle);
+        // The retrace's extreme since the episode's first sweep: a retrace
+        // that already traded beyond the 0.786 is not an OTE retrace.
+        double ext = bullish ? episodeLow : episodeHigh;
+        if (level < lo - 1e-9 || level > hi + 1e-9) {
+            ctx.impulseLegVerdict = "sweep " + level + " not in OTE band [" + lo + "," + hi + "]";
+            return false;
+        }
+        if (Double.isNaN(ext) || ext < lo - 1e-9 || ext > hi + 1e-9) {
+            ctx.impulseLegVerdict = "retrace extreme " + ext + " outside the OTE band [" + lo + "," + hi + "]";
+            return false;
+        }
+        double size = leg.high() - leg.low();
+        double need = bullish ? leg.high() - minSweepFib * size : leg.low() + minSweepFib * size;
+        if (Double.isNaN(ext) || (bullish ? ext > need + 1e-9 : ext < need - 1e-9)) {
+            ctx.impulseLegVerdict = "sweep extreme " + ext + " short of " + minSweepFib + " (" + roundTick(need) + ")";
+            return false;
+        }
+        if (closedBeyondExtreme(z, candle)) {
+            ctx.impulseLegVerdict = "close beyond the range 1.0";
+            return false;
+        }
+        // The impulse leg on the detector timeframe.
+        long now = pd.lastIndex();
+        long startIdx;
+        long endIdx;
+        if (bullish) {      // LL -> HH
+            endIdx = pd.lastBarAt(leg.high(), true, now, tick);
+            startIdx = endIdx < 0 ? -1 : pd.lastBarAt(leg.low(), false, endIdx, tick);
+        } else {            // HH -> LL
+            endIdx = pd.lastBarAt(leg.low(), false, now, tick);
+            startIdx = endIdx < 0 ? -1 : pd.lastBarAt(leg.high(), true, endIdx, tick);
+        }
+        if (startIdx < 0 || endIdx < 0 || startIdx >= endIdx) {
+            ctx.impulseLegVerdict = "impulse leg not in the detector buffer / not " + (bullish ? "LL->HH" : "HH->LL");
+            return false;
+        }
+        Instant legStart = pd.barAt(startIdx).getTimestamp();
+        Instant legEnd = pd.barAt(endIdx).getTimestamp();
+        // M5 - displacement(s) of THE detector on leg bars.
+        List<DisplacementDetector.Scored> disps = displacement.between(legStart, legEnd, bullish);
+        if (disps.isEmpty()) {
+            ctx.impulseLegVerdict = "M5: no " + (bullish ? "bullish" : "bearish") + " displacement on the impulse leg";
+            return false;
+        }
+        // M6 - an MSS of THE MSS detector on a leg bar at/after a displacement.
+        MssEvent mss = null;
+        DisplacementDetector.Scored disp = null;
+        for (MssEvent e : mssEvents) {
+            if (e.bullish() != bullish || e.idx() < startIdx || e.idx() > endIdx) continue;
+            DisplacementDetector.Scored before = null;
+            for (DisplacementDetector.Scored d : disps) {
+                if (!d.displacement().getTimestamp().isAfter(e.at())) before = d;
+            }
+            if (before != null) {
+                mss = e;
+                disp = before;
+                break;
+            }
+        }
+        if (mss == null) {
+            ctx.impulseLegVerdict = "M6: no structure break on the impulse leg at/after its displacement";
+            return false;
+        }
+        long dIdx = pd.indexOf(disp.displacement().getTimestamp());
+        // M5 FVG created inside the leg: the displacement's own gap first.
+        Optional<PdArray> fvg = dIdx < 0 ? Optional.empty() : pd.linkedFvg(dIdx, bullish, linkBars)
+                .filter(g -> !g.at().isBefore(legStart) && !g.at().isAfter(legEnd));
+        if (fvg.isEmpty()) fvg = pd.gapInWindow(startIdx + 1, endIdx, bullish);
+        if (fvg.isEmpty()) {
+            ctx.impulseLegVerdict = "M5: no " + (bullish ? "bullish" : "bearish") + " FVG created inside the impulse leg";
+            return false;
+        }
+        Candle mssBar = pd.barAt(mss.idx());
+        // Record the proof, then walk the machine to OTE_ARMED.
+        ctx.impulseLegStart = legStart;
+        ctx.impulseLegEnd = legEnd;
+        ctx.impulseDispRangeAtr = disp.rangeOverAtr();
+        ctx.impulseDispBody = disp.bodyRatio();
+        ctx.impulseDispAtrMult = displacement.getDisplacementMultiplier();
+        ctx.impulseDispBodyMin = displacement.getMinBodyRatio();
+        ctx.impulseMssSwing = mss.level();
+        ctx.impulseMssClose = mssBar == null ? Double.NaN : mssBar.getClose();
+        ctx.impulseSweptLevel = level;
+        PdArray impulseFvg = fvg.get();
+        core.recordDisplacement(impulseFvg.asFairValueGap(), "IMPULSE_FVG", disp.displacement().getTimestamp());
+        core.recordMss(mss.at());
+        if (ctx.state != SetupState.MSS_CONFIRMED
+                || !core.recordOtePlan(z, OteAnchorMode.DEALING_RANGE.name(), leg.source(), ext)
+                || !core.armOte(candle.getTimestamp())) {
+            // Cannot happen with a consistent bias; never leave a half-walked setup.
+            core.invalidate("impulse-leg arm failed in state " + ctx.state);
+            return true;
+        }
+        impulseMode = true;
+        impulseSweptLevel = level;
+        dispIdx = dIdx;
+        mssIdx = mss.idx();
+        linked = impulseFvg;
+        orderBlock = null;
+        ctx.oteEntryModel = OteConfig.ENTRY_MODEL_IMPULSE_LEG;
+        ctx.impulseLegVerdict = "ARMED: sweep " + level + " in band [" + lo + "," + hi + "] ext " + ext
+                + " | leg " + legStart + ".." + legEnd
+                + " | M5 disp " + disp.displacement().getTimestamp()
+                + String.format(" range/ATR %.2f>=%.2f body %.2f>=%.2f", disp.rangeOverAtr(),
+                        displacement.getDisplacementMultiplier(), disp.bodyRatio(), displacement.getMinBodyRatio())
+                + " FVG [" + impulseFvg.bottom() + "," + impulseFvg.top() + "]@" + impulseFvg.at()
+                + " | M6 close " + ctx.impulseMssClose + (bullish ? " > " : " < ") + "swing " + mss.level()
+                + " @" + mss.at();
+        System.out.println("[" + symbol + "] IMPULSE_LEG " + ctx.impulseLegVerdict);
+        publish(new OteArmedEvent(symbol, candle.getTimestamp(), z.bullish(), ctx.oteAnchorMode,
+                z.legLow(), z.legHigh(), z.f62(), z.f705(), z.f79(), z.eq50(), ext));
+        return true;
+    }
+
+    /**
+     * IMPULSE_LEG PD arrays at the raid: the sweep's OB (the opposite-close
+     * detector bar that took the level), the sweep bar's rejection wick, and
+     * band-overlapping FVG / IFVG / BREAKER - each must REACH the swept level
+     * (the array the retrace rejected from, not one it never touched).
+     */
+    private List<PdArray> impulseCandidates(boolean bullish) {
+        List<PdArray> out = new java.util.ArrayList<>();
+        double level = impulseSweptLevel;
+        if (sweepTs != null) {
+            long secs = tfMinutes * 60L;
+            Instant barStart = Instant.ofEpochSecond(Math.floorDiv(sweepTs.getEpochSecond(), secs) * secs);
+            long sweepBarIdx = pd.indexOf(barStart);
+            if (sweepBarIdx >= 0) pd.sweepOrderBlock(sweepBarIdx, bullish, level).ifPresent(out::add);
+        }
+        if (sweepBar != null) {
+            double range = sweepBar.getHigh() - sweepBar.getLow();
+            double bodyTop = Math.max(sweepBar.getOpen(), sweepBar.getClose());
+            double bodyBot = Math.min(sweepBar.getOpen(), sweepBar.getClose());
+            // The rejection: the raid bar closed back inside (short: below the level).
+            boolean rejected = bullish ? sweepBar.getClose() > level : sweepBar.getClose() < level;
+            double wick = bullish ? bodyBot - sweepBar.getLow() : sweepBar.getHigh() - bodyTop;
+            if (rejected && range > 0 && wick / range >= REJECTION_WICK_MIN) {
+                out.add(bullish
+                        ? new PdArray("WICK", true, sweepBar.getLow(), bodyBot, sweepBar.getTimestamp())
+                        : new PdArray("WICK", false, bodyTop, sweepBar.getHigh(), sweepBar.getTimestamp()));
+            }
+        }
+        for (PdArray p : pd.candidates(bullish)) {
+            if (bullish ? p.bottom() <= level : p.top() >= level) out.add(p);
+        }
+        return out;
+    }
+
+    /**
+     * IMPULSE_LEG reaction: the candle traded into the band and CLOSED back
+     * beyond the swept level toward the trade (short: below it) with a close
+     * in the trade direction (down-close for a short) - the rejection.
+     */
+    static String impulseReaction(OteZone z, Candle c, double sweptLevel) {
+        double lo = Math.min(z.f62(), z.f79());
+        double hi = Math.max(z.f62(), z.f79());
+        if (z.bullish()) {
+            if (c.getLow() > hi) return null;
+            if (c.getClose() > sweptLevel && c.getClose() > c.getOpen()) {
+                return "rejection: close back above swept " + sweptLevel;
+            }
+            return null;
+        }
+        if (c.getHigh() < lo) return null;
+        if (c.getClose() < sweptLevel && c.getClose() < c.getOpen()) {
+            return "rejection: close back below swept " + sweptLevel;
         }
         return null;
     }
@@ -223,6 +490,7 @@ public final class OteSetupDriver {
         }
         if (!tradedIntoBand(z, candle)) return "awaiting-band-touch";
         if (core.armOte(candle.getTimestamp())) {
+            ctx.oteEntryModel = OteConfig.ENTRY_MODEL_POST_SWEEP;
             publish(new OteArmedEvent(symbol, candle.getTimestamp(), z.bullish(), ctx.oteAnchorMode,
                     z.legLow(), z.legHigh(), z.f62(), z.f705(), z.f79(), z.eq50(),
                     z.bullish() ? candle.getLow() : candle.getHigh()));
@@ -312,15 +580,23 @@ public final class OteSetupDriver {
                     + " beyond range extreme " + z.one00());
             return false;
         }
-        List<PdArray> candidates = pd.candidates(z.bullish(), linked, orderBlock);
+        boolean impulse = impulseMode
+                && OteConfig.ENTRY_MODEL_IMPULSE_LEG.equals(ctx.oteEntryModel);
+        if (impulse) {
+            // Stop side follows the retrace's extreme (05.2 stop rule).
+            ctx.sweepExtreme = z.bullish() ? episodeLow : episodeHigh;
+        }
+        List<PdArray> candidates = impulse
+                ? impulseCandidates(z.bullish())
+                : pd.candidates(z.bullish(), linked, orderBlock);
         Optional<PdArray> best = PdArrayLocator.bestInBand(candidates, z);
         if (best.isEmpty()) {
-            lastStall = "no-pd-array-overlapping-band";
+            lastStall = impulse ? "impulse-no-pd-array-at-sweep" : "no-pd-array-overlapping-band";
             return false;
         }
-        String reaction = reaction(z, candle);
+        String reaction = impulse ? impulseReaction(z, candle, impulseSweptLevel) : reaction(z, candle);
         if (reaction == null) {
-            lastStall = "no-reaction-at-band";
+            lastStall = impulse ? "impulse-awaiting-rejection" : "no-reaction-at-band";
             return false;
         }
         double entry = roundTick(PdArrayLocator.entryLevel(best.get(), z));
@@ -379,11 +655,16 @@ public final class OteSetupDriver {
             orderBlock = null;
             mssIdx = -1;
             invalidationPublished = false;
+            impulseMode = false;
+            impulseSweptLevel = Double.NaN;
         }
         if (ctx.sweep == null) {
             sweepTs = null;
             postSweepHigh = Double.NaN;
             postSweepLow = Double.NaN;
+            sweepBar = null;
+            episodeHigh = Double.NaN;
+            episodeLow = Double.NaN;
         }
         prevState = s;
     }
@@ -402,6 +683,31 @@ public final class OteSetupDriver {
         postSweepLow = Double.NaN;
         prevState = SetupState.IDLE;
         invalidationPublished = false;
+        impulseMode = false;
+        impulseSweptLevel = Double.NaN;
+        sweepBar = null;
+        episodeHigh = Double.NaN;
+        episodeLow = Double.NaN;
+    }
+
+    /**
+     * A new sweep timestamp: a REFRESH inside a running SWEEP_DONE episode
+     * keeps the retrace extreme; any other new sweep starts a new episode
+     * (the previous setup died / traded, even within this same candle).
+     */
+    private void newSweep(SetupContext ctx) {
+        if (prevState != SetupState.SWEEP_DONE || ctx.state != SetupState.SWEEP_DONE) {
+            episodeHigh = Double.NaN;
+            episodeLow = Double.NaN;
+        }
+    }
+
+    /** Fold a candle (and the swept level) into the episode's retrace extreme. */
+    private void trackEpisode(double level, Candle c) {
+        episodeHigh = Double.isNaN(episodeHigh) ? Math.max(level, c.getHigh())
+                : Math.max(episodeHigh, Math.max(level, c.getHigh()));
+        episodeLow = Double.isNaN(episodeLow) ? Math.min(level, c.getLow())
+                : Math.min(episodeLow, Math.min(level, c.getLow()));
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

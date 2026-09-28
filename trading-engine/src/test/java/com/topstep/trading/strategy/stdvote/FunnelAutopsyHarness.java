@@ -193,12 +193,14 @@ class FunnelAutopsyHarness {
         int completedSeen = 0;
         int fillsSeen = 0;
         boolean hadOpenPosition = false;
+        String[] lastImpulseVerdict = {null};   // V5 Agent 05.2: print the verdict only when it changes
 
         try (PrintWriter csv = new PrintWriter(Files.newBufferedWriter(out.resolve("candles.csv")));
              PrintWriter tr = new PrintWriter(Files.newBufferedWriter(out.resolve("transcript.txt")))) {
             csv.println("bar,ts_ET,session,state_before,state_after,holding_gate,bias,vote,kzOpen,sweep,raidScore,"
                     + "disp,fvg,mss,ote62,ote79,ote100,pdArrayInOte,entry,stop,rr,sizeReq,lastGateFailed,"
-                    + "stall,death,signal,risk,orders,positions,closedTrades,close");
+                    + "stall,death,signal,risk,orders,positions,closedTrades,close,"
+                    + "entryModel,impulseLeg,impDispRangeAtr,impDispBody,impMssSwing,impMssClose,impulseVerdict");
             int si = 0;
             for (int bar = 0; bar < primary.size(); bar++) {
                 Candle c = primary.get(bar);
@@ -294,7 +296,16 @@ class FunnelAutopsyHarness {
                         + (ctx.rr == 0 ? "" : fmt(ctx.rr)) + "," + ctx.sizeRequest + "," + q(ctx.lastGateFailed) + ","
                         + q(stall) + "," + q(death) + "," + q(signalCol) + "," + q(riskCol) + ","
                         + exec.getActiveOrdersList(symbol).size() + "," + account.getPositions().size() + ","
-                        + done.size() + "," + c.getClose();
+                        + done.size() + "," + c.getClose() + ","
+                        // V5 Agent 05.2: entry model + the impulse-leg proof numbers.
+                        + (ctx.oteEntryModel == null ? "" : ctx.oteEntryModel) + ","
+                        + (ctx.impulseLegStart == null ? "" : TS.format(ctx.impulseLegStart.atZone(ET))
+                                + ".." + TS.format(ctx.impulseLegEnd.atZone(ET))) + ","
+                        + (Double.isNaN(ctx.impulseDispRangeAtr) ? "" : fmt(ctx.impulseDispRangeAtr)) + ","
+                        + (Double.isNaN(ctx.impulseDispBody) ? "" : fmt(ctx.impulseDispBody)) + ","
+                        + (Double.isNaN(ctx.impulseMssSwing) ? "" : ctx.impulseMssSwing) + ","
+                        + (Double.isNaN(ctx.impulseMssClose) ? "" : ctx.impulseMssClose) + ","
+                        + q(ctx.impulseLegVerdict);
                 csv.println(row);
 
                 if (transcript != null && !now.isBefore(transcript[0]) && now.isBefore(transcript[1])) {
@@ -318,7 +329,10 @@ class FunnelAutopsyHarness {
                       .append(" lastGateFailed=").append(ctx.lastGateFailed)
                       .append(stall.isEmpty() ? "" : "  stall=" + stall)
                       .append(death.isEmpty() ? "" : "  DEATH=" + death)
+                      .append(java.util.Objects.equals(ctx.impulseLegVerdict, lastImpulseVerdict[0]) ? ""
+                              : "\n   entryModel=" + ctx.oteEntryModel + " impulse=" + ctx.impulseLegVerdict)
                       .append(signalCol.isEmpty() ? "" : "\n   SIGNAL " + signalCol + "\n   RISK " + riskCol);
+                    lastImpulseVerdict[0] = ctx.impulseLegVerdict;
                     com.topstep.trading.chartstate.ChartStateQueryAPI cs = chartStateOf(runner);
                     java.util.Optional<LiquidityRaid> bestRaid = cs == null ? java.util.Optional.empty() : cs.getBestActiveRaid();
                     bestRaid.ifPresent(r -> sb.append("\n   bestRaid=").append(r));

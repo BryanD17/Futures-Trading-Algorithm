@@ -805,6 +805,8 @@ public final class StdvOteStrategy implements TradingStrategy {
      * dealing range) is void once price accepts beyond the 0.786 AND the array
      * the entry sits in; the range 1.0 would put the stop beyond the whole
      * retrace. G1: max(30673.00, OB top 30650.00) + 4 ticks = 30674.00.
+     * IMPULSE_LEG (05.2) adds the sweep extreme: G1 max(30673.00, wick/OB
+     * top 30650.00, sweep high 30650.00) + 4 ticks = 30674.00.
      */
     /**
      * AGENT-05 (V5 RC-14): the stop {@link #tryEmit} WILL plan for the current
@@ -824,11 +826,17 @@ public final class StdvOteStrategy implements TradingStrategy {
         }
         double buffer = Math.max(0, bufferTicks) * tickSize;
         double far = zone.f79();
+        // V5 Agent 05.2: an IMPULSE_LEG entry also keeps the stop beyond the
+        // retrace's own extreme (the sweep high for a short) - the thesis is
+        // void once price trades back through the raid that armed it.
+        boolean impulseLeg = OteConfig.ENTRY_MODEL_IMPULSE_LEG.equals(setup.oteEntryModel);
         if (zone.bullish()) {
             if (!Double.isNaN(setup.pdArrayFarEdge)) far = Math.min(far, setup.pdArrayFarEdge);
+            if (impulseLeg && !Double.isNaN(setup.sweepExtreme)) far = Math.min(far, setup.sweepExtreme);
             return roundTick(far - buffer, tickSize);
         }
         if (!Double.isNaN(setup.pdArrayFarEdge)) far = Math.max(far, setup.pdArrayFarEdge);
+        if (impulseLeg && !Double.isNaN(setup.sweepExtreme)) far = Math.max(far, setup.sweepExtreme);
         return roundTick(far + buffer, tickSize);
     }
 

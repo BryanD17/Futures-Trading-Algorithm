@@ -572,6 +572,32 @@ public class MandatoryConfluenceValidator {
                     java.util.List.of("M5: linked " + (ctx.m5LinkKind == null ? "FVG" : ctx.m5LinkKind)
                             + " direction mismatches bias"), "M5");
         }
+        // V5 Agent 05.2 — IMPULSE_LEG entry model: M5 is proven on the dealing
+        // range's impulse leg. Re-check the recorded numbers with the SAME
+        // displacement thresholds; the linked FVG must be created inside the leg.
+        boolean impulseLeg = com.topstep.trading.strategy.stdvote.OteConfig.ENTRY_MODEL_IMPULSE_LEG
+                .equals(ctx.oteEntryModel);
+        if (impulseLeg) {
+            if (ctx.impulseLegStart == null || ctx.impulseLegEnd == null || ctx.displacementAt == null
+                    || ctx.displacementAt.isBefore(ctx.impulseLegStart)
+                    || ctx.displacementAt.isAfter(ctx.impulseLegEnd)) {
+                return ValidationResult.fail(java.util.List.of(
+                        "M5: impulse-leg displacement " + ctx.displacementAt + " not on the leg "
+                                + ctx.impulseLegStart + ".." + ctx.impulseLegEnd), "M5");
+            }
+            if (!(ctx.impulseDispRangeAtr >= ctx.impulseDispAtrMult - 1e-9)
+                    || !(ctx.impulseDispBody >= ctx.impulseDispBodyMin - 1e-9)) {
+                return ValidationResult.fail(java.util.List.of(String.format(
+                        "M5: impulse-leg displacement range/ATR %.2f (min %.2f) body %.2f (min %.2f)",
+                        ctx.impulseDispRangeAtr, ctx.impulseDispAtrMult,
+                        ctx.impulseDispBody, ctx.impulseDispBodyMin)), "M5");
+            }
+            if (ctx.fvg.getTimestamp() == null || ctx.fvg.getTimestamp().isBefore(ctx.impulseLegStart)
+                    || ctx.fvg.getTimestamp().isAfter(ctx.impulseLegEnd)) {
+                return ValidationResult.fail(java.util.List.of(
+                        "M5: impulse FVG " + ctx.fvg.getTimestamp() + " not created inside the leg"), "M5");
+            }
+        }
         confirmations.add("M5: displacement + " + (ctx.m5LinkKind == null ? "FVG" : ctx.m5LinkKind)
                 + " [" + ctx.fvg.getBottom() + "," + ctx.fvg.getTop() + "]"
                 + (ctx.displacementAt == null ? "" : " @" + ctx.displacementAt));
@@ -587,7 +613,21 @@ public class MandatoryConfluenceValidator {
                     java.util.List.of("M6: MSS " + ctx.mssAt + " precedes displacement "
                             + ctx.displacementAt), "M6");
         }
-        confirmations.add("M6: MSS confirmed" + (ctx.mssAt == null ? "" : " @" + ctx.mssAt));
+        if (impulseLeg) {
+            // V5 Agent 05.2: the leg's own structure break — the close beyond
+            // the last opposing swing, on a leg bar.
+            boolean broke = biasBullish ? ctx.impulseMssClose > ctx.impulseMssSwing
+                                        : ctx.impulseMssClose < ctx.impulseMssSwing;
+            if (!broke || ctx.mssAt == null || ctx.mssAt.isBefore(ctx.impulseLegStart)
+                    || ctx.mssAt.isAfter(ctx.impulseLegEnd)) {
+                return ValidationResult.fail(java.util.List.of(
+                        "M6: impulse-leg structure break not proven (close " + ctx.impulseMssClose
+                                + " vs swing " + ctx.impulseMssSwing + " @" + ctx.mssAt + ")"), "M6");
+            }
+        }
+        confirmations.add("M6: MSS confirmed" + (ctx.mssAt == null ? "" : " @" + ctx.mssAt)
+                + (impulseLeg ? " (impulse leg: close " + ctx.impulseMssClose + " beyond swing "
+                        + ctx.impulseMssSwing + ")" : ""));
 
         // M7 — entry geometry.
         if (ctx.ote == null) {
@@ -603,6 +643,11 @@ public class MandatoryConfluenceValidator {
                     java.util.List.of("M7: planned entry " + ctx.entry
                             + " not in OTE band [" + ctx.ote.f79() + "," + ctx.ote.f62() + "]"),
                     "M7");
+        }
+        if (impulseLeg && !(ctx.impulseSweptLevel >= Math.min(ctx.ote.f62(), ctx.ote.f79()) - 1e-6
+                && ctx.impulseSweptLevel <= Math.max(ctx.ote.f62(), ctx.ote.f79()) + 1e-6)) {
+            return ValidationResult.fail(java.util.List.of(
+                    "M7: impulse-leg sweep " + ctx.impulseSweptLevel + " not inside the OTE band"), "M7");
         }
         // V5 Agent 04 — ONE RR band (RC-13 / PF-07), read from OteConfig — the
         // same accessor PropFirmRiskEngine reads (Agent 05): floor 1.0R legacy
