@@ -83,6 +83,31 @@ public final class BiasConfig {
         return cfg().getDouble("bias.range.reanchorFraction", 0.5);
     }
 
+    /** Code default of {@code bias.range.window} (V5 Agent 05.6). */
+    public static final DealingRangeTracker.Window DEFAULT_RANGE_WINDOW = DealingRangeTracker.Window.AUTO;
+    /** Code default of {@code bias.range.minLegTicks} (MNQ 400 ticks = 100 pt,
+     *  ~ 0.33 % at 30,800: above the 09:30 opening-bar noise, see A-05.6). */
+    public static final int DEFAULT_RANGE_MIN_LEG_TICKS = 400;
+
+    /** Where the dealing range is taken from ({@code bias.range.window}):
+     *  SESSION_DAY | RTH_FIRST | AUTO (V5 Agent 05.6). */
+    public static DealingRangeTracker.Window rangeWindow() {
+        String raw = cfg().getString("bias.range.window", DEFAULT_RANGE_WINDOW.name());
+        try {
+            return DealingRangeTracker.Window.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException | NullPointerException e) {
+            return DEFAULT_RANGE_WINDOW;
+        }
+    }
+
+    /** Minimum RTH impulse leg in ticks ({@code bias.range.minLegTicks.<SYM>},
+     *  else {@code bias.range.minLegTicks}). */
+    public static int rangeMinLegTicks(String symbol) {
+        int base = cfg().getInt("bias.range.minLegTicks", DEFAULT_RANGE_MIN_LEG_TICKS);
+        int v = symbol == null ? base : cfg().getInt("bias.range.minLegTicks." + symbol, base);
+        return Math.max(1, v);
+    }
+
     // ── Levels ──────────────────────────────────────────────────────────
 
     /** A trading day with fewer bars is a phantom (settlement print) and
