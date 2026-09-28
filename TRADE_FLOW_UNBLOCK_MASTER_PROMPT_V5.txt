@@ -112,15 +112,15 @@ PHASE 0 — FABLE DIAGNOSIS
                   FunnelAutopsyHarness, real tape committed, 18 root causes routed.
 
 PHASE 1 — OPUS FIXERS (five worktrees, parallel; merge order 01→05)
-  [⬜] Agent 01 — Opus — Configuration & Wiring.  ASSIGNED: RC-01, RC-17(telemetry)
-  [⬜] Agent 02 — Opus — Time & Session Domain.   ASSIGNED: RC-02, RC-03
-  [⬜] Agent 03 — Opus — Bias, Manip Leg, Sweep & Raid. ASSIGNED: RC-04..RC-08
-  [⬜] Agent 04 — Opus — Displacement/FVG/MSS/OTE/RR.   ASSIGNED: RC-09..RC-13(band), RC-18
-  [⬜] Agent 05 — Opus — Post-Signal Pipeline.    ASSIGNED: RC-13(risk), RC-14..RC-17
+  [✅] Agent 01 — Opus — Configuration & Wiring.  PR #154 (852e170) FABLE-VERIFIED 2026-09-28
+  [✅] Agent 02 — Opus — Time & Session Domain.   PR #153 (80e4538) FABLE-VERIFIED 2026-09-28 (after REJECT #1)
+  [✅] Agent 03 — Opus — Bias, Manip Leg, Sweep & Raid. PR #156 (c98654f) FABLE-VERIFIED 2026-09-28
+  [✅] Agent 04 — Opus — Displacement/FVG/MSS/OTE/RR.   PR #157 (fbb0570) FABLE-VERIFIED 2026-09-28
+  [✅] Agent 05 — Opus — Post-Signal Pipeline.    PR #155 (ac5e602) FABLE-VERIFIED 2026-09-28 (after REJECT #1)
 
 PHASE 2 — FABLE VERIFICATION + LOOP
-  [⬜] Agent 06 — Fable — Integration Verify
-  [⬜] Agent 07 — Fable — Gap Hunt Loop
+  [✅] Agent 06 — Fable — Integration Verify — COMPLETE 2026-09-28 (matrix v1: 2 signals, 1 fill; defects D-06-1..3 → Agent 07)
+  [🔄] Agent 07 — Fable — Gap Hunt Loop (iteration 1 started 2026-09-28: sub-agents 05.1 phase expiry, 05.2 impulse-leg entry)
   [⬜] Agent 08 — Fable — Final Sign-Off
 
 LEDGER NOTES (append dated lines; never delete):
@@ -137,6 +137,13 @@ LEDGER NOTES (append dated lines; never delete):
               -Dstdvote.displacement.atrMult=1.2 -Dstdvote.displacement.bodyPct=0.55.
               Agent 01 must make those (and #151's recentBars key) first-class.
               PR #151 remains open — Agent 06 rebases/merges it or the owner does.
+  2026-09-28  Agents 01–05 merged in order #154 → #153 → #156 → #157 → #155
+              (two FABLE-REJECTs: 02 fixture/hysteresis, 05 risk-boost loosening).
+              Main = ac5e602. Agent 06 started.
+  2026-09-28  Agent 06 complete: matrix v1 = 2 signals / 1 fill; S1 true in 6 sessions,
+              S2 true (expiry 82 % of post-sweep deaths), S5 true (G1 late/unfilled).
+              Agent 07 iteration 1: sub-agents 05.1 (phase-aware expiry, Agent 02 map)
+              and 05.2 (impulse-leg entry model, Agent 04 map) spawned.
   2026-09-28  Agent 00: api-backend/build/libs jar is LOCKED by pid 14220, so
               `:api-backend:clean` fails; build without clean succeeds
               (663 tests, 0 failures, 122 result files). Do not kill the owner's
@@ -767,8 +774,8 @@ EVIDENCE PER CRITERION:
   [ ] build + tests:
   [ ] histogram parity bootRun == harness:
 FILES TOUCHED OUTSIDE OWNERSHIP MAP (must be none):
-FABLE STAMP:
-COMMIT HASH / PR:
+FABLE STAMP:       FABLE-VERIFIED 2026-09-28 0af9fd5 → squash 852e170 (build green, 689 tests/0 fail, cfg A parity, hysteresis-off control md5-identical to Agent 00 baseline). Note: property-read one-line swaps outside the map were accepted (required by the grep criterion; negative control proves no behaviour change).
+COMMIT HASH / PR:  852e170 / #154. Evidence: docs/reports/autopsy_v5/A-01.md
 
 ────────────────────────────────────────────────────────────────────────────────
 A-02  AGENT 02 — OPUS — TIME & SESSION DOMAIN
@@ -785,8 +792,8 @@ EVIDENCE PER CRITERION:
   [ ] lifecycle tests (3):
   [ ] build + tests:
 BOUNDARY DECISIONS (with alternatives exposed as config):
-FABLE STAMP:
-COMMIT HASH / PR:
+FABLE STAMP:       FABLE-REJECT #1 (6 lifecycle tests red after rebase on #154: fixture assumed hysteresis off) → fixed 5d9cf5c → FABLE-VERIFIED 2026-09-28 (779 tests/0 fail; kzClosed+M3 = 0 in all open sessions; NO_ENTRY/WEEKEND block; BLOCKING A/B byte-identical). Boundary decision accepted: NY_PM prime runs to 15:45 ET.
+COMMIT HASH / PR:  80e4538 / #153. Evidence: docs/reports/autopsy_v5/A-02.md
 
 ────────────────────────────────────────────────────────────────────────────────
 A-03  AGENT 03 — OPUS — BIAS, MANIPULATION LEG, SWEEP & RAID
@@ -805,8 +812,8 @@ EVIDENCE PER CRITERION:
   [ ] autopsy M2/M4 delta:
   [ ] build + tests:
 RAID SCORE WEIGHT TABLE (final):
-FABLE STAMP:
-COMMIT HASH / PR:
+FABLE STAMP:       FABLE-VERIFIED 2026-09-28 ada4420 → squash c98654f (804 tests/0 fail; G1 bias BEARISH 211/211 bars 11:30–15:00 ET; 30640 raid scored 9–10 at 14:50–14:53; levels exact; cfg C ASIA M2-NEUTRAL 15). Defaults changed: bias.vote.mode=VOTE, bias.source=RANGE, pd.gate.mode=BLOCK (M2b now BLOCKING per Appendix B), hysteresis on.
+COMMIT HASH / PR:  c98654f / #156. Evidence: docs/reports/autopsy_v5/A-03.md
 
 ────────────────────────────────────────────────────────────────────────────────
 A-04  AGENT 04 — OPUS — DISPLACEMENT, FVG, MSS, OTE ARM & RR BAND
@@ -826,8 +833,8 @@ EVIDENCE PER CRITERION:
   [ ] autopsy OTE_ARMED arrivals ≥ 20:
   [ ] build + tests:
 ANCHOR MODE CHOSEN + RESIDUAL (pts) PER MODE:
-FABLE STAMP:
-COMMIT HASH / PR:
+FABLE STAMP:       FABLE-VERIFIED 2026-09-28 208448d → squash fbb0570 (829 tests/0 fail; real-path G1: SWEEP 14:45 → DISPLACED 15:10 → MSS 15:15 → zone [30605.50,30673.00] → IN_TRADE 15:26 ET, SHORT e=30635.50 s=30674.00 T1=30558; OTE_ARMED 1 → 10; displacement default 1.2/0.50). OTE_ARMED ≥ 20 NOT met — routed to Agent 07 (expiry budget + entry timing).
+COMMIT HASH / PR:  fbb0570 / #157. Evidence: docs/reports/autopsy_v5/A-04.md
 
 ────────────────────────────────────────────────────────────────────────────────
 A-05  AGENT 05 — OPUS — POST-SIGNAL PIPELINE
@@ -848,23 +855,30 @@ EVIDENCE PER CRITERION:
   [ ] autopsy signals == fills + explained:
   [ ] build + tests:
 TOPSTEP MICRO-CONTRACT RULE IMPLEMENTED (+ source or "ASSUMPTION"):
-FABLE STAMP:
-COMMIT HASH / PR:
+FABLE STAMP:       FABLE-REJECT #1 (killzone boost could exceed the $ risk budget — risk loosening) → fixed a36b502 (boost capped by budget; over-budget requests DENIED with numbers) → FABLE-VERIFIED 2026-09-28 a56cb61 → squash ac5e602 (859 tests/0 fail; sacred limits 0 diff lines; one RR band; G1 approved at risk-derived 3 micros $231/$250). LIVE order test ⛔ (API key rejected).
+COMMIT HASH / PR:  ac5e602 / #155. Evidence: docs/reports/autopsy_v5/A-05.md
 BLOCKED (LIVE creds): TopstepX apiKey rejected (errorCode 3) — owner refresh.
 
 ────────────────────────────────────────────────────────────────────────────────
 A-06  AGENT 06 — FABLE — INTEGRATION VERIFY
 ────────────────────────────────────────────────────────────────────────────────
-STATUS / DATE:
-PR VERDICTS:  01: ____  02: ____  03: ____  04: ____  05: ____
-AFTER HISTOGRAM (path + totals):
-ALL-SESSIONS TRADE MATRIX v1:
-GOLDEN CASES G1/G2/G3:
-10-TRADE QUALITY AUDIT (count not-a-setup):
-REGRESSION (tests both modules, dashboard build, bootRun + API SIM trade):
-DEFECT LIST → AGENT 07:
-COMMIT HASH / PR:
-
+STATUS / DATE:     ✅ COMPLETE 2026-09-28
+PR VERDICTS:  01: VERIFIED (#154)  02: REJECT#1→VERIFIED (#153)  03: VERIFIED (#156)
+              04: VERIFIED (#157, OTE_ARMED≥20 → Agent 07)  05: REJECT#1→VERIFIED (#155)
+AFTER HISTOGRAM (path + totals): docs/reports/autopsy_v5/A-06_after_summary_A.md —
+  7,830 bars; signals 2 (ASIA 1, NY_PM 1); orders 2; fills 1; closed 1 (win +$17);
+  OTE_ARMED 10; SWEEP_DONE 104; deaths: expired 86 (85 at bar 61 after sweep), bias flip 15.
+ALL-SESSIONS TRADE MATRIX v1: Appendix F (v1 column filled).
+GOLDEN CASES G1/G2/G3: G1 zone/entry/stop/T1 within tolerance but 33 min late and
+  unfilled (D-06-1); G2 zone parity in unit test, real path expires (D-06-1/2); G3 correct
+  "no setup" (RR at T1 0.89 / 0.53 < floor) — PASS.
+10-TRADE QUALITY AUDIT (count not-a-setup): 2 trades exist, 0 not-a-setup; re-audit at ≥ 10.
+REGRESSION: 859 tests / 0 failures (both modules); dashboard `npm run build` ✓ 4.46 s;
+  `java -jar` boot on :8091 prints EFFECTIVE ENGINE CONFIG + SESSION GATE: SCORING;
+  POST /api/control/start?mode=SIM → STARTED; /api/setup serves gateDecisions.
+DEFECT LIST → AGENT 07: D-06-1 impulse-leg entry model (Agent 04 map, sub-agent 05.2);
+  D-06-2 phase-aware expiry (Agent 02 map, sub-agent 05.1); D-06-3 trade R printed 0.00.
+COMMIT HASH / PR:  (Agent 06 docs PR — see ledger)
 ────────────────────────────────────────────────────────────────────────────────
 A-07  AGENT 07 — FABLE — GAP HUNT LOOP
 ────────────────────────────────────────────────────────────────────────────────
@@ -983,13 +997,14 @@ APPENDIX F — ALL-SESSIONS TRADE MATRIX  (Agent 06 v1 → Agent 07 v k → Agen
 ================================================================================
 Tape: real_MNQ_1m.json (7 days)  Symbol: MNQ (+MES SMT)  Config: DEFAULT (no -D)
   SESSION   | bars | ≥BIAS | ≥MANIP | ≥SWEEP | ≥DISP | ≥MSS | ≥OTE | emitted | filled | closed | W/L | avgR | maxDD | S1?
-  ASIA      | 2179 |       |        |        |       |      |      |         |        |        |     |      |       |
-  LONDON    | 2160 |       |        |        |       |      |      |         |        |        |     |      |       |
-  PRE_NY    |  540 |       |        |        |       |      |      |         |        |        |     |      |       |
-  NY_AM     |  900 |       |        |        |       |      |      |         |        |        |     |      |       |
-  NY_LUNCH  |  540 |       |        |        |       |      |      |         |        |        |     |      |       |
-  NY_PM     |  810 |       |        |        |       |      |      |         |        |        |     |      |       |
-  PRE_ASIA  |  290 |       |        |        |       |      |      |         |        |        |     |      |       |
+  v1 (Agent 06, Main ac5e602, 2026-09-28) — ≥SWEEP/≥MSS/≥OTE counted per session from candles.csv
+  ASIA      | 2179 |  all  |   —    |   35   |   9   |  10  |  4   |    1    |   1    |   1    | 1/0 | +0.2 |  $0   | YES
+  LONDON    | 2160 |  all  |   —    |   29   |   8   |   8  |  2   |    0    |   0    |   0    |  —  |  —   |   —   | YES
+  PRE_NY    |  540 |  all  |   —    |    7   |   2   |   2  |  0   |    0    |   0    |   0    |  —  |  —   |   —   | YES
+  NY_AM     |  900 |  all  |   —    |   12   |   3   |   4  |  1   |    0    |   0    |   0    |  —  |  —   |   —   | YES
+  NY_LUNCH  |  540 |  all  |   —    |    7   |   1   |   1  |  1   |    0    |   0    |   0    |  —  |  —   |   —   | YES
+  NY_PM     |  810 |  all  |   —    |   10   |   3   |   3  |  2   |    1    |   0    |   0    |  —  |  —   |   —   | YES
+  PRE_ASIA  |  290 |  all  |   —    |    4   |   0   |   0  |  0   |    0    |   0    |   0    |  —  |  —   |   —   | YES
   NO_ENTRY  |  410 |   —   |   —    |   —    |   —   |  —   |  —   |    0    |   0    |   —    |  —  |  —   |   —   | must be 0
   WEEKEND   |    1 |   —   |   —    |   —    |   —   |  —   |  —   |    0    |   0    |   —    |  —  |  —   |   —   | must be 0
 BASELINE (Agent 00, every config): emitted 0 · filled 0 · closed 0.
