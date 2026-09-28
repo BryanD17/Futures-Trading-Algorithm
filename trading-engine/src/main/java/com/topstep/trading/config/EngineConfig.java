@@ -117,12 +117,16 @@ public final class EngineConfig {
         k.add(key("displacement.bodyPct", Type.DOUBLE, "0.65", "displacement body fraction", "stdvote.displacement.bodyPct"));
         k.add(key("displacement.recentBars", Type.INT, "5", "displacement recency window in detector bars (PR #151 key)", "stdvote.displacement.recentBars"));
         // bias
-        k.add(key("bias.vote.mode", Type.ENUM, "LOG", "LEGACY | LOG | VOTE - which bias feeds recordHtfBias"));
+        k.add(key("bias.vote.mode", Type.ENUM, "VOTE", "LEGACY | LOG | VOTE - which bias feeds recordHtfBias (V5 Agent 03: VOTE)"));
+        k.add(key("bias.voteRule", Type.ENUM, "ADAPTIVE", "STRICT_3OF4 | ADAPTIVE vote aggregation (Agent 03)"));
+        k.add(key("bias.source", Type.ENUM, "RANGE", "RANGE (dealing-range anchor) | VOTE (Agent 03)"));
+        k.add(key("bias.range.minRangePct", Type.DOUBLE, "0.08", "dealing range decisive span, % of price (Agent 03)"));
+        k.add(key("bias.range.reanchorFraction", Type.DOUBLE, "0.5", "pullback share of the leg that re-anchors the dealing range on a BOS (Agent 03)"));
         k.add(key("bias.v1.includeH4", Type.BOOL, "false", "V1 vote consults H4"));
-        k.add(key("bias.hysteresis", Type.BOOL, "false", "NEUTRAL-flip grace for in-flight setups", "bias.hysteresis.enabled"));
-        k.add(key("bias.neutralGraceBars", Type.INT, "2", "NEUTRAL grace length [1,4]"));
+        k.add(key("bias.hysteresis", Type.BOOL, "true", "NEUTRAL-flip grace for in-flight setups", "bias.hysteresis.enabled"));
+        k.add(key("bias.neutralGraceBars", Type.INT, "3", "NEUTRAL grace length [1,4]"));
         // premium/discount, 30m OTE
-        k.add(key("pd.gate.mode", Type.ENUM, "LOG", "M2b mode"));
+        k.add(key("pd.gate.mode", Type.ENUM, "BLOCK", "M2b mode OFF | LOG | BLOCK (V5 Agent 03: BLOCK on the dealing range)"));
         k.add(key("pd.eqBandTicks", Type.INT, "2", "equilibrium band (ticks)"));
         k.add(key("pd.minRangeTicks", Type.INT, null, "min dealing range ticks (default 2 x chart.minLegTicks)"));
         k.add(key("pd.minRangeTicks.<SYM>", Type.INT, null, "per-symbol min dealing range"));
@@ -130,6 +134,23 @@ public final class EngineConfig {
         k.add(key("ote30m.confluence", Type.ENUM, "LOG", "M7b mode OFF | LOG | GATE"));
         k.add(key("ote30m.acceptArmed", Type.BOOL, "false", "M7b accepts ARMED"));
         k.add(key("ote.stats.file", Type.PATH, "data/ote_agreement_stats.jsonl", "OTE agreement stats output"));
+        // levels + raid scoring (Agent 03)
+        k.add(key("levels.minBarsPerDay", Type.INT, "60", "trading days with fewer bars are phantoms (never PDH/PDL)"));
+        k.add(key("levels.rearmDistanceTicks", Type.INT, "100", "a raided level re-arms once a candle has left it by this many ticks"));
+        k.add(key("levels.asia.start", Type.TIME, "20:00", "Asia level window start (ET)"));
+        k.add(key("levels.asia.end", Type.TIME, "00:00", "Asia level window end (ET, wraps midnight)"));
+        k.add(key("levels.london.start", Type.TIME, "04:00", "London level window start (ET; owner LuxAlgo 30640 parity)"));
+        k.add(key("levels.london.end", Type.TIME, "06:00", "London level window end (ET)"));
+        k.add(key("levels.nyam.start", Type.TIME, "09:30", "NY AM level window start (ET)"));
+        k.add(key("levels.nyam.end", Type.TIME, "12:00", "NY AM level window end (ET)"));
+        k.add(key("levels.nypm.start", Type.TIME, "13:30", "NY PM level window start (ET)"));
+        k.add(key("levels.nypm.end", Type.TIME, "16:00", "NY PM level window end (ET)"));
+        k.add(key("levels.ny.start", Type.TIME, "09:30", "NY full-session level window start (ET)"));
+        k.add(key("levels.ny.end", Type.TIME, "16:00", "NY full-session level window end (ET)"));
+        k.add(key("raid.starvedScore", Type.INT, "-1", "score of an unscoreable sweep (-1 = instrument floor - 1)"));
+        k.add(key("raid.sweepMode", Type.ENUM, "PIPELINE", "PIPELINE | LEGACY (rollback: pre-V5 sweep path)"));
+        k.add(key("raid.weights", Type.ENUM, "V5", "V5 | V4 (rollback: pre-V5 raid weight table)"));
+        k.add(key("manip.legMode", Type.ENUM, "SESSION", "SESSION | KILLZONE (rollback: pre-V5 manipulation leg)"));
         // scalp
         k.add(key("scalp.enabled", Type.BOOL, "false", "scalp master switch (risk profile, windows, re-arm, sizer, brackets)", "scalpMode.enabled"));
         k.add(key("scalp.breakevenAtHalfR", Type.BOOL, "true", "breakeven at +0.5R"));

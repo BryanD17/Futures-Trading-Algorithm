@@ -43,6 +43,7 @@ class StdvOteScalpModeIntegrationTest {
 
     @BeforeEach
     void enableScalpMode() {
+        PreV5BiasCompat.apply(); // V5 Agent 03: pre-V5 bias/sweep inputs
         System.setProperty(ScalpConfig.ENABLED_PROPERTY, "true");
         // Fixture encodes 1m entry anatomy — pin the detector timeframe
         // (LIVE default is 5m, field fix 2026-07-09).
@@ -51,6 +52,7 @@ class StdvOteScalpModeIntegrationTest {
 
     @AfterEach
     void cleanup() {
+        PreV5BiasCompat.clear();
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
         System.clearProperty("stdvote.detectorTimeframe");
         StdvOteRegistry.unregister(StdvOteScalpFixture.SYMBOL);

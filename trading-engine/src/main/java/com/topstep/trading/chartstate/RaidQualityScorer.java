@@ -58,6 +58,40 @@ import java.util.List;
  */
 public class RaidQualityScorer {
 
+    // ═══════════════════════════════════════════════════════════════════
+    // V5 AGENT 03 RECALIBRATION (RC-07, D-10, D-11) — weight table
+    //
+    //   BASE: a detected sweep WITH rejection            +1  (NEW)
+    //   HTF bias aligned (strong / weak)                 +3 / +2
+    //   HTF bias opposing (SAME bias M2 uses)            -4
+    //   Killzone / Silver Bullet                         +2 / +1
+    //   PDH/PDL/PWH/PWL                                  +2
+    //   Session extreme (Asia/London/NY AM/NY PM)        +2  (was +1)
+    //   Equal level cluster >= 3                         +1
+    //   Rejection strong / moderate                      +2 / +1  (NEW)
+    //     strong   = wick >= 50% of the raid candle OR close back beyond
+    //                the level by >= the instrument's strongPenetration ticks
+    //     moderate = wick >= 30% OR close back beyond the level
+    //   Premium/discount aligned (HIGH sweep above the   +1  (NEW)
+    //     dealing-range EQ / LOW sweep below it)
+    //   SMT +2, 5m zone +2/+1, displacement +2, target +2/+1,
+    //   multi-touch +3/+1                                (unchanged)
+    //   Low-probability timing                           -1  ONLY when
+    //     session.gateMode=BLOCKING (a "wrong session" penalty contradicts
+    //     SCORING mode — D-11)
+    //
+    // Reachability: a textbook sweep of a SESSION level with strong
+    // rejection scores 1+2+2 = 5 = the MNQ floor with NO SMT, NO PDH/PDL,
+    // NO killzone and even a NEUTRAL bias; bias-aligned it is 7.
+    // ═══════════════════════════════════════════════════════════════════
+
+    /** Wick share of the raid candle that counts as a STRONG rejection. */
+    public static final double STRONG_WICK = 0.50;
+    /** Wick share that counts as a MODERATE rejection. */
+    public static final double MODERATE_WICK = 0.30;
+    /** Close-back distance (ticks) that counts as strong when no config. */
+    public static final double DEFAULT_STRONG_CLOSE_BACK_TICKS = 8.0;
+
     private final KillzoneClock killzoneClock;
     private final SilverBulletClock silverBulletClock;
 
@@ -74,8 +108,11 @@ public class RaidQualityScorer {
      * @return Quality score (1-10)
      */
     public int calculateScore(LiquidityRaid raid, RaidScoringContext context) {
-        int score = 0;
+        // Rollback: raid.weights=V4 restores the pre-V5 table exactly.
+        final boolean v5 = !com.topstep.trading.strategy.stdvote.BiasConfig.legacyRaidWeights();
+        int score = v5 ? 1 : 0;
         List<String> factors = new ArrayList<>();
+        if (v5) factors.add("✓ BASE: level swept with rejection (+1)");
 
         // ═══════════════════════════════════════════════════════════════════
         // TIER 1: HTF TREND ALIGNMENT (THE DOMINANT FACTOR)
@@ -127,16 +164,53 @@ public class RaidQualityScorer {
             score += 2;
             factors.add("✓ PWH/PWL Level (weekly)");
         }
-        // Session extremes (+1)
+        // Session extremes (+2 — V5 Agent 03: the owner's model trades
+        // session highs/lows as primary liquidity)
         else if (levelType.isSessionExtreme()) {
-            score += 1;
-            factors.add("✓ Session Extreme: " + levelType.getDisplayName());
+            score += v5 ? 2 : 1;
+            factors.add("✓ Session Extreme: " + levelType.getDisplayName() + (v5 ? " (+2)" : ""));
         }
         // Equal highs/lows with cluster size 3+ (+1)
         else if (levelType.isEqualLevel() && raid.getTargetLevel().getClusterSize() >= 3) {
             score += 1;
             factors.add("✓ Strong Equal Level (cluster=" + raid.getTargetLevel().getClusterSize() + ")");
         }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // TIER 3b: REJECTION QUALITY (V5 Agent 03, max +2) — the wick /
+        // close-back of the raid candle itself: the one thing every real
+        // sweep has, in every session.
+        // ═══════════════════════════════════════════════════════════════════
+        boolean highSweep = raid.getDirection() == RaidDirection.HIGH_SWEEP;
+        double level = raid.getTargetLevel().getPrice();
+        if (v5) {
+        boolean closedBack = highSweep
+                ? raid.getRaidCandleClose() <= level
+                : raid.getRaidCandleClose() >= level;
+        double wick = raid.getWickToBodyRatio();
+        double strongCloseBack = context.getStrongCloseBackTicks();
+        if (wick >= STRONG_WICK || (closedBack && raid.getRejectionTicks() >= strongCloseBack)) {
+            score += 2;
+            factors.add(String.format("✓ Strong rejection (wick %.0f%%, close-back %.0f ticks) (+2)",
+                    wick * 100, closedBack ? raid.getRejectionTicks() : 0.0));
+        } else if (wick >= MODERATE_WICK || closedBack) {
+            score += 1;
+            factors.add(String.format("✓ Rejection (wick %.0f%%, closed back=%s) (+1)",
+                    wick * 100, closedBack));
+        }
+
+        // Premium/discount location vs the dealing-range equilibrium (+1).
+        double eq = context.getRangeEquilibrium();
+        if (!Double.isNaN(eq)) {
+            if (highSweep && level > eq) {
+                score += 1;
+                factors.add("✓ High swept in PREMIUM of dealing range (eq " + eq + ") (+1)");
+            } else if (!highSweep && level < eq) {
+                score += 1;
+                factors.add("✓ Low swept in DISCOUNT of dealing range (eq " + eq + ") (+1)");
+            }
+        }
+        } // v5
 
         // ═══════════════════════════════════════════════════════════════════
         // TIER 4: CONFIRMATION FACTORS (max +4)
@@ -203,10 +277,13 @@ public class RaidQualityScorer {
             factors.add("✗ PENALTY: Opposing HTF Trend (-4)");
         }
 
-        // Outside killzone and not session overlap and not SB window (-1)
-        if (!context.isInKillzone() && !context.isSessionOverlap() && !context.isInSilverBulletWindow()) {
+        // Outside killzone and not session overlap and not SB window (-1) —
+        // V5 Agent 03 (D-11): ONLY when session.gateMode=BLOCKING. In SCORING
+        // mode the session is a bonus, never a penalty.
+        if (!context.isInKillzone() && !context.isSessionOverlap() && !context.isInSilverBulletWindow()
+                && (!v5 || !com.topstep.trading.strategy.stdvote.BiasConfig.sessionGateScoring())) {
             score -= 1;
-            factors.add("✗ PENALTY: Low-probability timing (-1)");
+            factors.add("✗ PENALTY: Low-probability timing (-1, session.gateMode=BLOCKING)");
         }
 
         // Clamp to 1-10 range
@@ -269,6 +346,10 @@ public class RaidQualityScorer {
         private final int zoneConfluenceScore;          // 5m zone confluence count (0-5)
         private final boolean hasDisplacementEntry;     // 1m displacement with FVG+MSS
         private final int targetAlignmentBonus;         // Liquidity target alignment (0-2)
+        // V5 Agent 03: dealing-range equilibrium (NaN = unknown) and the
+        // instrument's strong close-back distance in ticks.
+        private double rangeEquilibrium = Double.NaN;
+        private double strongCloseBackTicks = DEFAULT_STRONG_CLOSE_BACK_TICKS;
 
         public RaidScoringContext(Instant timestamp,
                                   boolean inKillzone, String killzoneName, KillzonePhase killzonePhase,
@@ -319,6 +400,8 @@ public class RaidQualityScorer {
         public int getZoneConfluenceScore() { return zoneConfluenceScore; }
         public boolean hasDisplacementEntry() { return hasDisplacementEntry; }
         public int getTargetAlignmentBonus() { return targetAlignmentBonus; }
+        public double getRangeEquilibrium() { return rangeEquilibrium; }
+        public double getStrongCloseBackTicks() { return strongCloseBackTicks; }
 
         public boolean htfBiasAligns(boolean expectBullish) {
             if (htfBiasBullish == null) return false;  // Neutral doesn't align
@@ -347,6 +430,20 @@ public class RaidQualityScorer {
             private int zoneConfluenceScore;
             private boolean hasDisplacementEntry;
             private int targetAlignmentBonus;
+            private double rangeEquilibrium = Double.NaN;
+            private double strongCloseBackTicks = DEFAULT_STRONG_CLOSE_BACK_TICKS;
+
+            /** V5 Agent 03: dealing-range equilibrium (NaN = unknown). */
+            public Builder rangeEquilibrium(double eq) {
+                this.rangeEquilibrium = eq;
+                return this;
+            }
+
+            /** V5 Agent 03: strong close-back distance in ticks. */
+            public Builder strongCloseBackTicks(double ticks) {
+                this.strongCloseBackTicks = ticks;
+                return this;
+            }
 
             public Builder timestamp(Instant timestamp) {
                 this.timestamp = timestamp;
@@ -402,13 +499,16 @@ public class RaidQualityScorer {
             }
 
             public RaidScoringContext build() {
-                return new RaidScoringContext(
+                RaidScoringContext c = new RaidScoringContext(
                         timestamp, inKillzone, killzoneName, killzonePhase,
                         inSilverBulletWindow, silverBulletWindowName,
                         sessionOverlap, hasSmtDivergence, htfBiasBullish,
                         htfTrendStrong, zoneConfluenceScore, hasDisplacementEntry,
                         targetAlignmentBonus
                 );
+                c.rangeEquilibrium = rangeEquilibrium;
+                c.strongCloseBackTicks = strongCloseBackTicks;
+                return c;
             }
         }
     }

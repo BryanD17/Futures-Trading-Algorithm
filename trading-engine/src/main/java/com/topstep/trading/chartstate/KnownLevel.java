@@ -181,6 +181,15 @@ public class KnownLevel {
     }
 
     /**
+     * V5 Agent 03: clear the raided flag once price has left the level
+     * (LevelEngine re-arm rule) — the level is liquidity again.
+     */
+    public void rearm() {
+        this.raided = false;
+        this.raidedAt = null;
+    }
+
+    /**
      * Increment touch count when price approaches this level.
      */
     public void incrementTouchCount() {

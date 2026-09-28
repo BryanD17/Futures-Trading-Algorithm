@@ -41,6 +41,7 @@ class StdvOteScalpRearmStuckTest {
 
     @BeforeEach
     void enableScalpMode() {
+        PreV5BiasCompat.apply(); // V5 Agent 03: pre-V5 bias/sweep inputs
         System.setProperty(ScalpConfig.ENABLED_PROPERTY, "true");
         // V5 Agent 01: engine-defaults.properties turns bias.hysteresis ON;
         // this regression is about the NEUTRAL-invalidation -> re-arm path,
@@ -50,6 +51,7 @@ class StdvOteScalpRearmStuckTest {
 
     @AfterEach
     void cleanup() {
+        PreV5BiasCompat.clear();
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
         System.clearProperty("bias.hysteresis");
         StdvOteRegistry.unregister("MNQ");

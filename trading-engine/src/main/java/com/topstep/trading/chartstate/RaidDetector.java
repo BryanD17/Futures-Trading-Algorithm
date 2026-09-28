@@ -159,16 +159,24 @@ public class RaidDetector {
         RaidDirection direction = null;
         double penetrationPrice = 0;
 
+        // Never "raid" an opening price (not liquidity; can be crossed
+        // either way) — V5 Agent 03.
+        if (level.getType().name().contains("OPEN")) return;
+
         if (level.getType().isHigh()) {
-            // Check for high sweep
-            if (candle.getHigh() > levelPrice + minPenetration) {
+            // Check for high sweep. V5 Agent 03: the candle must TRADE FROM
+            // the level (low at/below it + tolerance) — a bar printing
+            // entirely above an old high is not a sweep of that high.
+            if (candle.getHigh() > levelPrice + minPenetration
+                    && candle.getLow() <= levelPrice + tolerance) {
                 // Swept the high
                 direction = RaidDirection.HIGH_SWEEP;
                 penetrationPrice = candle.getHigh() - levelPrice;
             }
         } else {
-            // Check for low sweep
-            if (candle.getLow() < levelPrice - minPenetration) {
+            // Check for low sweep (mirrored crossing requirement).
+            if (candle.getLow() < levelPrice - minPenetration
+                    && candle.getHigh() >= levelPrice - tolerance) {
                 // Swept the low
                 direction = RaidDirection.LOW_SWEEP;
                 penetrationPrice = levelPrice - candle.getLow();
@@ -280,8 +288,12 @@ public class RaidDetector {
         // Session overlap
         builder.sessionOverlap(killzoneClock.isSessionOverlap(timestamp));
 
+        // V5 Agent 03: strong close-back in the instrument's own ticks.
+        builder.strongCloseBackTicks(config.getStrongPenetrationTicks());
+
         // Context-provided info
         if (context != null) {
+            builder.rangeEquilibrium(context.getRangeEquilibrium());
             builder.smtDivergence(context.hasSmtDivergence());
             builder.htfBias(context.getHtfBiasBullish());
 
@@ -418,6 +430,68 @@ public class RaidDetector {
         return activeRaids.values().stream()
                 .filter(LiquidityRaid::isValidForEntry)
                 .max(Comparator.comparingInt(LiquidityRaid::getQualityScore));
+    }
+
+    /**
+     * V5 Agent 03 (RC-07): the most RECENT entry-valid raid in a direction,
+     * raided no more than {@code maxBarsSince} bars ago (ties → higher
+     * score). The runner consumes this as THE sweep of a known level.
+     */
+    public synchronized Optional<LiquidityRaid> getRecentRaid(RaidDirection direction, int maxBarsSince) {
+        return activeRaids.values().stream()
+                .filter(r -> r.getDirection() == direction && r.isValidForEntry())
+                .filter(r -> r.getBarsSinceRaid() <= maxBarsSince)
+                .min(Comparator.comparingInt(LiquidityRaid::getBarsSinceRaid)
+                        .thenComparing(Comparator.comparingInt(LiquidityRaid::getQualityScore).reversed()));
+    }
+
+    /**
+     * V5 Agent 03 (RC-07): score ANY sweep through the pipeline — "no silent
+     * fallback to the instrument base". The sweep candle is matched against
+     * every known level it traded from and penetrated with rejection (most
+     * significant wins); when it swept no known level, the swept liquidity
+     * is the prior swing extreme ({@code priorExtreme}), scored as a
+     * SESSION_HIGH/SESSION_LOW (swing) level with no significance bonus.
+     * The returned raid carries its score and factors; it is NOT
+     * registered as an active raid and marks no level.
+     *
+     * @return the scored raid, or empty when the candle did not sweep
+     *         {@code priorExtreme} with a rejection (unscoreable)
+     */
+    public synchronized Optional<LiquidityRaid> scoreSweep(Candle candle, double priorExtreme,
+                                                           boolean lowSweep, RaidDetectionContext context) {
+        if (candle == null || Double.isNaN(priorExtreme)) return Optional.empty();
+        double tolerance = config.getTolerancePrice();
+        double minPenetration = config.getMinPenetrationPrice();
+        RaidDirection direction = lowSweep ? RaidDirection.LOW_SWEEP : RaidDirection.HIGH_SWEEP;
+        KnownLevel best = null;
+        for (KnownLevel level : levelEngine.getAllLevels()) {
+            if (level.getType().name().contains("OPEN")) continue;
+            if (level.getType().isHigh() == lowSweep) continue;
+            double p = level.getPrice();
+            boolean swept = lowSweep
+                    ? candle.getLow() < p - minPenetration && candle.getHigh() >= p - tolerance
+                    : candle.getHigh() > p + minPenetration && candle.getLow() <= p + tolerance;
+            if (!swept || !checkForRejection(candle, p, direction)) continue;
+            if (best == null || level.getType().getSignificance() > best.getType().getSignificance()) {
+                best = level;
+            }
+        }
+        if (best == null) {
+            boolean sweptPrior = lowSweep ? candle.getLow() < priorExtreme : candle.getHigh() > priorExtreme;
+            if (!sweptPrior || !checkForRejection(candle, priorExtreme, direction)) {
+                return Optional.empty();
+            }
+            best = new KnownLevel(lowSweep ? LevelType.SESSION_LOW : LevelType.SESSION_HIGH,
+                    priorExtreme, candle.getTimestamp());
+        }
+        double penetrationPrice = lowSweep
+                ? best.getPrice() - candle.getLow()
+                : candle.getHigh() - best.getPrice();
+        LiquidityRaid raid = createRaid(candle, best, direction,
+                penetrationPrice / config.getTickSize());
+        scorer.calculateScore(raid, buildScoringContext(candle.getTimestamp(), context));
+        return Optional.of(raid);
     }
 
     /**
@@ -580,6 +654,8 @@ public class RaidDetector {
         private final int zoneConfluenceScore;
         private final boolean hasDisplacementEntry;
         private final int targetAlignmentBonus;
+        /** V5 Agent 03: dealing-range equilibrium for the P/D factor (NaN = unknown). */
+        private double rangeEquilibrium = Double.NaN;
 
         public RaidDetectionContext(boolean hasSmtDivergence, Boolean htfBiasBullish) {
             this(hasSmtDivergence, htfBiasBullish, false, 0, false, 0);
@@ -602,6 +678,13 @@ public class RaidDetector {
         public int getZoneConfluenceScore() { return zoneConfluenceScore; }
         public boolean hasDisplacementEntry() { return hasDisplacementEntry; }
         public int getTargetAlignmentBonus() { return targetAlignmentBonus; }
+        public double getRangeEquilibrium() { return rangeEquilibrium; }
+
+        /** V5 Agent 03: attach the dealing-range equilibrium (fluent). */
+        public RaidDetectionContext withRangeEquilibrium(double eq) {
+            this.rangeEquilibrium = eq;
+            return this;
+        }
 
         public static RaidDetectionContext withSmt(boolean hasSmt) {
             return new RaidDetectionContext(hasSmt, null);

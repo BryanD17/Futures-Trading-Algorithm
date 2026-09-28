@@ -62,6 +62,7 @@ class StdvOteWiringIntegrationTest {
 
     @org.junit.jupiter.api.BeforeEach
     void pinDetectorTimeframe() {
+        PreV5BiasCompat.apply(); // V5 Agent 03: pre-V5 bias/sweep inputs
         // The SA5 fixture encodes 1m entry anatomy — pin the detector
         // timeframe (LIVE default is 5m, field fix 2026-07-09).
         System.setProperty("stdvote.detectorTimeframe", "1");
@@ -69,6 +70,7 @@ class StdvOteWiringIntegrationTest {
 
     @AfterEach
     void cleanupRegistry() {
+        PreV5BiasCompat.clear();
         StdvOteRegistry.unregister(SYMBOL);
         System.clearProperty(StdvOteRunnerStrategy.STOP_BUFFER_TICKS_PROPERTY);
         System.clearProperty("stdvote.detectorTimeframe");

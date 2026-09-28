@@ -51,6 +51,7 @@ class StdvOteLegacyGoldenTest {
 
     @BeforeEach
     void forceLegacyMode() {
+        PreV5BiasCompat.apply(); // V5 Agent 03: pre-V5 bias/sweep inputs
         // Explicit OFF (also covers the absent-property default elsewhere).
         System.setProperty(ScalpConfig.ENABLED_PROPERTY, "false");
         // Golden fixture encodes 1m entry anatomy — pin the detector
@@ -60,6 +61,7 @@ class StdvOteLegacyGoldenTest {
 
     @AfterEach
     void cleanup() {
+        PreV5BiasCompat.clear();
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
         System.clearProperty("stdvote.detectorTimeframe");
         StdvOteRegistry.unregister(StdvOteGoldenFixture.SYMBOL);

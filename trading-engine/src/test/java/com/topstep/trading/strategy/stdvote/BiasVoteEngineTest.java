@@ -219,16 +219,26 @@ class BiasVoteEngineTest {
         assertThat(BiasVoteEngine.effectiveBias(VoteMode.VOTE, MarketBias.BULLISH, bear3))
                 .isEqualTo(MarketBias.BEARISH);
 
-        // Runner-level: cold start guarantees >= 2 abstentions (no PDH/PDL,
-        // AMD in accumulation) -> vote is NEUTRAL by arithmetic -> in VOTE
-        // mode the machine must NOT leave IDLE regardless of structure.
+        // Runner-level, PRE-V5 rule pinned (bias.voteRule=STRICT_3OF4,
+        // bias.source=VOTE): cold start guarantees >= 2 abstentions (no
+        // PDH/PDL, AMD in accumulation) -> the strict vote is NEUTRAL by
+        // arithmetic -> the machine must NOT leave IDLE. (This is the PF-08
+        // deadlock; the V5 ADAPTIVE rule + range anchor that remove it are
+        // proven in Agent03BiasTest.)
         System.setProperty(BiasVoteEngine.MODE_PROPERTY, "VOTE");
-        StdvOteRunnerStrategy s = new StdvOteRunnerStrategy("MNQ", "MES", new EventBus());
-        BiasVoteEngine engine = BiasVoteEngine.get("MNQ").orElseThrow();
-        feedOneHour(s);
-        assertThat(engine.evaluationCount()).isGreaterThan(0);
-        assertThat(s.getSetupContext().htfBias).isEqualTo(MarketBias.NEUTRAL);
-        assertThat(s.getSetupContext().state).isEqualTo(SetupState.IDLE);
+        System.setProperty("bias.voteRule", "STRICT_3OF4");
+        System.setProperty("bias.source", "VOTE");
+        try {
+            StdvOteRunnerStrategy s = new StdvOteRunnerStrategy("MNQ", "MES", new EventBus());
+            BiasVoteEngine engine = BiasVoteEngine.get("MNQ").orElseThrow();
+            feedOneHour(s);
+            assertThat(engine.evaluationCount()).isGreaterThan(0);
+            assertThat(s.getSetupContext().htfBias).isEqualTo(MarketBias.NEUTRAL);
+            assertThat(s.getSetupContext().state).isEqualTo(SetupState.IDLE);
+        } finally {
+            System.clearProperty("bias.voteRule");
+            System.clearProperty("bias.source");
+        }
     }
 
     // ── (f) determinism ──────────────────────────────────────────────────

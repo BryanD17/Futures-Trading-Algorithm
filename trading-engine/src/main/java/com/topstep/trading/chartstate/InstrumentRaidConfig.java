@@ -158,6 +158,18 @@ public class InstrumentRaidConfig {
         if (config != null) {
             return config;
         }
+        // V5 Agent 03 (RC-07/RC-08): the micro contracts share the full-size
+        // contract's tick SIZE (MNQ/NQ 0.25, MES/ES 0.25, MGC/GC 0.10), so
+        // every tolerance / penetration expressed in TICKS is identical.
+        // Pre-V5 "MNQ" fell through to the 0.01-tick default below: a
+        // 0.03-pt level tolerance and a 0.05-pt "minimum penetration".
+        String upper = symbol.toUpperCase();
+        if (upper.length() > 1 && upper.startsWith("M")) {
+            InstrumentRaidConfig full = CONFIGS.get(upper.substring(1));
+            if (full != null) {
+                return full;
+            }
+        }
         // Return default config for unknown instruments
         return new Builder(symbol)
                 .tickSize(0.01)
