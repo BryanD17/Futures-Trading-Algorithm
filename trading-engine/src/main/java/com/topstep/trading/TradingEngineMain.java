@@ -28,6 +28,11 @@ public class TradingEngineMain {
         System.out.println("Mode: " + mode);
         System.out.println();
 
+        // V5 Agent 01 (R9): the CLI entry point loads the same EngineConfig
+        // (-D > ENGINE_* env > ~/topstep-trading/engine.properties > defaults)
+        // and prints the EFFECTIVE ENGINE CONFIG table before any runner starts.
+        EngineFacade.getInstance();
+
         switch (mode) {
             case "BACKTEST":
                 runBacktestMode();

@@ -54,8 +54,8 @@ public final class Ote30mConfluenceGate {
 
     /** Build from system properties, register for API access, log config. */
     public static Ote30mConfluenceGate install(String symbol) {
-        Mode mode = parseMode(System.getProperty(MODE_PROPERTY, "LOG"));
-        boolean acceptArmed = Boolean.getBoolean(ACCEPT_ARMED_PROPERTY);
+        Mode mode = parseMode(com.topstep.trading.config.EngineConfig.current().getString(MODE_PROPERTY, "LOG"));
+        boolean acceptArmed = com.topstep.trading.config.EngineConfig.current().getBoolean(ACCEPT_ARMED_PROPERTY, false);
         Ote30mConfluenceGate g = new Ote30mConfluenceGate(symbol, mode, acceptArmed);
         REGISTRY.put(symbol, g);
         System.out.println("[OTE30M " + symbol + "] config: mode=" + mode

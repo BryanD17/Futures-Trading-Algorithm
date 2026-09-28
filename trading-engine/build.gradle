@@ -44,23 +44,24 @@ application {
     mainClass = 'com.topstep.trading.TradingEngineMain'
 }
 
+apply from: rootProject.file('gradle/engine-config.gradle')
+
 tasks.named('test') {
     useJUnitPlatform()
-    // Forward the diagnosis/tuning properties into the TEST JVM so the
-    // FunnelReplayHarness (offline real-tape replay) can be parameterized
-    // from the gradle command line. Absent properties forward as null and
-    // change nothing.
-    ['funnel.data.dir', 'funnel.symbol', 'scalpMode.enabled', 'scalp.minRaidScore',
-     'bias.hysteresis.enabled', 'bias.neutralGraceBars',
-     'trade.profile', 'profile.sim.file', 'chart.anchorMode', 'chart.oteBand',
-     'chart.anchorCompare',
-     'stdvote.detectorTimeframe', 'stdvOte.setupExpiryBars',
-     'stdvOte.oteWindowBars', 'stdvOte.mssFreshBars',
-     'stdvote.displacement.atrMult', 'stdvote.displacement.bodyPct'].each { p ->
-        if (System.getProperty(p) != null) {
-            systemProperty p, System.getProperty(p)
-        }
+    // V5 Agent 01: forward EVERY engine -D flag (the shared prefix list in
+    // gradle/engine-config.gradle — the SAME list api-backend's bootRun
+    // forwards) into the TEST JVM, so the FunnelAutopsy/FunnelReplay
+    // harnesses run the configuration bootRun / java -jar run. Absent
+    // properties forward nothing and change nothing.
+    engineForwardedSystemProperties().each { k, v -> systemProperty k, v }
+    // Hermetic by default: unit tests never read a developer's
+    // ~/topstep-trading/engine.properties unless asked to with
+    // -Pengine.props=<path> (or -Dengine.props=<path>).
+    if (!engineForwardedSystemProperties().containsKey('engine.props')) {
+        systemProperty 'engine.props', 'NONE'
     }
+    // Re-run tests when the forwarded configuration changes.
+    inputs.property('engineForwardedSystemProperties', engineForwardedSystemProperties().toString())
 }
 
 java {

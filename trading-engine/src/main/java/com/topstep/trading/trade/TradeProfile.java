@@ -39,7 +39,7 @@ public enum TradeProfile {
 
     /** Resolved active profile; anything unrecognised means STRICT. */
     public static TradeProfile active() {
-        return parse(System.getProperty(PROPERTY));
+        return parse(com.topstep.trading.config.EngineConfig.current().getRaw(PROPERTY));
     }
 
     public static TradeProfile parse(String value) {

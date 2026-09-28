@@ -64,12 +64,21 @@ public class StatusController {
                         status.put("distanceToTarget", engine.getDistanceToTarget());
                     }
                 } catch (IllegalStateException e) {
+                    // not an error: the engine is still initializing — reported in the response
                     // Engine not fully initialized yet
                     status.put("accountStatus", "Initializing...");
                 }
             }
 
+            // V5 Agent 01 (R9): the EFFECTIVE engine configuration (key ->
+            // value + source) and the runtime error/gate counters.
+            status.put("effectiveConfig", engine.getEngineConfig().toApiMap());
+            status.put("telemetry", Map.of(
+                    "errorCounts", com.topstep.trading.event.EngineTelemetry.errorCounts(),
+                    "gateCounts", com.topstep.trading.event.EngineTelemetry.gateCounts()));
+
         } catch (Exception e) {
+            com.topstep.trading.event.EngineTelemetry.error("StatusController.getStatus", e);
             status.put("error", "Failed to get engine status: " + e.getMessage());
             status.put("status", "ERROR");
             status.put("mode", "UNKNOWN");

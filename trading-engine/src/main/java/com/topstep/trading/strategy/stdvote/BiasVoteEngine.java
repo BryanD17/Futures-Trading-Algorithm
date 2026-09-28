@@ -100,12 +100,12 @@ public final class BiasVoteEngine {
 
     /** Build from system properties, register for API access, log config. */
     public static BiasVoteEngine install(String symbol, double tickSize) {
-        VoteMode mode = parseMode(System.getProperty(MODE_PROPERTY, "LOG"));
-        int eqBand = Integer.getInteger(
+        VoteMode mode = parseMode(com.topstep.trading.config.EngineConfig.current().getString(MODE_PROPERTY, "LOG"));
+        int eqBand = com.topstep.trading.config.EngineConfig.current().getInt(
                 PremiumDiscountEvaluator.EQ_BAND_TICKS_PROPERTY,
                 PremiumDiscountEvaluator.DEFAULT_EQ_BAND_TICKS);
         BiasVoteEngine e = new BiasVoteEngine(symbol, tickSize, mode, eqBand);
-        e.includeH4 = Boolean.getBoolean(INCLUDE_H4_PROPERTY);
+        e.includeH4 = com.topstep.trading.config.EngineConfig.current().getBoolean(INCLUDE_H4_PROPERTY, false);
         REGISTRY.put(symbol, e);
         System.out.println("[VOTE " + symbol + "] config: mode=" + mode
                 + " eqBandTicks=" + eqBand + " v1.includeH4=" + e.includeH4);

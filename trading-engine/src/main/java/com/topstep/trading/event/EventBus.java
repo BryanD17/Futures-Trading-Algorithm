@@ -21,6 +21,9 @@ public class EventBus {
     private final Thread processingThread;
     private volatile boolean running;
     private final AtomicLong eventsProcessed;
+    private final AtomicLong droppedNotRunning = new AtomicLong();
+    private final AtomicLong droppedQueueFull = new AtomicLong();
+    private final AtomicLong handlerErrors = new AtomicLong();
 
     /**
      * Default constructor with 4 worker threads.
@@ -132,6 +135,7 @@ public class EventBus {
             case "PositionOpenedEvent" -> EventType.POSITION_OPENED;
             case "PositionClosedEvent" -> EventType.POSITION_CLOSED;
             case "RiskBreachEvent" -> EventType.RISK_BREACH;
+            case "GateDecisionEvent" -> EventType.GATE_DECISION;
             default -> {
                 logger.warn("Unknown event class: {}, defaulting to STRATEGY_SIGNAL", className);
                 yield EventType.STRATEGY_SIGNAL;
@@ -144,7 +148,11 @@ public class EventBus {
      */
     public void publish(Event event) {
         if (!running) {
-            logger.warn("EventBus not running, ignoring event: {}", event);
+            // V5 Agent 01 (D-14): a publish while the bus is stopped is a WIRING
+            // defect (handler/bus lifecycle out of order), not a warning.
+            droppedNotRunning.incrementAndGet();
+            EngineTelemetry.error("EventBus.publish.notRunning",
+                    "EventBus not running, DROPPED event: " + event);
             return;
         }
 
@@ -152,12 +160,13 @@ public class EventBus {
             boolean added = eventQueue.offer(event, 100, TimeUnit.MILLISECONDS);
             if (!added) {
                 // CRITICAL: Event was dropped due to queue full - this should never happen in normal operation
-                logger.error("EVENT DROPPED - Queue full! Event: {} (type: {})", event, event.getClass().getSimpleName());
-                // In production, consider throwing an exception or implementing retry logic
+                droppedQueueFull.incrementAndGet();
+                EngineTelemetry.error("EventBus.publish.queueFull",
+                        "EVENT DROPPED - Queue full! Event: " + event + " (type: " + event.getClass().getSimpleName() + ")");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            logger.error("Interrupted while publishing event", e);
+            EngineTelemetry.error("EventBus.publish.interrupted", e);
         }
     }
 
@@ -240,7 +249,7 @@ public class EventBus {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
-                logger.error("Error processing event", e);
+                EngineTelemetry.error("EventBus.processEvents", e);
             }
         }
 
@@ -264,7 +273,8 @@ public class EventBus {
                 try {
                     handler.handle(event);
                 } catch (Exception e) {
-                    logger.error("Error in event handler for event: {}", event, e);
+                    handlerErrors.incrementAndGet();
+                    EngineTelemetry.error("EventBus.handler." + event.getType(), e);
                 }
             });
         }
@@ -282,6 +292,27 @@ public class EventBus {
      */
     public int getQueueSize() {
         return eventQueue.size();
+    }
+
+    /** Events dropped because publish() ran while the bus was stopped (ERROR each). */
+    public long getDroppedNotRunning() {
+        return droppedNotRunning.get();
+    }
+
+    /** Events dropped because the queue was full (ERROR each). */
+    public long getDroppedQueueFull() {
+        return droppedQueueFull.get();
+    }
+
+    /** Handler invocations that threw (ERROR each). */
+    public long getHandlerErrors() {
+        return handlerErrors.get();
+    }
+
+    /** Number of handlers subscribed for an event class (wiring assertions). */
+    public int handlerCount(Class<? extends Event> eventClass) {
+        List<EventHandler<? extends Event>> h = handlers.get(mapClassToEventType(eventClass));
+        return h == null ? 0 : h.size();
     }
 
     /**

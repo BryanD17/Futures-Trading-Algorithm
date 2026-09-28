@@ -75,7 +75,7 @@ public final class BacktestCosts {
     }
 
     private static double doubleProperty(String name, double defaultValue) {
-        String raw = System.getProperty(name);
+        String raw = com.topstep.trading.config.EngineConfig.current().getRaw(name);
         if (raw == null) return defaultValue;
         try {
             return Double.parseDouble(raw.trim());

@@ -94,21 +94,21 @@ public final class PremiumDiscountEvaluator {
     /** Build from system properties, register for API access, log config. */
     public static PremiumDiscountEvaluator install(String symbol, double tickSize,
                                                    LevelEngine levels) {
-        PdMode mode = parseMode(System.getProperty(MODE_PROPERTY, "LOG"));
-        int eqBand = Integer.getInteger(EQ_BAND_TICKS_PROPERTY, DEFAULT_EQ_BAND_TICKS);
+        PdMode mode = parseMode(com.topstep.trading.config.EngineConfig.current().getString(MODE_PROPERTY, "LOG"));
+        int eqBand = com.topstep.trading.config.EngineConfig.current().getInt(EQ_BAND_TICKS_PROPERTY, DEFAULT_EQ_BAND_TICKS);
         // Default minRangeTicks = 2x the symbol's chart minLegTicks
         // (chart.minLegTicks.<SYM>, ChartEngine default 40), overridable
         // globally (pd.minRangeTicks) or per symbol (pd.minRangeTicks.<SYM>).
-        int chartMinLeg = Integer.getInteger("chart.minLegTicks." + symbol, 40);
-        int minRange = Integer.getInteger(MIN_RANGE_TICKS_PROPERTY + "." + symbol,
-                Integer.getInteger(MIN_RANGE_TICKS_PROPERTY, 2 * chartMinLeg));
+        int chartMinLeg = com.topstep.trading.config.EngineConfig.current().getInt("chart.minLegTicks." + symbol, 40);
+        int minRange = com.topstep.trading.config.EngineConfig.current().getInt(MIN_RANGE_TICKS_PROPERTY + "." + symbol,
+                com.topstep.trading.config.EngineConfig.current().getInt(MIN_RANGE_TICKS_PROPERTY, 2 * chartMinLeg));
         PremiumDiscountEvaluator e = new PremiumDiscountEvaluator(
                 symbol, tickSize, levels, mode, eqBand, minRange);
         // R0 (V3 Agent 05): the D1 dealing range from the authoritative
         // ladder, once it is at least pd.d1MinBars deep. Wired ONLY here —
         // direct-constructed evaluators (tests, pre-Agent-05 wiring) keep
         // an empty D1 source and behave exactly as before (fallback proof).
-        int d1MinBars = Integer.getInteger(D1_MIN_BARS_PROPERTY, DEFAULT_D1_MIN_BARS);
+        int d1MinBars = com.topstep.trading.config.EngineConfig.current().getInt(D1_MIN_BARS_PROPERTY, DEFAULT_D1_MIN_BARS);
         e.configureD1Source(() -> com.topstep.trading.strategy.HtfSeriesRegistry
                 .get(symbol)
                 .map(m -> m.getCandlesSnapshot(

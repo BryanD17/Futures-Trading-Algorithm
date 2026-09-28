@@ -42,11 +42,16 @@ class StdvOteScalpRearmStuckTest {
     @BeforeEach
     void enableScalpMode() {
         System.setProperty(ScalpConfig.ENABLED_PROPERTY, "true");
+        // V5 Agent 01: engine-defaults.properties turns bias.hysteresis ON;
+        // this regression is about the NEUTRAL-invalidation -> re-arm path,
+        // which only exists with hysteresis OFF — pin it explicitly.
+        System.setProperty("bias.hysteresis", "false");
     }
 
     @AfterEach
     void cleanup() {
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
+        System.clearProperty("bias.hysteresis");
         StdvOteRegistry.unregister("MNQ");
     }
 

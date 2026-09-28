@@ -207,6 +207,14 @@ Futures-Trading-Algorithm/
 
 ### Running Locally
 
+**Engine configuration (V5)**: every flag resolves through `EngineConfig`
+(`-D` > `ENGINE_<KEY>` env > `~/topstep-trading/engine.properties` >
+classpath `engine-defaults.properties` > code). `java -jar
+api-backend/build/libs/api-backend-1.0.0-SNAPSHOT.jar` and `./gradlew
+:api-backend:bootRun` load the same file, print the same **EFFECTIVE ENGINE
+CONFIG** table at boot, and expose it at `GET /api/status` (`effectiveConfig`).
+See `docs/QUICK_START.md` -> "ENGINE CONFIGURATION".
+
 **Terminal 1 - Trading Engine**:
 ```bash
 cd trading-engine

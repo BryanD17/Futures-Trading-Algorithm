@@ -41,10 +41,20 @@ public class SetupController {
 
     @GetMapping
     public ResponseEntity<Map<String, Object>> listActive() {
-        return ResponseEntity.ok(Map.of(
-                "strategy", StdvOteStrategy.NAME,
-                "activeSymbols", StdvOteRegistry.activeSymbols()
-        ));
+        // V5 Agent 01 (RC-17): the last 200 runtime gate decisions (oldest
+        // first) so the dashboard can answer "which gate killed it".
+        List<Map<String, Object>> decisions = new ArrayList<>();
+        for (com.topstep.trading.event.GateDecisionEvent e
+                : com.topstep.trading.event.EngineTelemetry.recent(
+                        com.topstep.trading.event.EngineTelemetry.RING_CAPACITY)) {
+            decisions.add(e.toApiMap());
+        }
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("strategy", StdvOteStrategy.NAME);
+        out.put("activeSymbols", StdvOteRegistry.activeSymbols());
+        out.put("gateDecisions", decisions);
+        out.put("gateCounts", com.topstep.trading.event.EngineTelemetry.gateCounts());
+        return ResponseEntity.ok(out);
     }
 
     @GetMapping("/instruments")

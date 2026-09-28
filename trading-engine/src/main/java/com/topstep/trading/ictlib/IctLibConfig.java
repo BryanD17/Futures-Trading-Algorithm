@@ -112,7 +112,7 @@ public final class IctLibConfig {
     /** Appendix S defaults, with system-property overrides applied. */
     public static IctLibConfig fromSystemProperties() {
         return new IctLibConfig(
-                !"false".equalsIgnoreCase(System.getProperty("ictlib.enabled", "true")),
+                com.topstep.trading.config.EngineConfig.current().getBoolean("ictlib.enabled", true),
                 intProp("ictlib.displacement.meanLen", 5),
                 doubleProp("ictlib.displacement.wickRatioMax", 0.36),
                 intProp("ictlib.retain.displacement", 50),
@@ -130,7 +130,7 @@ public final class IctLibConfig {
                 intProp("ictlib.retain.pool", 4),
                 intProp("ictlib.pool.atrPeriod", 10),
                 intProp("ictlib.ob.swingLen", 10),
-                !"false".equalsIgnoreCase(System.getProperty("ictlib.ob.useBody", "true")),
+                com.topstep.trading.config.EngineConfig.current().getBoolean("ictlib.ob.useBody", true),
                 intProp("ictlib.retain.orderBlock", 5),
                 intProp("ictlib.structure.pivotLeft", 5),
                 intProp("ictlib.structure.pivotRight", 1),
@@ -227,7 +227,7 @@ public final class IctLibConfig {
 
     private static int intProp(String key, int def) {
         try {
-            String v = System.getProperty(key);
+            String v = com.topstep.trading.config.EngineConfig.current().getRaw(key);
             return (v == null) ? def : Integer.parseInt(v.trim());
         } catch (NumberFormatException e) {
             return def;
@@ -236,7 +236,7 @@ public final class IctLibConfig {
 
     private static double doubleProp(String key, double def) {
         try {
-            String v = System.getProperty(key);
+            String v = com.topstep.trading.config.EngineConfig.current().getRaw(key);
             return (v == null) ? def : Double.parseDouble(v.trim());
         } catch (NumberFormatException e) {
             return def;
@@ -244,7 +244,7 @@ public final class IctLibConfig {
     }
 
     private static GapMode gapModeProp() {
-        String v = System.getProperty("ictlib.fvg.mode", "FVG");
+        String v = com.topstep.trading.config.EngineConfig.current().getString("ictlib.fvg.mode", "FVG");
         return "IFVG".equalsIgnoreCase(v.trim()) ? GapMode.IFVG : GapMode.FVG;
     }
 }
