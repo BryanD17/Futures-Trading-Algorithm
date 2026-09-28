@@ -48,6 +48,10 @@ class StdvOteScalpModeIntegrationTest {
         // Fixture encodes 1m entry anatomy — pin the detector timeframe
         // (LIVE default is 5m, field fix 2026-07-09).
         System.setProperty("stdvote.detectorTimeframe", "1");
+        // V5 Agent 04: this fixture's scalp choreography (1R target, fill /
+        // close candles) is built on the leg-ORIGIN stop; pin it (default
+        // BAND puts the stop beyond the 0.786 / PD array instead).
+        System.setProperty("ote.stopMode", "ORIGIN");
     }
 
     @AfterEach
@@ -55,6 +59,7 @@ class StdvOteScalpModeIntegrationTest {
         PreV5BiasCompat.clear();
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
         System.clearProperty("stdvote.detectorTimeframe");
+        System.clearProperty("ote.stopMode");
         StdvOteRegistry.unregister(StdvOteScalpFixture.SYMBOL);
     }
 

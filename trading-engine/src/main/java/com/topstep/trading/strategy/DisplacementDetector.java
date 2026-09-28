@@ -52,6 +52,24 @@ public class DisplacementDetector {
     /** Symbol tag for log attribution (may be empty for legacy callers). */
     private final String logTag;
 
+    // ── V5 Agent 04 (RC-09): calibrated STDV+OTE mode, opt-in ──────────────
+    /**
+     * When &gt; 0, the expansion test compares the bar's range against the
+     * mean TRUE RANGE of the {@code atrLen} bars BEFORE it (the bar itself
+     * excluded — it cannot inflate the average it must beat). 0 = the
+     * historical 14-bar average RANGE including the current bar (every legacy
+     * caller keeps that exact behaviour).
+     */
+    private int priorAtrLen = 0;
+    /** Last evaluated bar's numbers (telemetry / calibration evidence). */
+    private double lastAtr = Double.NaN;
+    private double lastRangeOverAtr = Double.NaN;
+    private double lastBodyRatio = Double.NaN;
+    /** Recent confirmed displacements with the candle count at detection. */
+    private final List<Displacement> history = new ArrayList<>();
+    private final List<Integer> historyCounts = new ArrayList<>();
+    private static final int HISTORY_MAX = 50;
+
     public DisplacementDetector(int lookbackPeriod) {
         this(lookbackPeriod, 1.5, 0.65);
     }
@@ -79,6 +97,50 @@ public class DisplacementDetector {
         this.minBodyRatio = minBodyRatio;
         this.logTag = (logTag == null) ? "" : logTag;
         this.candles = new ArrayList<>();
+    }
+
+    /**
+     * V5 Agent 04: switch this instance to the calibrated expansion test —
+     * range vs the mean true range of the {@code atrLen} PRIOR bars. Used by
+     * the STDV+OTE runner only; returns {@code this} for chaining.
+     */
+    public DisplacementDetector usePriorTrueRangeAtr(int atrLen) {
+        this.priorAtrLen = Math.max(1, atrLen);
+        return this;
+    }
+
+    /** ATR (or average range) used for the last evaluated bar. */
+    public double getLastAtr() { return lastAtr; }
+    /** Last evaluated bar's range / ATR. */
+    public double getLastRangeOverAtr() { return lastRangeOverAtr; }
+    /** Last evaluated bar's body / range. */
+    public double getLastBodyRatio() { return lastBodyRatio; }
+    public double getDisplacementMultiplier() { return displacementMultiplier; }
+    public double getMinBodyRatio() { return minBodyRatio; }
+
+    /**
+     * Newest confirmed displacement in {@code bullish} direction detected
+     * within the last {@code withinCandles} candles whose timestamp is not
+     * before {@code notBefore} (null = no time floor). Unlike
+     * {@link #getLastDisplacement()} an aligned displacement is not hidden by
+     * a later opposite one.
+     */
+    public Displacement findRecent(int withinCandles, boolean bullish, Instant notBefore) {
+        for (int i = history.size() - 1; i >= 0; i--) {
+            Displacement d = history.get(i);
+            int age = totalCandleCount - historyCounts.get(i);
+            if (age > withinCandles) break;
+            if (d.isBullish() != bullish) continue;
+            if (notBefore != null && d.getTimestamp() != null && d.getTimestamp().isBefore(notBefore)) continue;
+            return d;
+        }
+        return null;
+    }
+
+    /** True when any displacement (either direction) is within the window. */
+    public boolean anyRecent(int withinCandles, Instant notBefore) {
+        return findRecent(withinCandles, true, notBefore) != null
+                || findRecent(withinCandles, false, notBefore) != null;
     }
 
     /**
@@ -126,11 +188,29 @@ public class DisplacementDetector {
      */
     private void detectDisplacement(Candle latestCandle) {
         // Calculate average range (ATR approximation)
-        double avgRange = candles.stream()
-                .skip(Math.max(0, candles.size() - 14))
-                .mapToDouble(c -> c.getHigh() - c.getLow())
-                .average()
-                .orElse(10.0);
+        double avgRange;
+        if (priorAtrLen > 0) {
+            // V5 calibrated mode: mean TRUE range of the bars BEFORE the
+            // latest one (G1 15:00 5m bar: 44.0 / 26.5 = 1.66x).
+            int n = candles.size() - 1;
+            int from = Math.max(1, n - priorAtrLen);
+            double sum = 0;
+            int cnt = 0;
+            for (int i = from; i < n; i++) {
+                Candle c = candles.get(i);
+                double pc = candles.get(i - 1).getClose();
+                sum += Math.max(c.getHigh() - c.getLow(),
+                        Math.max(Math.abs(c.getHigh() - pc), Math.abs(c.getLow() - pc)));
+                cnt++;
+            }
+            avgRange = cnt > 0 ? sum / cnt : 10.0;
+        } else {
+            avgRange = candles.stream()
+                    .skip(Math.max(0, candles.size() - 14))
+                    .mapToDouble(c -> c.getHigh() - c.getLow())
+                    .average()
+                    .orElse(10.0);
+        }
 
         double minDisplacementMove = avgRange * displacementMultiplier;
 
@@ -138,6 +218,10 @@ public class DisplacementDetector {
         double range = latestCandle.getHigh() - latestCandle.getLow();
         double body = Math.abs(latestCandle.getClose() - latestCandle.getOpen());
         double bodyRatio = range > 0 ? body / range : 0;
+
+        lastAtr = avgRange;
+        lastRangeOverAtr = avgRange > 0 ? range / avgRange : Double.NaN;
+        lastBodyRatio = bodyRatio;
 
         // Is this a strong candle?
         boolean isStrongCandle = bodyRatio >= minBodyRatio && range >= minDisplacementMove;
@@ -219,6 +303,12 @@ public class DisplacementDetector {
             );
             candleCountAtLastDisplacement = totalCandleCount;
             lastDisplacementCreatedFvg = createdFvg;
+            history.add(lastDisplacement);
+            historyCounts.add(totalCandleCount);
+            if (history.size() > HISTORY_MAX) {
+                history.remove(0);
+                historyCounts.remove(0);
+            }
 
             System.out.println("[DISPLACEMENT" + (logTag.isEmpty() ? "" : " " + logTag) + "] "
                     + (bullish ? "BULLISH" : "BEARISH") +
@@ -334,6 +424,11 @@ public class DisplacementDetector {
         lastDisplacementCreatedFvg = false;
         priorSwingHigh = null;
         priorSwingLow = null;
+        history.clear();
+        historyCounts.clear();
+        lastAtr = Double.NaN;
+        lastRangeOverAtr = Double.NaN;
+        lastBodyRatio = Double.NaN;
     }
 
     /**

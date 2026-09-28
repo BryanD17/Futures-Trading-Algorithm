@@ -34,14 +34,15 @@ class OteEntryCalculatorTest {
     class ZoneMath {
 
         @Test
-        @DisplayName("MNQ bullish impulse 20100→20180 yields canonical 62/705/79")
+        @DisplayName("MNQ bullish impulse 20100→20180 yields canonical 0.618/0.705/0.786 (V5)")
         void mnqBullish() {
             OteZone zone = calc.buildZone(20100.0, 20180.0, true, 0.25).orElseThrow();
 
             assertThat(zone.eq50()).isEqualTo(20140.00, EPS);
             assertThat(zone.f62()).isEqualTo(20130.50, EPS);
             assertThat(zone.f705()).isEqualTo(20123.50, EPS);
-            assertThat(zone.f79()).isEqualTo(20116.75, EPS);
+            // V5 Agent 04: 0.786 (was 0.79 → 20116.75): 20180 - 62.88 = 20117.12 → 20117.00
+            assertThat(zone.f79()).isEqualTo(20117.00, EPS);
             assertThat(zone.one00()).isEqualTo(20100.00, EPS);
             assertThat(zone.bullish()).isTrue();
         }

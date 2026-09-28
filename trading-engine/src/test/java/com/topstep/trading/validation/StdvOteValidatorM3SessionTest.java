@@ -55,7 +55,7 @@ class StdvOteValidatorM3SessionTest {
         ctx.pdArrayInOte = 20020.00;
         ctx.entry = 20020.00;
         ctx.stop = 19951.00;
-        ctx.rr = 5.5;
+        ctx.rr = 3.2; // V5 Agent 04: inside the ONE RR band [1.0, 5.0]
         ctx.sizeRequest = 12;
         ctx.lastGateFailed = null;
         return ctx;

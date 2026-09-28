@@ -140,13 +140,16 @@ class StdvOteStrategyTest {
         }
 
         @Test
-        @DisplayName("target price equals the -2.0 STDV projection")
+        @DisplayName("target = furthest STDV projection within the ONE RR ceiling (V5)")
         void targetIsStdvMinus2() {
             StdvOteStrategy s = driveHappyPath();
             StrategySignalEvent evt = bus.events.get(0);
             // Manipulation leg 19960 → 20000 (range 40), bullish
-            // -2.0 raw = 19960 + 2*40 = 20040.00. No snapping (null chart).
-            assertThat(evt.getTargetPrice()).isEqualTo(20040.00);
+            // -2.0 raw = 19960 + 2*40 = 20040.00 → RR (20040-19962)/11 = 7.09
+            // exceeds the V5 ceiling 5.0, so the plan steps in to the -1.0
+            // projection 20000.00 (RR 3.45). No snapping (null chart).
+            assertThat(evt.getTargetPrice()).isEqualTo(20000.00);
+            assertThat(evt.getActualRR()).isLessThanOrEqualTo(OteConfig.rrCeiling());
         }
 
         @Test

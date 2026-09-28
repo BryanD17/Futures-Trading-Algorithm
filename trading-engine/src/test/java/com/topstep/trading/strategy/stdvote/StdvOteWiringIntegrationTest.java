@@ -48,9 +48,10 @@ import static org.assertj.core.api.Assertions.offset;
  *   <li>Displacement burst 14:02–14:03 leaves its own FVG [21020, 21023]
  *       and breaks the 21035 swing → MSS. Impulse leg [21012, 21052].</li>
  *   <li>OTE retrace 14:06–14:07; rejection wick at 21024 inside the
- *       [21020.5, 21027.25] band → entry 21023 (FVG top), stop
- *       21012 − 4 ticks = 21011, target ≈ 21058, RR ≈ 2.92 ≥ 2.0 (passes
- *       the M7 floor with no gate weakened).</li>
+ *       [21020.5, 21027.25] band → entry 21023 (FVG top). V5 Agent 04:
+ *       stop 21020 − 4 ticks = 21019 (beyond the 0.786 / FVG far edge),
+ *       target T2 = 21036.75 (0.382 of the dealing range [21012, 21052]),
+ *       RR(T1) 2.25 / RR(final) 3.44 inside the one band [1.0, 5.0].</li>
  * </ul>
  */
 @DisplayName("StdvOteWiringIntegrationTest (SA5 detector wiring end-to-end)")
@@ -215,22 +216,27 @@ class StdvOteWiringIntegrationTest {
                         ctx.ote.f79(), ctx.ote.f62())
                 .isTrue();
 
-        // Stop: beyond the sweep extreme (21012) by the default 4-tick buffer.
+        // V5 Agent 04: zone on the anchored dealing range [21012, 21052]
+        // with 0.618 / 0.786 (21027.25 / 21020.50).
         assertThat(ctx.sweep).isNotNull();
         assertThat(ctx.sweep.getSweptLevel()).isEqualTo(21012.0);
-        assertThat(evt.getStopPrice()).isEqualTo(21011.0);
+        assertThat(ctx.oteAnchorMode).isEqualTo("DEALING_RANGE");
+        assertThat(ctx.ote.f62()).isEqualTo(21027.25);
+        assertThat(ctx.ote.f79()).isEqualTo(21020.5);
+        // Stop: beyond the further of the 0.786 (21020.50) and the FVG's far
+        // edge (21020.00) by the default 4-tick buffer.
+        assertThat(evt.getStopPrice()).isEqualTo(21019.0);
 
-        // Target: the -2σ STDV projection off the manipulation leg
-        // (21012 + 2 * 23 = 21058; level-snapping may move it by <= 3 ticks).
-        StdvProjection minus2 = ctx.projections.stream()
-                .filter(p -> Double.compare(p.sigma(), -2.0) == 0)
-                .findFirst().orElseThrow();
-        assertThat(evt.getTargetPrice()).isEqualTo(minus2.effectivePrice());
-        assertThat(evt.getTargetPrice()).isCloseTo(21058.0, offset(0.76));
+        // Targets: T1 = 0.5 (21032), T2 = 0.382 (21036.75), T3 = leg high
+        // (21052). The signal carries the furthest rung within the 5.0R
+        // ceiling: T2 (RR 3.44); T3 would be 7.25R.
+        assertThat(ctx.t1).isEqualTo(21032.0);
+        assertThat(evt.getTargetPrice()).isEqualTo(21036.75);
 
-        // RR clears the M7 floor (>= 2.0) with no gate weakened.
-        assertThat(evt.getActualRR()).isGreaterThanOrEqualTo(2.0);
-        assertThat(ctx.rr).isGreaterThanOrEqualTo(2.0);
+        // RR: floor vs T1 (2.25 >= 1.0), ceiling vs final (3.44 <= 5.0).
+        assertThat(ctx.rrT1).isGreaterThanOrEqualTo(OteConfig.rrFloor(false));
+        assertThat(evt.getActualRR()).isLessThanOrEqualTo(OteConfig.rrCeiling());
+        assertThat(ctx.rr).isCloseTo(3.4375, offset(1e-9));
 
         // Raid score fed the M4 gate at or above the MNQ floor.
         assertThat(ctx.raidScore).isGreaterThanOrEqualTo(5);
@@ -245,8 +251,8 @@ class StdvOteWiringIntegrationTest {
             StdvOteRunnerStrategy s = new StdvOteRunnerStrategy(SYMBOL, "MES", bus);
             feed(s, fullFixture());
             assertThat(bus.signals).hasSize(1);
-            // 21012 - 2 * 0.25 instead of the default 21011.0.
-            assertThat(bus.signals.get(0).getStopPrice()).isEqualTo(21011.5);
+            // V5: 21020 (FVG far edge) - 2 * 0.25 instead of the default 21019.0.
+            assertThat(bus.signals.get(0).getStopPrice()).isEqualTo(21019.5);
         } finally {
             System.clearProperty(StdvOteRunnerStrategy.STOP_BUFFER_TICKS_PROPERTY);
         }

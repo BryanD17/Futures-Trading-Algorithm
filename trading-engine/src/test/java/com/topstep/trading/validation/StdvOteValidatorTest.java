@@ -72,7 +72,9 @@ class StdvOteValidatorTest {
         ctx.stop = 19951.00;          // 4-tick buffer below 19952 swept low
         // rr from entry 20020 to projected -2.0 ≈ 20180 + 1*range up to ~20408
         // Use a conservative figure that exceeds the 2.0 floor.
-        ctx.rr = 5.5;
+        // V5 Agent 04: inside the ONE band [1.0, 5.0] (was 5.5 when the
+        // legacy validator had no ceiling).
+        ctx.rr = 3.2;
 
         // M8 — sized order at 12 micros, in [5, 20].
         ctx.sizeRequest = 12;
@@ -237,10 +239,10 @@ class StdvOteValidatorTest {
     }
 
     @Test
-    @DisplayName("M7: RR below 2.0 floor rejected with M7")
+    @DisplayName("M7: RR below the 1.0 legacy floor rejected with M7 (V5 one band)")
     void m7LowRr() {
         SetupContext ctx = happyMnqBullish();
-        ctx.rr = 1.5;
+        ctx.rr = 0.9;
         ValidationResult r = newValidator().validateStdvOte(ctx);
         assertThat(r.passed()).isFalse();
         assertThat(r.getSummary()).isEqualTo("M7");

@@ -39,5 +39,11 @@ public enum EventType {
     // Macro news events
     UPCOMING_NEWS_EVENT,      // Warning about upcoming high-impact event
     NEWS_RELEASE,             // Economic data release processed
-    MACRO_BIAS_UPDATE         // Change in macro bias for an instrument
+    MACRO_BIAS_UPDATE,        // Change in macro bias for an instrument
+
+    // OTE lifecycle telemetry (V5 Agent 04) — subscribe by EventType, not by
+    // class (EventBus.mapClassToEventType does not know these classes).
+    OTE_ARMED,
+    OTE_ALARM,
+    OTE_INVALIDATED
 }

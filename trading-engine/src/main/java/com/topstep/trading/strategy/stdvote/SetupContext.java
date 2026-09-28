@@ -149,6 +149,7 @@ public final class SetupContext {
         lastGateFailed = null;
         createdAtBar = 0L;
         expiresAtBar = 0L;
+        resetAgent04Fields();
     }
 
     // AGENT-02 fields (V5 Agent 02 — session domain). Written by the runner
@@ -172,4 +173,53 @@ public final class SetupContext {
     public double rangeHigh = Double.NaN;
     public double rangeLow = Double.NaN;
     public double rangeEq = Double.NaN;
+
+    // ── AGENT-04 fields (V5: chart-parity OTE, arm/alarm, one RR band) ─────
+
+    /** Anchor the OTE zone was drawn on (null = legacy recordOteImpulse path). */
+    public String oteAnchorMode;
+    /** Where the anchored leg came from (SESSION / TRADING_DAY / CONTEXT(Agent03) / IMPULSE). */
+    public String oteAnchorSource;
+    /** Candle time the OTE ARMED (price first traded into the band after MSS). */
+    public java.time.Instant oteArmedAt;
+    /** Candle time the OTE ALARM fired (PD array overlaps band + reaction). */
+    public java.time.Instant oteAlarmAt;
+    /** Far edge (stop side) of the PD array behind the entry; NaN when none. */
+    public double pdArrayFarEdge = Double.NaN;
+    /** Post-sweep extreme (short: highest high since the sweep); NaN when unknown. */
+    public double sweepExtreme = Double.NaN;
+    /** Target ladder: T1 = 0.5, T2 = 0.382, T3 = leg terminus (0 = not planned). */
+    public double t1;
+    public double t2;
+    public double t3;
+    /** The target the signal carries (furthest ladder rung with RR &le; ceiling). */
+    public double finalTarget;
+    /** RR against T1 (the M7 floor is checked here); 0 = use {@link #rr}. */
+    public double rrT1;
+    /** True when the setup is planned under the SCALP RR profile (floor 0.8). */
+    public boolean scalpProfile;
+    /** Displacement bar (detector TF) and MSS bar timestamps. */
+    public java.time.Instant displacementAt;
+    public java.time.Instant mssAt;
+    /** How M5's FVG linkage was satisfied (FVG / IFVG / BREAKER / OB). */
+    public String m5LinkKind;
+
+    /** Reset only the AGENT-04 fields (called from {@link #resetForNextWindow}). */
+    void resetAgent04Fields() {
+        oteAnchorMode = null;
+        oteAnchorSource = null;
+        oteArmedAt = null;
+        oteAlarmAt = null;
+        pdArrayFarEdge = Double.NaN;
+        sweepExtreme = Double.NaN;
+        t1 = 0.0;
+        t2 = 0.0;
+        t3 = 0.0;
+        finalTarget = 0.0;
+        rrT1 = 0.0;
+        scalpProfile = false;
+        displacementAt = null;
+        mssAt = null;
+        m5LinkKind = null;
+    }
 }

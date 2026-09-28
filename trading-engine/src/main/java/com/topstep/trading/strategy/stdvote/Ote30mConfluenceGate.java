@@ -20,12 +20,15 @@ import java.util.concurrent.atomic.AtomicLong;
  * DECISION stays with the owner (QUICK_START carries the numeric
  * criteria); this gate just makes both outcomes one step away.
  *
- * <h2>Modes ({@code ote30m.confluence}, DEFAULT LOG)</h2>
+ * <h2>Modes ({@code ote30m.mode}, legacy key {@code ote30m.confluence}; DEFAULT SCORING)</h2>
  * <ul>
  *   <li>{@code OFF} — never evaluated (byte-identical, no counters).</li>
  *   <li>{@code LOG} — the confluence verdict is computed and counted (the
  *       V2 comparison formalized through the same counters); the gate
  *       always passes.</li>
+ *   <li>{@code SCORING} (V5 Agent 04 default, RC-18) — as LOG, and a
+ *       CONFLUENT verdict is exposed through {@link #lastConfluent()} so the
+ *       runner can add one tier confluence point. Never blocks.</li>
  *   <li>{@code GATE} — emission requires the chart's active zone for the
  *       SIGNAL DIRECTION to be {@link OteState#REACTED} (or
  *       {@link OteState#ARMED} when {@code ote30m.acceptArmed=true},
@@ -39,12 +42,12 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class Ote30mConfluenceGate {
 
     /** System property: gate mode. */
-    public static final String MODE_PROPERTY = "ote30m.confluence";
+    public static final String MODE_PROPERTY = "ote30m.mode";
     /** System property: accept ARMED (not just REACTED) zones. Default false. */
     public static final String ACCEPT_ARMED_PROPERTY = "ote30m.acceptArmed";
 
     /** Three-position rollout switch. */
-    public enum Mode { OFF, LOG, GATE }
+    public enum Mode { OFF, LOG, SCORING, GATE }
 
     /** Outcome of one M7b check. */
     public record Decision(boolean passed, String reason) {}
@@ -54,7 +57,7 @@ public final class Ote30mConfluenceGate {
 
     /** Build from system properties, register for API access, log config. */
     public static Ote30mConfluenceGate install(String symbol) {
-        Mode mode = parseMode(com.topstep.trading.config.EngineConfig.current().getString(MODE_PROPERTY, "LOG"));
+        Mode mode = parseMode(OteConfig.ote30mModeRaw());
         boolean acceptArmed = com.topstep.trading.config.EngineConfig.current().getBoolean(ACCEPT_ARMED_PROPERTY, false);
         Ote30mConfluenceGate g = new Ote30mConfluenceGate(symbol, mode, acceptArmed);
         REGISTRY.put(symbol, g);
@@ -69,13 +72,13 @@ public final class Ote30mConfluenceGate {
     }
 
     static Mode parseMode(String raw) {
-        if (raw == null) return Mode.LOG;
+        if (raw == null) return Mode.SCORING;
         try {
             return Mode.valueOf(raw.trim().toUpperCase());
         } catch (IllegalArgumentException e) {
-            System.out.println("[OTE30M] WARN: invalid " + MODE_PROPERTY + "='"
-                    + raw + "', using default LOG");
-            return Mode.LOG;
+            System.out.println("[OTE30M] WARN: invalid ote30m.mode='"
+                    + raw + "', using default SCORING");
+            return Mode.SCORING;
         }
     }
 
@@ -94,6 +97,7 @@ public final class Ote30mConfluenceGate {
     private final AtomicLong abstains = new AtomicLong();
     private volatile String lastToken = "?";
     private volatile boolean lastGateBlocked;
+    private volatile boolean lastConfluent;
 
     /** Direct construction with explicit config (tests). */
     public Ote30mConfluenceGate(String symbol, Mode mode, boolean acceptArmed) {
@@ -135,6 +139,7 @@ public final class Ote30mConfluenceGate {
             abstains.incrementAndGet();
             lastToken = "ABSTAIN(no-zone)";
             lastGateBlocked = false;
+            lastConfluent = false;
             System.out.println("[OTE30M " + symbol + "] ABSTAIN no-zone — gate passes");
             return new Decision(true, "ABSTAIN no-zone");
         }
@@ -143,18 +148,19 @@ public final class Ote30mConfluenceGate {
                 && (z.state() == OteState.REACTED
                         || (acceptArmed && z.state() == OteState.ARMED));
         String zoneDesc = z.state() + (z.bullish() ? "/BULL" : "/BEAR");
+        lastConfluent = confluent;
         if (confluent) {
             lastToken = "CONFLUENT(" + zoneDesc + ")";
             lastGateBlocked = false;
             return new Decision(true, "30m zone " + zoneDesc);
         }
-        if (mode == Mode.LOG) {
+        if (mode == Mode.LOG || mode == Mode.SCORING) {
             wouldBlock.incrementAndGet();
             lastToken = "WOULD-BLOCK(" + zoneDesc + ")";
             lastGateBlocked = false;
             System.out.println("[OTE30M " + symbol + "] WOULD-BLOCK "
                     + (bullish ? "LONG" : "SHORT") + " — zone=" + zoneDesc);
-            return new Decision(true, "LOG: would block (" + zoneDesc + ")");
+            return new Decision(true, mode + ": would block (" + zoneDesc + ")");
         }
         blocked.incrementAndGet();
         lastToken = "BLOCKED(" + zoneDesc + ")";
@@ -163,6 +169,21 @@ public final class Ote30mConfluenceGate {
                 + (bullish ? "LONG" : "SHORT") + " — zone=" + zoneDesc);
         return new Decision(false, "30m OTE zone " + zoneDesc
                 + " is not REACTED confluence for this direction");
+    }
+
+    /** True when the last evaluation was CONFLUENT (SCORING tier point). */
+    public boolean lastConfluent() {
+        return lastConfluent;
+    }
+
+    /**
+     * Kill share: evaluations that would have blocked (LOG / SCORING) or did
+     * block (GATE) over all non-abstaining evaluations. NaN before any.
+     */
+    public double killShare() {
+        long decided = evaluations.get() - abstains.get();
+        if (decided <= 0) return Double.NaN;
+        return (double) (wouldBlock.get() + blocked.get()) / decided;
     }
 
     /** Compact token for the [GATES] line. */

@@ -73,7 +73,9 @@ class StdvOteValidatorPdGateTest {
         ctx.pdArrayInOte = 20020.00;
         ctx.entry = 20020.00;
         ctx.stop = 19951.00;
-        ctx.rr = 5.5;
+        // V5 Agent 04: inside the ONE band [1.0, 5.0] (was 5.5 when the
+        // legacy validator had no ceiling).
+        ctx.rr = 3.2;
         ctx.sizeRequest = 12;
         ctx.lastGateFailed = null;
         return ctx;
