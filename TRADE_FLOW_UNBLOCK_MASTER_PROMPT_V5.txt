@@ -120,8 +120,8 @@ PHASE 1 — OPUS FIXERS (five worktrees, parallel; merge order 01→05)
 
 PHASE 2 — FABLE VERIFICATION + LOOP
   [✅] Agent 06 — Fable — Integration Verify — COMPLETE 2026-09-28 (matrix v1: 2 signals, 1 fill; defects D-06-1..3 → Agent 07)
-  [🔄] Agent 07 — Fable — Gap Hunt Loop (iteration 1 started 2026-09-28: sub-agents 05.1 phase expiry, 05.2 impulse-leg entry)
-  [⬜] Agent 08 — Fable — Final Sign-Off
+  [✅] Agent 07 — Fable — Gap Hunt Loop — COMPLETE 2026-09-28 after 5 iterations (#159 #160 #161 #163 #164 #165); S2–S6 false; S1 true ONLY for PRE_NY/PRE_ASIA = inherent to the 7-day tape → ⛔ owner: refresh TopstepX key, fetch 21+ days, re-run
+  [✅] Agent 08 — Fable — Final Sign-Off — COMPLETE 2026-09-28 (risk proof clean, quality report, why-no-trade panel #162, RUNBOOK_V5, docs). ⛔ LIVE order test + tape extension blocked on the TopstepX key
 
 LEDGER NOTES (append dated lines; never delete):
   2026-09-28  Document created. Pre-flight findings captured from repo @2c43df9.
@@ -144,6 +144,14 @@ LEDGER NOTES (append dated lines; never delete):
               S2 true (expiry 82 % of post-sweep deaths), S5 true (G1 late/unfilled).
               Agent 07 iteration 1: sub-agents 05.1 (phase-aware expiry, Agent 02 map)
               and 05.2 (impulse-leg entry model, Agent 04 map) spawned.
+  2026-09-28  Agent 07 iteration 1 merged (#159, #160); matrix v2 = 5 signals / 3 fills
+              (docs/reports/autopsy_v5/A-07_matrix_v2_summary_A.md). Iteration 2: 05.3 spawned.
+  2026-09-28  Agent 07 iteration 2 merged (#161): matrix v3 = 7 signals / 6 fills, G1 taken.
+              Iteration 3: 05.4 spawned (silent sizer stand-down in NY_AM).
+  2026-09-28  Agent 07 iteration 3 merged (#163, diagnostics). Iteration 4: 05.5 spawned
+              (ICT order block at the in-band sweep). Dashboard why-no-trade panel merged (#162).
+  2026-09-28  Agent 07 iterations 4–5 merged (#164, #165). Agent 07 ✅, Agent 08 ✅. Final Main 55994e6.
+              GOLDEN LOOP COMPLETE except the tape-inherent S1 on PRE_NY/PRE_ASIA (⛔ owner key).
   2026-09-28  Agent 00: api-backend/build/libs jar is LOCKED by pid 14220, so
               `:api-backend:clean` fails; build without clean succeeds
               (663 tests, 0 failures, 122 result files). Do not kill the owner's
@@ -882,24 +890,34 @@ COMMIT HASH / PR:  (Agent 06 docs PR — see ledger)
 ────────────────────────────────────────────────────────────────────────────────
 A-07  AGENT 07 — FABLE — GAP HUNT LOOP
 ────────────────────────────────────────────────────────────────────────────────
-STATUS / DATE:
-ITERATION LOG:
-  k | starvation | RC-NN | sub-agent 05.k | expected delta | observed delta | merged
-FINAL S1–S6 CHECKS (all false):
-GATE MODE TABLE (M1..M9, M2b, M7b, RISK-*, WARMUP, SESSION → BLOCKING/SCORING):
-COMMIT HASHES / PRs:
-
+STATUS / DATE:     ✅ COMPLETE 2026-09-28 — full log in docs/reports/autopsy_v5/A-07.md
+ITERATION LOG:     5 iterations, 6 sub-agents, all FABLE-VERIFIED and merged (table below).
+FINAL S1–S6 CHECKS: S1 TRUE only for PRE_NY (6 days) / PRE_ASIA (5 days): 0 in-band sweeps on the
+  tape — inherent to the tape, escalated (⛔ owner key refresh → 21-day fetch). S2 false (top gate
+  33 %), S3 false (7 allowed = 7 filled), S4 false (0 of 7 not-a-setup), S5 false (G1/G2/G3 pass),
+  S6 false (1.00 trades/day).
+GATE MODE TABLE:   M1 B · M2 B · M2b B · M3 SCORING · M4 B · M5 B · M6 B · M7 B · M7b SCORING ·
+  M8 B · M9 B · WARMUP B · RISK-* B · NEWS pass-without-calendar · FLATTEN SACRED (A-07.md).
+COMMIT HASHES / PRs: #159 1108341 · #160 51a1366 · #161 965583a · #163 f3b4083 · #164 7fefe63 · #165 55994e6
 ────────────────────────────────────────────────────────────────────────────────
 A-08  AGENT 08 — FABLE — FINAL SIGN-OFF
 ────────────────────────────────────────────────────────────────────────────────
-STATUS / DATE:
-RISK ENVELOPE NUMBERS:
-QUALITY REPORT (per session, per tier):
-HONEST ASSESSMENT PARAGRAPH:
-DASHBOARD WHY-NO-TRADE VIEW EVIDENCE:
-RUNBOOK_V5.md + engine.properties (verbatim):
-FINAL LEDGER (paste):
-git log origin/Main --oneline -20 (paste):
+STATUS / DATE:     ✅ COMPLETE 2026-09-28 — docs/reports/autopsy_v5/A-08.md
+RISK ENVELOPE NUMBERS: worst day +$137.50 vs DLL −$1,000; max DD $67.50 vs MLL $2,000; max order 5 vs
+  cap 5; max positions 1 vs 10; 0 positions at/after 15:45 ET; 0 entries in NO_ENTRY/WEEKEND; 0 denials.
+QUALITY REPORT:    7 trades, 6W/1L, +5.18R, +$851, expectancy +$121.57/trade, profit factor 13.6; per
+  session ASIA 3 (+0.54R) LONDON 1 (+0.81R) NY_AM 1 (+1.50R, G2) NY_LUNCH 1 (+1.00R) NY_PM 1 (+1.33R, G1).
+HONEST ASSESSMENT: strong = trades in 5/7 sessions on real data, all seven are the owner's model, G1 and
+  G2 reproduce to the tick, deterministic, every non-trade explained with two numbers, envelope untouched;
+  thin = n=7 on 7 days, PRE_NY/PRE_ASIA unproven (no in-band sweep on the tape), MES/MGC only unit-tested,
+  LIVE untested (key rejected); needs = 21-day tape once the key is refreshed, re-audit at ≥ 10 trades.
+DASHBOARD WHY-NO-TRADE VIEW EVIDENCE: PR #162, dashboard-frontend/docs/why-no-trade-panel.png (50 live
+  gate-decision rows + current-setup strip against a SIM backend), npm run build ✓.
+RUNBOOK_V5.md + engine.properties (verbatim): docs/RUNBOOK_V5.md §3 = engine-defaults.properties on Main.
+FINAL LEDGER (paste): Section 1 — 00–08 ✅; ⛔ items = TopstepX key (LIVE test + tape extension).
+git log origin/Main --oneline -20 (paste): 55994e6 #165 · 7fefe63 #164 · f3b4083 #163 · 11781ba #162 ·
+  51a1366 #160 · 1108341 #159 · e56549a #158 · ac5e602 #155 · fbb0570 #157 · c98654f #156 · 80e4538 #153 ·
+  852e170 #154 · 679b537 #152 · 2c43df9 #150 (pre-V5).
 
 ================================================================================
 APPENDIX B — OWNERSHIP MAP + GATE REFERENCE
@@ -997,6 +1015,17 @@ APPENDIX F — ALL-SESSIONS TRADE MATRIX  (Agent 06 v1 → Agent 07 v k → Agen
 ================================================================================
 Tape: real_MNQ_1m.json (7 days)  Symbol: MNQ (+MES SMT)  Config: DEFAULT (no -D)
   SESSION   | bars | ≥BIAS | ≥MANIP | ≥SWEEP | ≥DISP | ≥MSS | ≥OTE | emitted | filled | closed | W/L | avgR | maxDD | S1?
+  FINAL v5 (Agent 08, Main 55994e6, 2026-09-28) — GREEN except S1 on PRE_NY/PRE_ASIA (tape-inherent, ⛔ extend tape)
+  ASIA      | 2179 |  all  |   —    |   23   |   —   |  10  |  7   |    3    |   3    |   3    | 2/1 | +0.18|  $67  | no
+  LONDON    | 2160 |  all  |   —    |   20   |   —   |   8  |  3   |    1    |   1    |   1    | 1/0 | +0.81|  $0   | no
+  PRE_NY    |  540 |  all  |   —    |    4   |   —   |   0  |  1   |    0    |   0    |   0    |  —  |  —   |   —   | YES (tape)
+  NY_AM     |  900 |  all  |   —    |   10   |   —   |   2  |  3   |    1    |   1    |   1    | 1/0 | +1.50|  $0   | no
+  NY_LUNCH  |  540 |  all  |   —    |    5   |   —   |   3  |  2   |    1    |   1    |   1    | 1/0 | +1.00|  $0   | no
+  NY_PM     |  810 |  all  |   —    |    8   |   —   |   0  |  0   |    1    |   1    |   1    | 1/0 | +1.33|  $0   | no
+  PRE_ASIA  |  290 |  all  |   —    |    6   |   —   |   1  |  1   |    0    |   0    |   0    |  —  |  —   |   —   | YES (tape)
+  NO_ENTRY  |  410 |   —   |   —    |   —    |   —   |  —   |  —   |    0    |   0    |   —    |  —  |  —   |   —   | 0 ✓
+  WEEKEND   |    1 |   —   |   —    |   —    |   —   |  —   |  —   |    0    |   0    |   —    |  —  |  —   |   —   | 0 ✓
+  GATE-DEATH HISTOGRAM (past SWEEP_DONE, final): sweep→displacement budget 24, MSS stale 11, OTE window 10, bias flip 14, displacement→MSS 7 — no gate > 50 %.
   v1 (Agent 06, Main ac5e602, 2026-09-28) — ≥SWEEP/≥MSS/≥OTE counted per session from candles.csv
   ASIA      | 2179 |  all  |   —    |   35   |   9   |  10  |  4   |    1    |   1    |   1    | 1/0 | +0.2 |  $0   | YES
   LONDON    | 2160 |  all  |   —    |   29   |   8   |   8  |  2   |    0    |   0    |   0    |  —  |  —   |   —   | YES

@@ -207,6 +207,14 @@ Futures-Trading-Algorithm/
 
 ### Running Locally
 
+> **V5 (2026-09-28): run it the proven way.** `docs/RUNBOOK_V5.md` has the exact start commands, the
+> `engine-defaults.properties` the real-tape matrix was proven with, the A/B switches, the pre-LIVE
+> checklist, and how to read `GET /api/setup` ("which gate killed it"). The engine boots in that
+> configuration with **no flags** (`./gradlew bootRun` or `java -jar api-backend-1.0.0-SNAPSHOT.jar`);
+> every effective flag and its source is printed at boot and served at `GET /api/status → effectiveConfig`.
+> Why it did not trade before V5: `DIAGNOSIS_V5.md`.
+
+
 **Engine configuration (V5)**: every flag resolves through `EngineConfig`
 (`-D` > `ENGINE_<KEY>` env > `~/topstep-trading/engine.properties` >
 classpath `engine-defaults.properties` > code). `java -jar

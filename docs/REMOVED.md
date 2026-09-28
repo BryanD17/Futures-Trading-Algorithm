@@ -72,3 +72,12 @@ loop. The conservative path is also the safer path: a refactor that leaves
 the working runners untouched, then a follow-up that flips defaults after
 the user has watched a SIM session and seen the new state machine advance
 to IN_TRADE end-to-end.
+
+## V5 (TRADE_FLOW_UNBLOCK, 2026-09-28)
+
+- `ictlib/DisplacementScanner` is no longer a gate input: M5 reads only `strategy/DisplacementDetector` (Agent 04). The scanner remains as a chart-marker source for the Bot Chart overlay.
+- `ictlib/StructureEngine`'s MSS is a shadow comparison only; M6 reads only the runner's `MarketStructureShiftDetector.forStdvOte()` (Agent 04).
+- `PropFirmRiskEngine` "R:R too high (unrealistic)" ceiling removed; the validator and the risk engine read the one band `risk.rrFloor` / `risk.rrCeiling` (Agents 04/05).
+- `StdvOteSizer` hard [5,20] floor removed in favour of `size.minMicros` (default 1); the risk engine no longer silently re-sizes an order (Agent 05).
+- `KillzoneClock` dual-zone (`America/Chicago`) dead code removed; every window comes from `SessionClassifier` (Agent 02).
+- `System.getProperty` reads outside `EngineConfigLoader` removed (Agent 01).
