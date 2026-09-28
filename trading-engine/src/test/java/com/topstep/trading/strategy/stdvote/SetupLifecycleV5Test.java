@@ -77,10 +77,10 @@ class SetupLifecycleV5Test {
         }
 
         @Test
-        @DisplayName("SWEEP_DONE anchor: survives 100 bars in BIAS_SET/MANIP_DONE, then expires exactly 12 bars after SWEEP_DONE")
+        @DisplayName("SWEEP_DONE_TOTAL anchor: survives 100 bars in BIAS_SET/MANIP_DONE, then expires exactly 12 bars after SWEEP_DONE")
         void expiresTwelveBarsAfterSweepNotAfterBias() {
             StdvOteStrategy s = newCore(40);
-            s.configureExpiry(SessionConfig.ExpiryAnchor.SWEEP_DONE, 12, 480);
+            s.configureExpiry(SessionConfig.ExpiryAnchor.SWEEP_DONE_TOTAL, 12, 480);
             SetupContext ctx = s.getSetupContext();
 
             bars(s, 1);                               // barIndex 1
@@ -124,7 +124,7 @@ class SetupLifecycleV5Test {
         @DisplayName("pre-sweep phases have their own generous budget (480 bars from BIAS_SET)")
         void preSweepBudget() {
             StdvOteStrategy s = newCore(40);
-            s.configureExpiry(SessionConfig.ExpiryAnchor.SWEEP_DONE, 12, 480);
+            s.configureExpiry(SessionConfig.ExpiryAnchor.SWEEP_DONE_TOTAL, 12, 480);
             SetupContext ctx = s.getSetupContext();
             bars(s, 1);
             s.recordHtfBias(MarketBias.BULLISH);
@@ -138,18 +138,20 @@ class SetupLifecycleV5Test {
         @Test
         @DisplayName("default budgets: 60 min from SWEEP_DONE = 60 bars on 1m, 12 detector bars on 5m; BLOCKING = 40 detector bars")
         void defaultBudgets() {
-            assertThat(SessionConfig.expiryFeedBars(1, SessionConfig.ExpiryAnchor.SWEEP_DONE)).isEqualTo(60);
-            assertThat(SessionConfig.expiryFeedBars(5, SessionConfig.ExpiryAnchor.SWEEP_DONE) / 5).isEqualTo(12);
+            assertThat(SessionConfig.expiryFeedBars(1, SessionConfig.ExpiryAnchor.SWEEP_DONE_TOTAL)).isEqualTo(60);
+            assertThat(SessionConfig.expiryFeedBars(5, SessionConfig.ExpiryAnchor.SWEEP_DONE_TOTAL) / 5).isEqualTo(12);
             assertThat(SessionConfig.expiryFeedBars(5, SessionConfig.ExpiryAnchor.BIAS_SET)).isEqualTo(200);
+            // V5 Agent 05.1: SCORING now defaults to PHASED (see PhaseAwareExpiryTest);
+            // Agent 02's single budget stays reachable as SWEEP_DONE_TOTAL.
             assertThat(SessionConfig.expiryAnchor(com.topstep.trading.strategy.session.SessionGateMode.SCORING))
-                    .isEqualTo(SessionConfig.ExpiryAnchor.SWEEP_DONE);
+                    .isEqualTo(SessionConfig.ExpiryAnchor.PHASED);
             assertThat(SessionConfig.expiryAnchor(com.topstep.trading.strategy.session.SessionGateMode.BLOCKING))
                     .isEqualTo(SessionConfig.ExpiryAnchor.BIAS_SET);
             System.setProperty(SessionConfig.EXPIRY_BARS, "12");
             try {
-                assertThat(SessionConfig.expiryFeedBars(5, SessionConfig.ExpiryAnchor.SWEEP_DONE)).isEqualTo(60);
+                assertThat(SessionConfig.expiryFeedBars(5, SessionConfig.ExpiryAnchor.SWEEP_DONE_TOTAL)).isEqualTo(60);
                 System.setProperty(SessionConfig.EXPIRY_MINUTES, "45");
-                assertThat(SessionConfig.expiryFeedBars(5, SessionConfig.ExpiryAnchor.SWEEP_DONE)).isEqualTo(45);
+                assertThat(SessionConfig.expiryFeedBars(5, SessionConfig.ExpiryAnchor.SWEEP_DONE_TOTAL)).isEqualTo(45);
             } finally {
                 System.clearProperty(SessionConfig.EXPIRY_BARS);
                 System.clearProperty(SessionConfig.EXPIRY_MINUTES);

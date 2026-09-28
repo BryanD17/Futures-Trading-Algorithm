@@ -100,6 +100,11 @@ public final class FunnelTelemetry {
     private static String normalise(String reason) {
         if (reason == null || reason.isBlank()) return "unknown";
         if (reason.startsWith("expired (")) return "expired";
+        if (reason.startsWith("expired: ")) {           // PHASED: keep the phase, drop the numbers
+            String rest = reason.substring("expired: ".length());
+            int sp = rest.indexOf(' ');
+            return "expired: " + (sp > 0 ? rest.substring(0, sp) : rest);
+        }
         if (reason.startsWith("HTF bias flip")) return "HTF bias flip";
         return reason;
     }

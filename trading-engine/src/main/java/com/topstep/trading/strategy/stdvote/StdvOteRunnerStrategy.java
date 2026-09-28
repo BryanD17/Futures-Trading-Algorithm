@@ -535,12 +535,21 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         int huntFeedBars = SessionConfig.expiryFeedBars(detectorTimeframe.getMinutes(), expiryAnchor);
         int preSweepFeedBars = SessionConfig.preSweepExpiryFeedBars();
         core.configureExpiry(expiryAnchor, huntFeedBars, preSweepFeedBars);
+        // AGENT-05.1 (S2): PHASED anchor — one budget per post-sweep phase.
+        SessionConfig.PhaseBudgets phaseBudgets = SessionConfig.phaseBudgets();
+        core.configurePhaseBudgets(phaseBudgets.sweepToDisplacement(),
+                phaseBudgets.displacementToMss(), phaseBudgets.mssToOte());
         System.out.println("[StdvOteRunnerStrategy] " + symbol + " SESSION GATE: " + gateMode
                 + (gateMode == SessionGateMode.SCORING
                         ? " (entries allowed all sessions except 14:45-17:00 CT and the weekend; prime killzones score O1 + size)"
                         : " (legacy killzones block M3 and re-arm)")
                 + " | expiry anchor=" + expiryAnchor
-                + (expiryAnchor == SessionConfig.ExpiryAnchor.SWEEP_DONE
+                + (expiryAnchor == SessionConfig.ExpiryAnchor.PHASED
+                        ? " sweep→displacement=" + phaseBudgets.sweepToDisplacement()
+                            + " displacement→MSS=" + phaseBudgets.displacementToMss()
+                            + " MSS→OTE=" + phaseBudgets.mssToOte() + " min (feed bars)"
+                            + " OTE→emit=ote.windowBars preSweep=" + preSweepFeedBars + " min"
+                        : expiryAnchor == SessionConfig.ExpiryAnchor.SWEEP_DONE_TOTAL
                         ? " hunt=" + huntFeedBars + " feed bars (" + huntFeedBars + " min, "
                             + (huntFeedBars / Math.max(1, detectorTimeframe.getMinutes())) + " detector bars)"
                             + " preSweep=" + preSweepFeedBars + " min"
