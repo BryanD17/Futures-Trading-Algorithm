@@ -504,12 +504,37 @@ public class MandatoryConfluenceValidator {
                     + d.reason());
         }
 
-        // M3 — killzone open.
-        if (!ctx.killzoneOpen) {
+        // M3 — session gate (V5 Agent 02, RC-02). SACRED in every mode: the
+        // NO_ENTRY window (14:45-17:00 CT = 15:45-18:00 ET) and the WEEKEND
+        // (Fri 17:00 -> Sun 18:00 ET) always block. SCORING (default): every
+        // other window passes; the window + prime flag ride on the setup for
+        // tier (O1) / size (killzone boost). BLOCKING (A/B): the legacy
+        // killzone must be open. A context with no session stamp (direct
+        // unit-test construction) falls back to ctx.killzoneOpen.
+        com.topstep.trading.strategy.session.SessionGateMode m3Mode =
+                com.topstep.trading.strategy.session.SessionConfig.effectiveGateMode();
+        com.topstep.trading.strategy.session.SessionWindow m3Window = null;
+        if (ctx.sessionWindow != null) {
+            try {
+                m3Window = com.topstep.trading.strategy.session.SessionWindow.valueOf(ctx.sessionWindow);
+            } catch (IllegalArgumentException ignored) {
+                m3Window = null;
+            }
+        }
+        if (m3Window != null && m3Window.blocksEntry()) {
+            return ValidationResult.fail(
+                    java.util.List.of("M3: " + m3Window + " window blocks entries"
+                            + (m3Window == com.topstep.trading.strategy.session.SessionWindow.NO_ENTRY
+                                    ? " (14:45-17:00 CT)" : " (Fri 17:00 -> Sun 18:00 ET)")),
+                    "M3");
+        }
+        if ((m3Mode == com.topstep.trading.strategy.session.SessionGateMode.BLOCKING || m3Window == null)
+                && !ctx.killzoneOpen) {
             return ValidationResult.fail(
                     java.util.List.of("M3: outside killzone"), "M3");
         }
-        confirmations.add("M3: killzone open");
+        confirmations.add("M3: " + (m3Window == null ? "killzone open"
+                : "session=" + m3Window + " prime=" + ctx.primeKillzone + " mode=" + m3Mode));
 
         // M4 — sweep + raid score.
         if (ctx.sweep == null) {

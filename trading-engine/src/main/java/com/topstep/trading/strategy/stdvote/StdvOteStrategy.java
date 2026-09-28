@@ -232,18 +232,104 @@ public final class StdvOteStrategy implements TradingStrategy {
         return NAME;
     }
 
+    // ── SETUP LIFECYCLE / EXPIRY (V5 Agent 02, RC-03 / PF-10) ───────────
+    // Pre-V5 the whole path — bias, manipulation leg, sweep, displacement,
+    // MSS, OTE — shared ONE budget counted from BIAS_SET (createdAtBar), so a
+    // setup whose sweep came late was dead before it could arm. With the
+    // SWEEP_DONE anchor the budgets are split:
+    //   * BIAS_SET / MANIP_DONE: waiting for a sweep of a real level — a
+    //     GENEROUS pre-sweep budget (default 480 min = one full session)
+    //     from BIAS_SET; the setup is only waiting, nothing is at risk.
+    //   * SWEEP_DONE .. OTE_ARMED: the hunt — expires N feed bars after the
+    //     SWEEP_DONE arrival (default 60 min = 60 x 1m = 12 x 5m detector bars).
+    //   * IN_TRADE / MANAGING: unchanged pre-V5 latch-release net (the
+    //     constructor budget from BIAS_SET) until the position-close path
+    //     releases it (RC-16, Agent 05).
+    // The BIAS_SET anchor is the pre-V5 behaviour, byte-identical; it is the
+    // core default (unit tests constructing the core directly) and the
+    // runner selects it with session.gateMode=BLOCKING for A/B.
+
+    private com.topstep.trading.strategy.session.SessionConfig.ExpiryAnchor expiryAnchor =
+            com.topstep.trading.strategy.session.SessionConfig.ExpiryAnchor.BIAS_SET;
+    /** Post-sweep budget in feed bars (SWEEP_DONE anchor); 0 disables. */
+    private long huntExpiryBars;
+    /** Pre-sweep budget in feed bars from BIAS_SET (SWEEP_DONE anchor); 0 disables. */
+    private long preSweepExpiryBars;
+    /** Bar index at which the setup reached SWEEP_DONE; -1 = not (yet) swept. */
+    private long sweepAtBar = -1;
+
+    /** Runner wiring: choose the expiry anchor and its budgets (feed bars). */
+    void configureExpiry(com.topstep.trading.strategy.session.SessionConfig.ExpiryAnchor anchor,
+                         long huntBars, long preSweepBars) {
+        this.expiryAnchor = (anchor == null)
+                ? com.topstep.trading.strategy.session.SessionConfig.ExpiryAnchor.BIAS_SET : anchor;
+        this.huntExpiryBars = Math.max(0L, huntBars);
+        this.preSweepExpiryBars = Math.max(0L, preSweepBars);
+    }
+
+    /** Bar index of the SWEEP_DONE arrival of the live setup, or -1 (tests / API). */
+    long sweepAtBar() {
+        return sweepAtBar;
+    }
+
+    /** Current monotonic bar index (tests / API). */
+    long barIndex() {
+        return barIndex;
+    }
+
     @Override
     public void onCandle(Candle candle, StrategyContext context) {
+        SetupState s = setup.state;
+        boolean live = s != SetupState.IDLE
+                && s != SetupState.DONE
+                && s != SetupState.INVALIDATED;
+        // Stamp the SWEEP_DONE arrival. recordSweep runs AFTER this method on
+        // the bar the sweep fires, so a post-sweep state seen here without a
+        // stamp arrived on the CURRENT index (before the increment below).
+        boolean postSweep = live && s.ordinal() >= SetupState.SWEEP_DONE.ordinal();
+        if (!postSweep) {
+            sweepAtBar = -1;
+        } else if (sweepAtBar < 0) {
+            sweepAtBar = barIndex;
+        }
         barIndex++;
         // SA5 will read detector outputs here and call the record* hooks.
         // SA4 implements the per-bar housekeeping (expiry only).
-        if (setup.state != SetupState.IDLE
-                && setup.state != SetupState.DONE
-                && setup.state != SetupState.INVALIDATED
-                && setupExpiryBars > 0
+        if (!live) return;
+
+        if (expiryAnchor == com.topstep.trading.strategy.session.SessionConfig.ExpiryAnchor.BIAS_SET) {
+            // Pre-V5 behaviour, unchanged.
+            if (setupExpiryBars > 0
+                    && setup.createdAtBar > 0
+                    && barIndex - setup.createdAtBar > setupExpiryBars) {
+                invalidate("expired (" + setupExpiryBars + " bars without progress)");
+            }
+            return;
+        }
+
+        if (s == SetupState.IN_TRADE || s == SetupState.MANAGING) {
+            // Latch-release net, identical to pre-V5 (see block comment).
+            if (setupExpiryBars > 0
+                    && setup.createdAtBar > 0
+                    && barIndex - setup.createdAtBar > setupExpiryBars) {
+                invalidate("expired (" + setupExpiryBars + " bars without progress)");
+            }
+            return;
+        }
+        if (postSweep) {
+            setup.expiresAtBar = huntExpiryBars > 0 ? sweepAtBar + huntExpiryBars : 0L;
+            if (huntExpiryBars > 0 && barIndex - sweepAtBar > huntExpiryBars) {
+                invalidate("expired (" + huntExpiryBars + " bars after SWEEP_DONE without an entry)");
+            }
+            return;
+        }
+        // BIAS_SET / MANIP_DONE — waiting for the sweep.
+        setup.expiresAtBar = (preSweepExpiryBars > 0 && setup.createdAtBar > 0)
+                ? setup.createdAtBar + preSweepExpiryBars : 0L;
+        if (preSweepExpiryBars > 0
                 && setup.createdAtBar > 0
-                && barIndex - setup.createdAtBar > setupExpiryBars) {
-            invalidate("expired (" + setupExpiryBars + " bars without progress)");
+                && barIndex - setup.createdAtBar > preSweepExpiryBars) {
+            invalidate("expired (" + preSweepExpiryBars + " bars before SWEEP_DONE)");
         }
     }
 

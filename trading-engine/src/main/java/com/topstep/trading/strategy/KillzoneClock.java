@@ -1,5 +1,7 @@
 package com.topstep.trading.strategy;
 
+import com.topstep.trading.strategy.session.SessionClassifier;
+
 import java.time.*;
 
 /**
@@ -16,80 +18,64 @@ import java.time.*;
  */
 public class KillzoneClock {
 
-    private final ZoneId newYorkZone = ZoneId.of("America/New_York");
-    private final ZoneId chicagoZone = ZoneId.of("America/Chicago");
+    // V5 Agent 02 (PF-09): every boundary now lives in SessionClassifier —
+    // the single time source. The dead America/Chicago zone is removed (it
+    // was declared but never read); values below are aliases, unchanged.
+    private final ZoneId newYorkZone = SessionClassifier.ET;
 
-    // NY AM Killzone (9:45 AM - 12:30 PM EST = 8:45 AM - 11:30 AM CT)
-    private final LocalTime nyAmStart = LocalTime.of(9, 45);
-    private final LocalTime nyAmEnd = LocalTime.of(12, 30);
+    // NY AM Killzone (9:45 AM - 12:30 PM ET = 8:45 AM - 11:30 AM CT)
+    private final LocalTime nyAmStart = SessionClassifier.KZ_NY_AM_START;
+    private final LocalTime nyAmEnd = SessionClassifier.KZ_NY_AM_END;
     private final int nyAmOpeningDuration = 30;  // 30 min opening phase
     private final int nyAmClosingDuration = 30;  // 30 min closing phase
 
-    // NY PM Killzone (1:45 PM - 4:00 PM EST = 12:45 PM - 3:00 PM CT)
-    private final LocalTime nyPmStart = LocalTime.of(13, 45);
-    private final LocalTime nyPmEnd = LocalTime.of(16, 0);
+    // NY PM Killzone (1:45 PM - 4:00 PM ET = 12:45 PM - 3:00 PM CT)
+    private final LocalTime nyPmStart = SessionClassifier.KZ_NY_PM_START;
+    private final LocalTime nyPmEnd = SessionClassifier.KZ_NY_PM_END;
     private final int nyPmOpeningDuration = 30;
     private final int nyPmClosingDuration = 30;
-
-    // London Killzone for Gold trading (3:00 AM - 12:00 PM EST)
-    private final LocalTime londonStart = LocalTime.of(3, 0);
-    private final LocalTime londonEnd = LocalTime.of(12, 0);
-
-    // Asian Session for Yen/Nikkei (7:00 PM - 4:00 AM EST)
-    private final LocalTime asianStart = LocalTime.of(19, 0);
-    private final LocalTime asianEnd = LocalTime.of(4, 0);
 
     /**
      * Check if the given instant is within any NY killzone.
      */
     public boolean isInKillzone(Instant instant) {
-        ZonedDateTime nyTime = instant.atZone(newYorkZone);
-        LocalTime time = nyTime.toLocalTime();
-
-        return isInNyAmKillzone(time) || isInNyPmKillzone(time);
+        return SessionClassifier.isLegacyNyKillzone(instant);
     }
 
     /**
      * Check if time is in NY AM killzone (9:45 AM - 12:30 PM EST).
      */
     public boolean isInNyAmKillzone(LocalTime time) {
-        return !time.isBefore(nyAmStart) && time.isBefore(nyAmEnd);
+        return SessionClassifier.isLegacyNyAmKillzone(time);
     }
 
     /**
      * Check if time is in NY PM killzone (1:45 - 4:00 PM EST).
      */
     public boolean isInNyPmKillzone(LocalTime time) {
-        return !time.isBefore(nyPmStart) && time.isBefore(nyPmEnd);
+        return SessionClassifier.isLegacyNyPmKillzone(time);
     }
 
     /**
      * Check if in London session (for Gold trading).
      */
     public boolean isInLondonSession(Instant instant) {
-        ZonedDateTime nyTime = instant.atZone(newYorkZone);
-        LocalTime time = nyTime.toLocalTime();
-
-        return !time.isBefore(londonStart) && time.isBefore(londonEnd);
+        return SessionClassifier.isLegacyLondonSession(SessionClassifier.etTime(instant));
     }
 
     /**
      * Check if in Asian session (for Yen/Nikkei).
      */
     public boolean isInAsianSession(Instant instant) {
-        ZonedDateTime nyTime = instant.atZone(newYorkZone);
-        LocalTime time = nyTime.toLocalTime();
-
-        // Asian session spans midnight
-        return !time.isBefore(asianStart) || time.isBefore(asianEnd);
+        // Asian session spans midnight (wrapping window in SessionClassifier)
+        return SessionClassifier.isLegacyAsianSession(SessionClassifier.etTime(instant));
     }
 
     /**
      * Get the current killzone phase for entry timing.
      */
     public KillzonePhase getKillzonePhase(Instant instant) {
-        ZonedDateTime nyTime = instant.atZone(newYorkZone);
-        LocalTime time = nyTime.toLocalTime();
+        LocalTime time = SessionClassifier.etTime(instant);
 
         // Check NY AM Killzone
         if (isInNyAmKillzone(time)) {
@@ -146,8 +132,7 @@ public class KillzoneClock {
      * Get the killzone session name, or "REGULAR_SESSION" if not in a killzone.
      */
     public String getKillzoneName(Instant instant) {
-        ZonedDateTime nyTime = instant.atZone(newYorkZone);
-        LocalTime time = nyTime.toLocalTime();
+        LocalTime time = SessionClassifier.etTime(instant);
 
         if (isInNyAmKillzone(time)) {
             return "NY_AM_KILLZONE";
@@ -180,13 +165,12 @@ public class KillzoneClock {
      * Session overlaps often produce higher volatility and better setups.
      */
     public boolean isSessionOverlap(Instant instant) {
-        ZonedDateTime nyTime = instant.atZone(newYorkZone);
-        LocalTime time = nyTime.toLocalTime();
+        LocalTime time = SessionClassifier.etTime(instant);
 
         // London-NY overlap: London is open (2 AM - 12 PM) and NY is open (9:30 AM - 4 PM)
         // Overlap is roughly 9:30 AM - 12 PM EST
-        boolean londonOpen = !time.isBefore(londonStart) && time.isBefore(LocalTime.of(12, 0));
-        boolean nyOpen = (!time.isBefore(LocalTime.of(9, 30)) && time.isBefore(nyPmEnd));
+        boolean londonOpen = SessionClassifier.isLegacyLondonSession(time);
+        boolean nyOpen = SessionClassifier.in(time, SessionClassifier.NY_OPEN_FOR_OVERLAP, nyPmEnd);
 
         if (londonOpen && nyOpen) {
             return true;
@@ -195,8 +179,9 @@ public class KillzoneClock {
         // Asia-London overlap is less common for futures, but check anyway
         // Asia: 7 PM - 4 AM, London: 2 AM - 12 PM
         // Overlap: 2 AM - 4 AM EST
-        boolean asiaOpen = !time.isBefore(asianStart) || time.isBefore(asianEnd);
-        boolean londonEarly = !time.isBefore(londonStart) && time.isBefore(LocalTime.of(4, 0));
+        boolean asiaOpen = SessionClassifier.isLegacyAsianSession(time);
+        boolean londonEarly = SessionClassifier.in(time,
+                SessionClassifier.KZ_LONDON_SESSION_START, SessionClassifier.LONDON_EARLY_END);
 
         return asiaOpen && londonEarly;
     }
@@ -205,8 +190,7 @@ public class KillzoneClock {
      * Get detailed info about current killzone and phase.
      */
     public String getDetailedInfo(Instant instant) {
-        ZonedDateTime nyTime = instant.atZone(newYorkZone);
-        LocalTime time = nyTime.toLocalTime();
+        LocalTime time = SessionClassifier.etTime(instant);
         String session = getKillzoneName(instant);
         KillzonePhase phase = getKillzonePhase(instant);
 
@@ -223,8 +207,7 @@ public class KillzoneClock {
      * Check if it's a valid trading day (Monday-Friday).
      */
     public boolean isTradingDay(Instant instant) {
-        ZonedDateTime nyTime = instant.atZone(newYorkZone);
-        DayOfWeek day = nyTime.getDayOfWeek();
+        DayOfWeek day = SessionClassifier.etDay(instant);
         return day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY;
     }
 
@@ -232,8 +215,7 @@ public class KillzoneClock {
      * Get minutes remaining in current killzone.
      */
     public int getMinutesRemaining(Instant instant) {
-        ZonedDateTime nyTime = instant.atZone(newYorkZone);
-        LocalTime time = nyTime.toLocalTime();
+        LocalTime time = SessionClassifier.etTime(instant);
 
         if (isInNyAmKillzone(time)) {
             return (int) Duration.between(time, nyAmEnd).toMinutes();

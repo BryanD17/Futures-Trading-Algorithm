@@ -1,5 +1,6 @@
 package com.topstep.trading.strategy;
 
+import com.topstep.trading.strategy.session.SessionClassifier;
 import java.time.*;
 
 /**
@@ -31,9 +32,10 @@ import java.time.*;
 public class SilverBulletClock {
 
     public enum SilverBulletWindow {
-        LONDON_OPEN("London Open SB", LocalTime.of(3, 0), LocalTime.of(4, 0)),
-        NY_AM("NY AM SB", LocalTime.of(10, 0), LocalTime.of(11, 0)),
-        NY_PM("NY PM SB", LocalTime.of(14, 0), LocalTime.of(15, 0)),
+        // V5 Agent 02: boundaries come from SessionClassifier (single source).
+        LONDON_OPEN("London Open SB", SessionClassifier.SB_LONDON_START, SessionClassifier.SB_LONDON_END),
+        NY_AM("NY AM SB", SessionClassifier.SB_NY_AM_START, SessionClassifier.SB_NY_AM_END),
+        NY_PM("NY PM SB", SessionClassifier.SB_NY_PM_START, SessionClassifier.SB_NY_PM_END),
         NONE("Outside SB", null, null);
 
         private final String name;
@@ -79,7 +81,7 @@ public class SilverBulletClock {
         }
     }
 
-    private final ZoneId newYorkZone = ZoneId.of("America/New_York");
+    private final ZoneId newYorkZone = SessionClassifier.ET;
 
     /**
      * Get the current Silver Bullet window.
