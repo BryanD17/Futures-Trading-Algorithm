@@ -24,6 +24,8 @@ public class EventBus {
     private final AtomicLong droppedNotRunning = new AtomicLong();
     private final AtomicLong droppedQueueFull = new AtomicLong();
     private final AtomicLong handlerErrors = new AtomicLong();
+    /** V5 Agent 05.3: events queued + handler tasks not yet finished (see {@link #awaitIdle}). */
+    private final AtomicLong inFlight = new AtomicLong();
 
     /**
      * Default constructor with 4 worker threads.
@@ -136,6 +138,7 @@ public class EventBus {
             case "PositionClosedEvent" -> EventType.POSITION_CLOSED;
             case "RiskBreachEvent" -> EventType.RISK_BREACH;
             case "GateDecisionEvent" -> EventType.GATE_DECISION;
+            case "SetupCancelledEvent" -> EventType.SETUP_CANCELLED;
             default -> {
                 logger.warn("Unknown event class: {}, defaulting to STRATEGY_SIGNAL", className);
                 yield EventType.STRATEGY_SIGNAL;
@@ -157,17 +160,39 @@ public class EventBus {
         }
 
         try {
+            inFlight.incrementAndGet();
             boolean added = eventQueue.offer(event, 100, TimeUnit.MILLISECONDS);
             if (!added) {
+                inFlight.decrementAndGet();
                 // CRITICAL: Event was dropped due to queue full - this should never happen in normal operation
                 droppedQueueFull.incrementAndGet();
                 EngineTelemetry.error("EventBus.publish.queueFull",
                         "EVENT DROPPED - Queue full! Event: " + event + " (type: " + event.getClass().getSimpleName() + ")");
             }
         } catch (InterruptedException e) {
+            inFlight.decrementAndGet();
             Thread.currentThread().interrupt();
             EngineTelemetry.error("EventBus.publish.interrupted", e);
         }
+    }
+
+    /**
+     * V5 Agent 05.3 — block until every published event has been dispatched
+     * and every handler task has returned (events published BY handlers
+     * included), or the timeout elapses. Used by deterministic replay
+     * harnesses to model "the handlers ran before the next candle" (a live
+     * minute bar is ~10^4 x the handler latency). Production never calls it.
+     *
+     * @return true when the bus went idle, false on timeout
+     */
+    public boolean awaitIdle(long timeoutMillis) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        while (inFlight.get() > 0) {
+            if (System.nanoTime() > deadline) return false;
+            Thread.onSpinWait();
+            Thread.yield();
+        }
+        return true;
     }
 
     /**
@@ -263,20 +288,32 @@ public class EventBus {
     private void dispatchEvent(Event event) {
         List<EventHandler<? extends Event>> eventHandlers = handlers.get(event.getType());
 
-        if (eventHandlers == null || eventHandlers.isEmpty()) {
-            logger.trace("No handlers registered for event type: {}", event.getType());
-            return;
-        }
+        try {
+            if (eventHandlers == null || eventHandlers.isEmpty()) {
+                logger.trace("No handlers registered for event type: {}", event.getType());
+                return;
+            }
 
-        for (EventHandler handler : eventHandlers) {
-            executorService.submit(() -> {
+            for (EventHandler handler : eventHandlers) {
+                inFlight.incrementAndGet();
                 try {
-                    handler.handle(event);
-                } catch (Exception e) {
-                    handlerErrors.incrementAndGet();
-                    EngineTelemetry.error("EventBus.handler." + event.getType(), e);
+                    executorService.submit(() -> {
+                        try {
+                            handler.handle(event);
+                        } catch (Exception e) {
+                            handlerErrors.incrementAndGet();
+                            EngineTelemetry.error("EventBus.handler." + event.getType(), e);
+                        } finally {
+                            inFlight.decrementAndGet();
+                        }
+                    });
+                } catch (RuntimeException rejected) {
+                    inFlight.decrementAndGet();
+                    throw rejected;
                 }
-            });
+            }
+        } finally {
+            inFlight.decrementAndGet(); // the dequeued event itself
         }
     }
 

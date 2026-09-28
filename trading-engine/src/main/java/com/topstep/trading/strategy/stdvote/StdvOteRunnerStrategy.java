@@ -192,6 +192,19 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
      * one-attempt-per-process behaviour.
      */
     private final boolean rearmOnInvalidated;
+    /**
+     * V5 Agent 05.3 — {@code setup.rearmAfterClose}, DEFAULT TRUE. In BOTH
+     * target models a PositionClosedEvent for an EXECUTED signal (position
+     * flat) moves IN_TRADE to a re-arm after {@code setup.rearmCooldownBars},
+     * under every canRearm gate (no open position, frequency limits,
+     * NO_ENTRY/WEEKEND). {@code false} restores the one-trade-per-window
+     * discipline: IN_TRADE stays terminal until the setup expires (A/B).
+     */
+    private final boolean rearmAfterClose;
+    /** V5 Agent 05.3: the executed trade of the current setup closed; re-arm pending. */
+    private boolean closedAwaitingRearm = false;
+    /** V5 Agent 05.3: the current setup emitted a signal and has not ended yet. */
+    private boolean emittedSetupActive = false;
     /** London prime window (ET) gating MGC scalp entries. */
     private final LocalTime londonPrimeStartEt;
     private final LocalTime londonPrimeEndEt;
@@ -212,6 +225,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private boolean primeKillzoneNow;
     /** Timestamp of the candle being processed (candle time, not wall clock). */
     private Instant lastCandleInstant;
+    /** V5 Agent 05.3: the StrategyContext of the candle being processed. */
+    private StrategyContext lastStrategyContext;
 
     // ── V5 Agent 02: session domain (RC-02 / RC-03) ──────────────────────
     /** Effective M3 gate mode ({@code session.gateMode} x {@code session.allSessions}). */
@@ -581,6 +596,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // discipline and is unchanged.
         this.rearmOnInvalidated = com.topstep.trading.config.EngineConfig.current().getBoolean(
                 "stdvOte.rearmOnInvalidated", true);
+        this.rearmAfterClose = SessionConfig.rearmAfterClose(); // AGENT-05.3
         this.londonPrimeStartEt = ScalpConfig.londonPrimeStartEt();
         this.londonPrimeEndEt = ScalpConfig.londonPrimeEndEt();
         this.allSessions = ScalpConfig.allSessions();
@@ -778,6 +794,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // 5. Killzone bookkeeping: buffer candles from the killzone open so
         // the manipulation-leg detector can anchor the Judas swing there.
         lastCandleInstant = now;
+        lastStrategyContext = context;   // AGENT-05.3 (rearm → endEmittedSetup)
         // V5 Agent 02: ONE classifier, candle time. SCORING: the "killzone"
         // (M3 gate + re-arm gate) is open whenever the window is not
         // NO_ENTRY / WEEKEND; BLOCKING: the legacy killzones, unchanged.
@@ -1046,6 +1063,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // the setup died. Measurement only.
         funnel.recordTransition(funnelStateBefore, ctx.state, ctx.lastGateFailed);
 
+        // AGENT-05.3 (S-2): the emitting setup left IN_TRADE (any reason) —
+        // cancel its unfilled entry.
+        if (emittedSetupActive && ctx.state != SetupState.IN_TRADE) {
+            endEmittedSetup(ctx.lastGateFailed, context);
+        }
+
         // Remember the state for INVALIDATED-transition detection (SA4).
         lastSeenState = ctx.state;
     }
@@ -1083,7 +1106,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         boolean detectedThisBar = false;
         if (pendingPositionClosed.compareAndSet(true, false)) {
             positionOpen = false;
-            if (ctx.state == SetupState.IN_TRADE && rearmCooldownRemaining < 0) {
+            // AGENT-05.3: setup.rearmAfterClose=false keeps IN_TRADE terminal (A/B).
+            if (ctx.state == SetupState.IN_TRADE && rearmCooldownRemaining < 0 && rearmAfterClose) {
                 rearmCooldownRemaining = rearmCooldownBars;
                 detectedThisBar = true;
                 System.out.println("[" + symbol + "] SCALP: position closed — re-arm in "
@@ -1169,6 +1193,16 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 System.out.println("[" + symbol + "] signal released without execution"
                         + " — legacy latch cleared, setup invalidated for re-arm");
                 core.invalidate("signal not executed (released)");
+            } else if (ctx.state == SetupState.IN_TRADE && rearmAfterClose
+                    && !closedAwaitingRearm && rearmCooldownRemaining < 0) {
+                // AGENT-05.3 (S-1): the EXECUTED trade closed (position flat).
+                // Legacy used to sit IN_TRADE until "expired (200 bars)" and
+                // missed the next setup of the window (09-28 14:53 G1).
+                closedAwaitingRearm = true;
+                rearmCooldownRemaining = rearmCooldownBars;
+                System.out.println("[" + symbol + "] position closed — re-arm in "
+                        + rearmCooldownBars + " bars (setup.rearmAfterClose=true)");
+                return;
             }
         }
         if (ctx.state == SetupState.INVALIDATED && rearmCooldownRemaining < 0) {
@@ -1183,10 +1217,34 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         if (rearmCooldownRemaining > 0) {
             rearmCooldownRemaining--;
         } else if (rearmCooldownRemaining == 0
-                && ctx.state == SetupState.INVALIDATED
+                && (ctx.state == SetupState.INVALIDATED
+                    || (ctx.state == SetupState.IN_TRADE && closedAwaitingRearm))
                 && canRearm(ctx, context, inKillzone)) {
             rearmCooldownRemaining = -1;
             rearm(ctx);
+        }
+    }
+
+    /**
+     * V5 Agent 05.3 (S-2): the setup that emitted a signal ended without an
+     * executed position — INVALIDATED / EXPIRED for any reason, or re-armed.
+     * Publish {@link com.topstep.trading.event.SetupCancelledEvent} so the
+     * still-unfilled entry order is cancelled (SIM: ExecutionEngine, LIVE:
+     * LiveEngineRunner at the broker), and release this runner's own latch
+     * (no synthetic PositionClosedEvent follows these cancels). An executed
+     * setup has no resting entry — nothing is published.
+     */
+    private void endEmittedSetup(String reason, StrategyContext context) {
+        if (!emittedSetupActive) return;
+        emittedSetupActive = false;
+        if (executedSinceEmit(context) || (context != null && context.hasPosition(symbol))) return;
+        positionOpen = false;
+        entryPendingBars = 0;
+        String why = (reason == null || reason.isBlank()) ? "invalidated" : reason;
+        System.out.println("[" + symbol + "] setup ended before its entry filled (" + why
+                + ") — cancelling the resting entry order");
+        if (eventBus != null) {
+            eventBus.publish(new com.topstep.trading.event.SetupCancelledEvent(symbol, why, lastCandleInstant));
         }
     }
 
@@ -1273,6 +1331,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
      * events; the killzone candle buffer is KEPT (same killzone anchor).
      */
     private void rearm(SetupContext ctx) {
+        // AGENT-05.3: a re-arm ends the previous setup — its unfilled entry
+        // (if any) is cancelled first.
+        endEmittedSetup("re-armed", lastStrategyContext);
+        closedAwaitingRearm = false;
         core.resetForNextWindow();
         lastObservedMss = null;
         barsSinceMss = Integer.MAX_VALUE;
@@ -1348,6 +1410,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         pendingPositionClosed.set(false);
         positionOpen = false;
         rearmCooldownRemaining = -1;
+        closedAwaitingRearm = false;     // AGENT-05.3
+        emittedSetupActive = false;      // AGENT-05.3
         lastSeenState = SetupState.IDLE;
         rearmBiasGuard.reset();          // AGENT-02
         sessionWindowNow = null;         // AGENT-02
@@ -1833,6 +1897,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             // PositionClosedEvent (real close or synthetic release).
             positionOpen = true;
             positionSeenSinceEmit = false;
+            emittedSetupActive = true;       // AGENT-05.3
+            closedAwaitingRearm = false;     // AGENT-05.3
             AccountState account = (context != null) ? context.getAccountState() : null;
             tradesAtEmit = (account != null) ? account.getTradesToday() : -1;
             tradingDayAtEmit = (account != null) ? account.getCurrentTradingDay() : null;

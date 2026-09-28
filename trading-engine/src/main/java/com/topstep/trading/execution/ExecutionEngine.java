@@ -3,6 +3,7 @@ package com.topstep.trading.execution;
 import com.topstep.trading.domain.*;
 import com.topstep.trading.event.EventBus;
 import com.topstep.trading.event.PositionClosedEvent;
+import com.topstep.trading.event.SetupCancelledEvent;
 import com.topstep.trading.strategy.TradeTier;
 
 import java.time.Instant;
@@ -85,6 +86,48 @@ public class ExecutionEngine {
     private volatile boolean flattenSafetyNet = false;
     private final java.util.concurrent.atomic.AtomicLong ttlCancels = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong safetyNetFlattens = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong setupCancels = new java.util.concurrent.atomic.AtomicLong();
+
+    // -- AGENT-05.3 (V5): ONE completed Trade per position --
+    /**
+     * Exits of one open position, aggregated into a single {@link Trade}
+     * when the position goes flat — whether the last exit is the stop /
+     * target ({@link #closePosition}) or a partial take-profit that
+     * flattens it. Quantity = contracts exited, exit = VWAP of the exits,
+     * P&amp;L = sum of the legs, R = P&amp;L / initial $ risk (entry→original
+     * stop x tick value x filled quantity).
+     */
+    static final class PositionLedger {
+        final OrderSide side;
+        double entryPrice;
+        final Instant entryTime;
+        int filledQty;
+        double initialRiskDollars;
+        int exitedQty;
+        double exitNotional;
+        double pnl;
+        final List<String> exitReasons = new ArrayList<>();
+
+        PositionLedger(OrderSide side, double entryPrice, Instant entryTime) {
+            this.side = side;
+            this.entryPrice = entryPrice;
+            this.entryTime = entryTime;
+        }
+
+        void addExit(int qty, double price, double legPnl, String reason) {
+            exitedQty += qty;
+            exitNotional += qty * price;
+            pnl += legPnl;
+            exitReasons.add(qty + "@" + String.format("%.2f", price) + " " + reason);
+        }
+
+        double vwapExit() { return exitedQty > 0 ? exitNotional / exitedQty : 0.0; }
+    }
+
+    /** Open-position ledgers by symbol (SIM fills; LIVE external legs). */
+    private final Map<String, PositionLedger> ledgers = new ConcurrentHashMap<>();
+    /** LIVE journaling: partial legs recorded before the position went flat. */
+    private final Map<String, List<Trade>> externalLegs = new ConcurrentHashMap<>();
 
     public ExecutionEngine(AccountState accountState) {
         this.accountState = accountState;
@@ -130,7 +173,61 @@ public class ExecutionEngine {
      */
     public void setEventBus(EventBus eventBus) {
         this.eventBus = eventBus;
+        // V5 Agent 05.3: the setup that emitted an entry ended (invalidated,
+        // expired, re-armed) — cancel its still-unfilled SIM entry. LIVE
+        // (simulation disabled) cancels at the broker in LiveEngineRunner.
+        if (eventBus != null) {
+            eventBus.subscribe(SetupCancelledEvent.class, evt -> {
+                if (simulationEnabled) {
+                    cancelEntryForSetup(evt.getSymbol(), evt.getReason(), evt.getCandleTime());
+                }
+            });
+        }
     }
+
+    /**
+     * V5 Agent 05.3 — cancel every still-unfilled resting ENTRY order for
+     * {@code symbol} because the setup that emitted it ended. Publishes one
+     * GateDecisionEvent {@code "ORDER: cancelled — setup <reason>"} per
+     * order. No PositionClosedEvent: the strategy released its own latch
+     * when it asked for the cancel. An already filled entry is a position
+     * and is never touched here.
+     *
+     * @return the number of orders cancelled
+     */
+    public synchronized int cancelEntryForSetup(String symbol, String reason, Instant candleTime) {
+        List<Order> orders = activeOrders.get(symbol);
+        if (orders == null || orders.isEmpty()) return 0;
+        int cancelled = 0;
+        for (Order order : orders) {
+            if (order.getFilledQuantity() > 0) continue; // partially filled: a position exists
+            orders.remove(order);
+            orderAgeBars.remove(order.getOrderId());
+            order.updateStatus(OrderStatus.CANCELED);
+            cancelled++;
+            String why = "ORDER: cancelled — setup " + reason;
+            System.out.println("[ExecutionEngine] " + why + " (" + symbol + " " + order.getSide()
+                    + " " + order.getQuantity() + " @ " + order.getLimitPrice() + ")");
+            if (eventBus != null) {
+                com.topstep.trading.event.EngineTelemetry.publish(eventBus, new com.topstep.trading.event.GateDecisionEvent(
+                        symbol, candleTime, null, "ORDER_RESTING", "ORDER", why,
+                        order.getQuantity(), order.getLimitPrice() == null ? Double.NaN : order.getLimitPrice()));
+            }
+        }
+        if (orders.isEmpty()) activeOrders.remove(symbol);
+        if (cancelled > 0) {
+            setupCancels.addAndGet(cancelled);
+            if (!accountState.hasPosition(symbol)) {
+                orderLevels.remove(symbol);
+                pendingTiers.remove(symbol);
+                pendingConfluenceFactors.remove(symbol);
+            }
+        }
+        return cancelled;
+    }
+
+    /** Entry orders cancelled because their setup ended (Agent 05.3). */
+    public long getSetupCancelCount() { return setupCancels.get(); }
 
     /** SIM order TTL in bars (order.ttlBars); {@code <= 0} disables it. */
     public void setOrderTtlBars(int bars) {
@@ -540,6 +637,10 @@ public class ExecutionEngine {
      * Execute a fill for an order.
      */
     private void executeFill(Order order, double fillPrice, Instant fillTime) {
+        // AGENT-05.3: a fill onto a flat book starts a NEW position ledger.
+        if (!accountState.hasPosition(order.getSymbol())) {
+            ledgers.remove(order.getSymbol());
+        }
         order.recordFill(order.getQuantity(), fillPrice);
 
         // Update position in account
@@ -561,6 +662,22 @@ public class ExecutionEngine {
                         target.price = fillPrice - (levels.riskDistance * target.rMultiple);
                     }
                 }
+            }
+        }
+
+        // AGENT-05.3: open (or extend) the position ledger with the initial
+        // $ risk of this fill — entry to ORIGINAL stop x tick value x qty.
+        PositionLedger ledger = ledgers.computeIfAbsent(order.getSymbol(),
+                s -> new PositionLedger(order.getSide(), fillPrice, fillTime));
+        if (ledger.side == order.getSide()) {
+            int prevQty = ledger.filledQty;
+            ledger.filledQty += order.getQuantity();
+            ledger.entryPrice = prevQty == 0 ? fillPrice
+                    : (ledger.entryPrice * prevQty + fillPrice * order.getQuantity()) / ledger.filledQty;
+            if (levels != null) {
+                ledger.initialRiskDollars += Math.abs(fillPrice - levels.originalStopPrice)
+                        / ContractSpecs.tickSize(order.getSymbol())
+                        * tickValues.getOrDefault(order.getSymbol(), 12.50) * order.getQuantity();
             }
         }
 
@@ -591,12 +708,93 @@ public class ExecutionEngine {
         accountState.recordRealizedPnL(realizedPnl);
 
         // Update position quantity
-        int closeQty = position.isLong() ? -quantity : quantity;
+        boolean wasLong = position.isLong();
+        int closeQty = wasLong ? -quantity : quantity;
         accountState.updatePosition(symbol, closeQty, exitPrice);
 
         System.out.println("PARTIAL EXIT: " + symbol + " " + quantity + " @ " +
                           String.format("%.2f", exitPrice) + " | PnL: $" +
                           String.format("%.2f", realizedPnl) + " | " + reason);
+
+        // AGENT-05.3: the leg joins the position's ledger; a partial that
+        // FLATTENS the position completes the trade (one Trade, one
+        // PositionClosedEvent) — it used to leave no Trade and no event.
+        PositionLedger ledger = ledgerFor(position, wasLong);
+        ledger.addExit(quantity, exitPrice, realizedPnl, reason);
+        if (!accountState.hasPosition(symbol)) {
+            completeTrade(symbol, ledger, exitTime);
+            orderLevels.remove(symbol);
+        }
+    }
+
+    /** The symbol's ledger, created from the position when a fill bypassed executeFill. */
+    private PositionLedger ledgerFor(Position position, boolean wasLong) {
+        String symbol = position.getSymbol();
+        return ledgers.computeIfAbsent(symbol, s -> {
+            PositionLedger l = new PositionLedger(wasLong ? OrderSide.BUY : OrderSide.SELL,
+                    position.getAvgEntryPrice(), position.getOpenedAt());
+            l.filledQty = Math.abs(position.getQuantity());
+            EnhancedOrderLevels levels = orderLevels.get(symbol);
+            if (levels != null) {
+                l.initialRiskDollars = Math.abs(position.getAvgEntryPrice() - levels.originalStopPrice)
+                        / ContractSpecs.tickSize(symbol) * tickValues.getOrDefault(symbol, 12.50)
+                        * Math.abs(position.getQuantity());
+            }
+            return l;
+        });
+    }
+
+    /**
+     * AGENT-05.3: the position is flat — record exactly ONE Trade that
+     * aggregates every exit leg, count it once for the frequency gates, and
+     * publish ONE PositionClosedEvent. Realized P&amp;L was already booked
+     * per leg (recordRealizedPnL), so it is not booked again here.
+     */
+    private void completeTrade(String symbol, PositionLedger ledger, Instant exitTime) {
+        ledgers.remove(symbol);
+        double pnl = ledger.pnl;
+        String notes;
+        if (ledger.exitReasons.size() == 1) {
+            String only = ledger.exitReasons.get(0);
+            notes = only.substring(only.indexOf(' ') + 1);
+        } else {
+            notes = ledger.exitReasons.size() + " exits: " + String.join("; ", ledger.exitReasons);
+        }
+        Trade trade = Trade.builder()
+                .symbol(symbol)
+                .side(ledger.side)
+                .quantity(ledger.exitedQty)
+                .entryPrice(ledger.entryPrice)
+                .exitPrice(ledger.vwapExit())
+                .entryTime(ledger.entryTime)
+                .exitTime(exitTime)
+                .realizedPnL(pnl)
+                .riskAmount(ledger.initialRiskDollars)
+                .notes(notes)
+                .tier(pendingTiers.getOrDefault(symbol, TradeTier.TIER_1))
+                .confluenceFactors(pendingConfluenceFactors.getOrDefault(symbol, List.of()))
+                .build();
+        pendingTiers.remove(symbol);
+        pendingConfluenceFactors.remove(symbol);
+        completedTrades.add(trade);
+        // Count the completed trade for the trade-frequency gates
+        // (maxTradesPerDay / maxConsecutiveLosses in PropFirmRiskEngine) —
+        // ONCE per position, on its total P&L.
+        accountState.recordTradeCompleted(pnl);
+        System.out.println("TRADE COMPLETE: " + symbol + " " + ledger.side + " q=" + ledger.exitedQty
+                + " in=" + String.format("%.2f", ledger.entryPrice)
+                + " out(vwap)=" + String.format("%.2f", ledger.vwapExit())
+                + " | PnL: $" + String.format("%.2f", pnl)
+                + " | R=" + String.format("%.2f", trade.getRMultiple()) + " | " + notes);
+        boolean isWin = pnl > 0;
+        if (executionListener != null) {
+            executionListener.onPositionClosed(symbol, pnl, isWin);
+        }
+        // Publish the position-closed event at the SAME funnel that counted
+        // the trade. Consumers: the strategy's re-arm/latch, dashboards.
+        if (eventBus != null) {
+            eventBus.publish(new PositionClosedEvent(symbol, pnl, isWin, exitTime));
+        }
     }
 
     /**
@@ -606,59 +804,32 @@ public class ExecutionEngine {
         String symbol = position.getSymbol();
         double entryPrice = position.getAvgEntryPrice();
         int quantity = Math.abs(position.getQuantity());
-        OrderSide side = position.getSide();
 
         // Calculate realized PnL
         double tickValue = tickValues.getOrDefault(symbol, 12.50);
-        double priceDiff = position.isLong() ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
+        boolean wasLong = position.isLong();
+        double priceDiff = wasLong ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
         // AGENT-05 (V5 RC-17): points / tickSize * tickValue (was points * tickValue).
         double realizedPnl = priceDiff / ContractSpecs.tickSize(symbol) * quantity * tickValue;
 
-        // Create trade record enriched with signal context
-        Trade trade = Trade.builder()
-                .symbol(symbol)
-                .side(side)
-                .quantity(quantity)
-                .entryPrice(entryPrice)
-                .exitPrice(exitPrice)
-                .entryTime(position.getOpenedAt())
-                .exitTime(exitTime)
-                .realizedPnL(realizedPnl)
-                .notes(reason)
-                .tier(pendingTiers.getOrDefault(symbol, TradeTier.TIER_1))
-                .confluenceFactors(pendingConfluenceFactors.getOrDefault(symbol, List.of()))
-                .build();
+        // AGENT-05.3: this leg joins the ledger (earlier partial exits
+        // included) BEFORE the position is flattened.
+        PositionLedger ledger = ledgerFor(position, wasLong);
+        ledger.addExit(quantity, exitPrice, realizedPnl, reason);
 
-        // Clean up signal context after recording
-        pendingTiers.remove(symbol);
-        pendingConfluenceFactors.remove(symbol);
-
-        completedTrades.add(trade);
-
-        // Update account with realized PnL
+        // Update account with realized PnL (this leg; partials booked theirs)
         accountState.recordRealizedPnL(realizedPnl);
-        // Count the completed trade for the trade-frequency gates
-        // (maxTradesPerDay / maxConsecutiveLosses in PropFirmRiskEngine).
-        accountState.recordTradeCompleted(realizedPnl);
 
         // Close position
-        int closeQuantity = position.isLong() ? -quantity : quantity;
+        int closeQuantity = wasLong ? -quantity : quantity;
         accountState.updatePosition(symbol, closeQuantity, exitPrice);
 
         System.out.println("EXIT FILLED: " + symbol + " @ " + String.format("%.2f", exitPrice) +
                           " | PnL: $" + String.format("%.2f", realizedPnl) + " | " + reason);
 
-        // CRITICAL: Notify listener that position is closed
-        boolean isWin = realizedPnl > 0;
-        if (executionListener != null) {
-            executionListener.onPositionClosed(symbol, realizedPnl, isWin);
-        }
-        // Publish the position-closed event at the SAME funnel that counted
-        // the trade (recordTradeCompleted above). Consumers: scalp-mode
-        // re-arm in StdvOteRunnerStrategy, dashboards, journaling.
-        if (eventBus != null) {
-            eventBus.publish(new PositionClosedEvent(symbol, realizedPnl, isWin, exitTime));
-        }
+        // ONE Trade for the whole position (+ frequency count, listener,
+        // PositionClosedEvent) — see completeTrade.
+        completeTrade(symbol, ledger, exitTime);
     }
 
     /**
@@ -759,10 +930,66 @@ public class ExecutionEngine {
      * trade-frequency accounting remain the caller's responsibility, since
      * the live close paths already update AccountState themselves.
      */
-    public void recordExternalTrade(Trade trade) {
-        if (trade != null) {
+    public synchronized void recordExternalTrade(Trade trade) {
+        if (trade == null) return;
+        // AGENT-05.3: merge any partial legs of the same position into ONE Trade.
+        List<Trade> legs = externalLegs.remove(trade.getSymbol());
+        if (legs == null || legs.isEmpty()) {
             completedTrades.add(trade);
+            return;
         }
+        legs.add(trade);
+        completedTrades.add(mergeLegs(legs));
+    }
+
+    /**
+     * AGENT-05.3 (LIVE journaling): a partial exit of a position that is
+     * still open. Held until the position goes flat, then merged with the
+     * final leg ({@link #recordExternalTrade}) or on its own
+     * ({@link #finalizeExternalTrade}) into ONE Trade.
+     */
+    public synchronized void recordExternalPartial(Trade leg) {
+        if (leg == null) return;
+        externalLegs.computeIfAbsent(leg.getSymbol(), s -> new ArrayList<>()).add(leg);
+    }
+
+    /** AGENT-05.3: the position went flat on a partial — record its merged Trade. */
+    public synchronized void finalizeExternalTrade(String symbol) {
+        List<Trade> legs = externalLegs.remove(symbol);
+        if (legs != null && !legs.isEmpty()) {
+            completedTrades.add(mergeLegs(legs));
+        }
+    }
+
+    /** Quantity = sum, exit = VWAP, P&amp;L = sum, risk = sum of the legs' risk. */
+    static Trade mergeLegs(List<Trade> legs) {
+        if (legs.size() == 1) return legs.get(0);
+        Trade first = legs.get(0);
+        Trade last = legs.get(legs.size() - 1);
+        int qty = 0;
+        double notional = 0, pnl = 0, risk = 0;
+        List<String> notes = new ArrayList<>();
+        for (Trade t : legs) {
+            qty += t.getQuantity();
+            notional += t.getQuantity() * t.getExitPrice();
+            pnl += t.getRealizedPnL();
+            risk += t.getRiskAmount();
+            notes.add(t.getQuantity() + "@" + String.format("%.2f", t.getExitPrice()) + " " + t.getNotes());
+        }
+        return Trade.builder()
+                .symbol(first.getSymbol())
+                .side(first.getSide())
+                .quantity(qty)
+                .entryPrice(first.getEntryPrice())
+                .exitPrice(qty > 0 ? notional / qty : last.getExitPrice())
+                .entryTime(first.getEntryTime())
+                .exitTime(last.getExitTime())
+                .realizedPnL(pnl)
+                .riskAmount(risk)
+                .tier(first.getTier())
+                .confluenceFactors(first.getConfluenceFactors())
+                .notes(legs.size() + " exits: " + String.join("; ", notes))
+                .build();
     }
 
     /**

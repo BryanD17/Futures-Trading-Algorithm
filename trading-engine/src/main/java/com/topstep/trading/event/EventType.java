@@ -45,5 +45,7 @@ public enum EventType {
     // class (EventBus.mapClassToEventType does not know these classes).
     OTE_ARMED,
     OTE_ALARM,
-    OTE_INVALIDATED
+    OTE_INVALIDATED,
+    // V5 Agent 05.3: the emitting setup ended — cancel its unfilled entry.
+    SETUP_CANCELLED
 }

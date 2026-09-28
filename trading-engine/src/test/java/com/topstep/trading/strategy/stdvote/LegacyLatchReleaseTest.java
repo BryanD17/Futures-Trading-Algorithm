@@ -112,7 +112,11 @@ class LegacyLatchReleaseTest {
             awaitTrue(() -> !closes.isEmpty());
             TimeUnit.MILLISECONDS.sleep(50);
             s.onCandle(after(last, 2), ctx);
-            assertThat(s.getSetupContext().state).isEqualTo(SetupState.IN_TRADE);
+            // V5 Agent 05.3: an EXECUTED trade is never invalidated as "not executed";
+            // it re-arms only after setup.rearmCooldownBars (RearmAfterCloseAndOrderCancelTest).
+            assertThat(s.getSetupContext().state)
+                    .as("executed trade: no release-invalidation; still inside the re-arm cooldown")
+                    .isEqualTo(SetupState.IN_TRADE);
         } finally {
             bus.stop();
         }
