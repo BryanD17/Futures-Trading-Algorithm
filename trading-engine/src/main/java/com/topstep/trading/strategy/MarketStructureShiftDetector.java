@@ -79,13 +79,53 @@ public class MarketStructureShiftDetector {
     private MSS lastMSS;
     private int totalCandleCount;
 
+    /**
+     * V5 Agent 04 — the STDV+OTE M6 rule (the ONE MSS source the strategy
+     * gates on). {@code false} = the historical rule every other strategy
+     * keeps. When true an MSS is simply a CLOSE beyond the MOST RECENT
+     * confirmed opposite swing (fractal, {@code swingLookback} bars each side),
+     * each swing breakable once:
+     * <ul>
+     *   <li>no "must open on the other side of the level" condition (a bar
+     *       that gaps/opens through a level and closes beyond it is still a
+     *       shift);</li>
+     *   <li>no "strength &gt; 30 % of body" condition;</li>
+     *   <li>no separate prior-structure test — the sweep that precedes M6 in
+     *       the state machine IS the prior structure.</li>
+     * </ul>
+     * G1 (2026-09-28): most recent 5m swing low before the drop = 14:35 bar low
+     * 30578.75; the 15:10 bar closes 30576.75 below it → bearish MSS (the
+     * historical rule rejected it: strength 2.0 &lt; 0.3 &times; body 17.75).
+     */
+    private final boolean closeBeyondRecentSwing;
+    /** Timestamps of swings already broken (relaxed rule: one MSS per swing). */
+    private final java.util.Set<Instant> brokenSwings = new java.util.HashSet<>();
+
     public MarketStructureShiftDetector(int lookbackPeriod, int swingLookback) {
+        this(lookbackPeriod, swingLookback, false);
+    }
+
+    public MarketStructureShiftDetector(int lookbackPeriod, int swingLookback,
+                                        boolean closeBeyondRecentSwing) {
         this.lookbackPeriod = lookbackPeriod;
         this.swingLookback = swingLookback;
+        this.closeBeyondRecentSwing = closeBeyondRecentSwing;
         this.candles = new ArrayList<>();
         this.swingHighs = new ArrayList<>();
         this.swingLows = new ArrayList<>();
         this.totalCandleCount = 0;
+    }
+
+    /**
+     * The STDV+OTE M6 detector — constructed ONLY through this factory so the
+     * strategy and ictlib's shadow comparison can never drift apart.
+     */
+    public static MarketStructureShiftDetector forStdvOte() {
+        return new MarketStructureShiftDetector(50, 2, true);
+    }
+
+    public boolean isCloseBeyondRecentSwingRule() {
+        return closeBeyondRecentSwing;
     }
 
     /**
@@ -214,6 +254,9 @@ public class MarketStructureShiftDetector {
      * Detect Market Structure Shift on the current candle.
      */
     private MSS detectMSS(Candle current) {
+        if (closeBeyondRecentSwing) {
+            return detectCloseBeyondRecentSwing(current);
+        }
         int currentIndex = candles.size() - 1;
 
         // Look for bullish MSS: price breaks above a recent swing high
@@ -268,6 +311,34 @@ public class MarketStructureShiftDetector {
             }
         }
 
+        return null;
+    }
+
+    /** V5 relaxed rule — see {@link #closeBeyondRecentSwing}. */
+    private MSS detectCloseBeyondRecentSwing(Candle current) {
+        int currentIndex = candles.size() - 1;
+        SwingPoint hi = swingHighs.isEmpty() ? null : swingHighs.get(swingHighs.size() - 1);
+        SwingPoint lo = swingLows.isEmpty() ? null : swingLows.get(swingLows.size() - 1);
+        if (hi != null && currentIndex - hi.index >= 2 && !brokenSwings.contains(hi.timestamp)
+                && current.getClose() > hi.price) {
+            brokenSwings.add(hi.timestamp);
+            return new MSS(true, hi.price, current.getHigh(), current.getLow(),
+                    current.getTimestamp(), current.getClose() - hi.price, totalCandleCount);
+        }
+        if (lo != null && currentIndex - lo.index >= 2 && !brokenSwings.contains(lo.timestamp)
+                && current.getClose() < lo.price) {
+            brokenSwings.add(lo.timestamp);
+            return new MSS(false, lo.price, current.getHigh(), current.getLow(),
+                    current.getTimestamp(), lo.price - current.getClose(), totalCandleCount);
+        }
+        // Only the newest swing on each side is ever checked, so older
+        // broken markers are dead weight.
+        if (brokenSwings.size() > 2) {
+            java.util.Set<Instant> keep = new java.util.HashSet<>();
+            if (hi != null) keep.add(hi.timestamp);
+            if (lo != null) keep.add(lo.timestamp);
+            brokenSwings.retainAll(keep);
+        }
         return null;
     }
 
@@ -380,5 +451,6 @@ public class MarketStructureShiftDetector {
         swingLows.clear();
         lastMSS = null;
         totalCandleCount = 0;
+        brokenSwings.clear();
     }
 }

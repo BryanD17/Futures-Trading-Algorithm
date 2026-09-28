@@ -31,7 +31,7 @@ import java.util.List;
  * <p>Two structure truths are only tolerable if their divergence is MEASURED
  * (anti-pattern C3), so this class runs a SHADOW instance of the gate detector
  * over the same bars — the real class, constructed exactly as the strategy
- * constructs it ({@code new MarketStructureShiftDetector(50, 2)}), because it
+ * constructs it ({@code MarketStructureShiftDetector.forStdvOte()}), because it
  * is silent and cheap, so there is no reason to mirror its rule and risk
  * drift. The counters feed {@code [ICTLIB-DIFF <sym>] mss: ...}.
  *
@@ -74,8 +74,9 @@ public final class StructureEngine implements FamilyDetector {
         this.config = config;
         this.stats = stats;
         // Same construction the stdvote strategy uses, so the comparison is
-        // against the gate that actually runs (StdvOteRunnerStrategy.java:405).
-        this.shadowGate = new MarketStructureShiftDetector(50, 2);
+        // against the gate that actually runs — V5 Agent 04: both go through
+        // the ONE factory, so they cannot drift.
+        this.shadowGate = MarketStructureShiftDetector.forStdvOte();
     }
 
     @Override

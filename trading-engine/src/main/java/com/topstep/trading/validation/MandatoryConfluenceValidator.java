@@ -560,19 +560,34 @@ public class MandatoryConfluenceValidator {
                 + ctx.sweep.getSweptLevel() + ", raid score " + ctx.raidScore
                 + " >= " + spec.raidMinQuality());
 
-        // M5 — displacement + FVG.
+        // M5 — displacement + LINKED PD array (V5 Agent 04: one calibrated
+        // displacement detector; FVG created by / within fvg.linkBars of it,
+        // IFVG / breaker / OB accepted as the linkage — RC-09, RC-10).
         if (!ctx.displacement || ctx.fvg == null) {
             return ValidationResult.fail(
                     java.util.List.of("M5: displacement candle / FVG absent"), "M5");
         }
-        confirmations.add("M5: displacement + FVG present");
+        if (ctx.fvg.isBullish() != biasBullish) {
+            return ValidationResult.fail(
+                    java.util.List.of("M5: linked " + (ctx.m5LinkKind == null ? "FVG" : ctx.m5LinkKind)
+                            + " direction mismatches bias"), "M5");
+        }
+        confirmations.add("M5: displacement + " + (ctx.m5LinkKind == null ? "FVG" : ctx.m5LinkKind)
+                + " [" + ctx.fvg.getBottom() + "," + ctx.fvg.getTop() + "]"
+                + (ctx.displacementAt == null ? "" : " @" + ctx.displacementAt));
 
-        // M6 — MSS / CHoCH.
+        // M6 — MSS / CHoCH (V5 Agent 04: ONE source,
+        // MarketStructureShiftDetector.forStdvOte()).
         if (!ctx.mss) {
             return ValidationResult.fail(
                     java.util.List.of("M6: MSS / CHoCH not confirmed"), "M6");
         }
-        confirmations.add("M6: MSS confirmed");
+        if (ctx.mssAt != null && ctx.displacementAt != null && ctx.mssAt.isBefore(ctx.displacementAt)) {
+            return ValidationResult.fail(
+                    java.util.List.of("M6: MSS " + ctx.mssAt + " precedes displacement "
+                            + ctx.displacementAt), "M6");
+        }
+        confirmations.add("M6: MSS confirmed" + (ctx.mssAt == null ? "" : " @" + ctx.mssAt));
 
         // M7 — entry geometry.
         if (ctx.ote == null) {
@@ -589,33 +604,35 @@ public class MandatoryConfluenceValidator {
                             + " not in OTE band [" + ctx.ote.f79() + "," + ctx.ote.f62() + "]"),
                     "M7");
         }
-        // RR band from the ACTIVE RiskLimits' signal band when injected.
-        // Legacy safety: with no RiskLimits injected the historical constants
-        // apply — floor 2.0, no ceiling. RiskLimits' builder defaults carry
-        // the very same [2.0, +infinity) band, so wiring topstep50k() through
-        // here is behaviour-identical to the old hardcoded floor. Only the
-        // scalp profile carries a different band ([0.8, 1.5]). The validator
-        // deliberately does NOT read minRiskRewardRatio (3.0 on topstep50k),
-        // which would have tightened legacy emission from 2.0 → 3.0.
-        double rrFloor = (activeRiskLimits != null)
-                ? activeRiskLimits.getSignalMinRr() : MIN_RR_FLOOR_STDV_OTE;
-        double rrCeiling = (activeRiskLimits != null)
-                ? activeRiskLimits.getSignalMaxRr() : Double.POSITIVE_INFINITY;
-        if (ctx.rr < rrFloor) {
+        // V5 Agent 04 — ONE RR band (RC-13 / PF-07), read from OteConfig — the
+        // same accessor PropFirmRiskEngine reads (Agent 05): floor 1.0R legacy
+        // / 0.8R scalp checked against T1; ceiling 5.0R checked against the
+        // FINAL target. ctx.rrT1 == 0 (no ladder planned) → both vs ctx.rr.
+        // Recomputed by tryEmit on every attempt (re-plan), never cached.
+        boolean scalpProfile = ctx.scalpProfile;
+        double rrFloor = com.topstep.trading.strategy.stdvote.OteConfig.rrFloor(scalpProfile);
+        double rrCeiling = com.topstep.trading.strategy.stdvote.OteConfig.rrCeiling();
+        double rrAtT1 = ctx.rrT1 > 0 ? ctx.rrT1 : ctx.rr;
+        if (rrAtT1 < rrFloor - 1e-9) {
             return ValidationResult.fail(
-                    java.util.List.of("M7: RR " + ctx.rr
-                            + " < floor " + rrFloor), "M7");
+                    java.util.List.of("M7: RR(T1) " + String.format("%.2f", rrAtT1)
+                            + " < floor " + rrFloor + (scalpProfile ? " (scalp)" : " (legacy)")), "M7");
         }
-        if (ctx.rr > rrCeiling) {
+        if (ctx.rr > rrCeiling + 1e-9) {
             return ValidationResult.fail(
-                    java.util.List.of("M7: RR " + ctx.rr
+                    java.util.List.of("M7: RR(final) " + String.format("%.2f", ctx.rr)
                             + " > ceiling " + rrCeiling), "M7");
         }
-        confirmations.add("M7: in-zone, PD-array, RR=" + ctx.rr);
+        confirmations.add("M7: in-zone, PD-array " + ctx.pdArrayKind + ", RR(T1)="
+                + String.format("%.2f", rrAtT1) + " RR(final)=" + String.format("%.2f", ctx.rr)
+                + " band [" + rrFloor + "," + rrCeiling + "]");
 
         // M7b — 30m OTE confluence (V3 Agent 06): the chart's zone for the
         // signal direction must be REACTED (GATE mode only; LOG counts and
         // passes; ABSTAIN on no-zone ALWAYS passes — Rollout Doctrine).
+        // V5 Agent 04 (RC-18): default SCORING — evaluated + counted, never
+        // blocks; a REACTED verdict adds a tier confluence point in the
+        // runner. ote30m.mode=GATE re-blocks.
         com.topstep.trading.strategy.stdvote.Ote30mConfluenceGate m7b = ote30mGate;
         if (m7b != null) {
             com.topstep.trading.strategy.stdvote.Ote30mConfluenceGate.Decision d =

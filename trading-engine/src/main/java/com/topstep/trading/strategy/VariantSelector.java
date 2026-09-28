@@ -81,8 +81,35 @@ public class VariantSelector {
     /**
      * Select the optimal variant for the given context.
      */
+    /**
+     * V5 Agent 04 — the STDV+OTE tier ladder, MONOTONIC in both inputs and
+     * TOTAL: once M1..M9 pass (legacy OR scalp) every setup resolves to a
+     * tier; there is no "no qualifying tier" outcome. Raising the raid score
+     * or the optional-confluence count can only keep or raise the tier.
+     *
+     * <pre>
+     *   TIER_4: raid &ge; 8, optional &ge; 4, SMT satisfied (index pair)
+     *   TIER_3: raid &ge; 7, optional &ge; 3
+     *   TIER_2: raid &ge; 6, optional &ge; 2
+     *   TIER_1: everything else (M4 already enforced the raid floor)
+     * </pre>
+     */
+    public static TradeTier resolveStdvOteTier(int raidScore, int optionalConfluences,
+                                               boolean smtSatisfied) {
+        if (raidScore >= 8 && optionalConfluences >= 4 && smtSatisfied) return TradeTier.TIER_4;
+        if (raidScore >= 7 && optionalConfluences >= 3) return TradeTier.TIER_3;
+        if (raidScore >= 6 && optionalConfluences >= 2) return TradeTier.TIER_2;
+        return TradeTier.TIER_1;
+    }
+
     public static SelectionResult selectVariant(SelectionContext ctx) {
         switch (ctx.baseTierLevel) {
+            case 1:
+                // V5 Agent 04: TIER_1 is a real, tradeable tier (M1..M9 all
+                // passed) — it maps to the most conservative exit variant,
+                // never to "no trade" and never to an "unknown" fallback.
+                return new SelectionResult(TradeTierVariant.TIER_2A_SCALP,
+                    "TIER_1 (confirmed setup) - conservative scalp exit", true);
             case 2:
                 return selectTier2Variant(ctx);
             case 3:

@@ -116,6 +116,16 @@ public final class EngineConfig {
         k.add(key("displacement.atrMult", Type.DOUBLE, "1.5", "displacement range >= atrMult x ATR", "stdvote.displacement.atrMult"));
         k.add(key("displacement.bodyPct", Type.DOUBLE, "0.65", "displacement body fraction", "stdvote.displacement.bodyPct"));
         k.add(key("displacement.recentBars", Type.INT, "5", "displacement recency window in detector bars (PR #151 key)", "stdvote.displacement.recentBars"));
+        // V5 Agent 04: FVG linkage, OTE anchor/fibs/stop, ONE RR band (read via OteConfig)
+        k.add(key("fvg.linkBars", Type.INT, "3", "M5: FVG created by the displacement or within N detector bars (Agent 04)"));
+        k.add(key("ote.anchorMode", Type.ENUM, "DEALING_RANGE", "OTE anchor DEALING_RANGE | TRADING_DAY | IMPULSE (Agent 04)"));
+        k.add(key("ote.fib62", Type.DOUBLE, "0.618", "OTE band near edge (Agent 04)"));
+        k.add(key("ote.fib705", Type.DOUBLE, "0.705", "OTE sweet spot (Agent 04)"));
+        k.add(key("ote.fib79", Type.DOUBLE, "0.786", "OTE band far edge (Agent 04)"));
+        k.add(key("ote.stopMode", Type.ENUM, "BAND", "OTE stop BAND (beyond 0.786 / PD array) | ORIGIN (beyond 1.0) (Agent 04)"));
+        k.add(key("risk.rrFloor", Type.DOUBLE, "1.0", "ONE RR band: floor vs T1, legacy profile (Agent 04; risk engine: Agent 05)"));
+        k.add(key("risk.rrFloor.scalp", Type.DOUBLE, "0.8", "ONE RR band: floor vs T1, scalp profile (Agent 04)"));
+        k.add(key("risk.rrCeiling", Type.DOUBLE, "5.0", "ONE RR band: ceiling vs final target, both profiles (Agent 04)"));
         // bias
         k.add(key("bias.vote.mode", Type.ENUM, "VOTE", "LEGACY | LOG | VOTE - which bias feeds recordHtfBias (V5 Agent 03: VOTE)"));
         k.add(key("bias.voteRule", Type.ENUM, "ADAPTIVE", "STRICT_3OF4 | ADAPTIVE vote aggregation (Agent 03)"));
@@ -131,7 +141,7 @@ public final class EngineConfig {
         k.add(key("pd.minRangeTicks", Type.INT, null, "min dealing range ticks (default 2 x chart.minLegTicks)"));
         k.add(key("pd.minRangeTicks.<SYM>", Type.INT, null, "per-symbol min dealing range"));
         k.add(key("pd.d1MinBars", Type.INT, "10", "D1 depth before R0 governs"));
-        k.add(key("ote30m.confluence", Type.ENUM, "LOG", "M7b mode OFF | LOG | GATE"));
+        k.add(key("ote30m.mode", Type.ENUM, "SCORING", "M7b mode OFF | LOG | SCORING | GATE (V5 Agent 04: SCORING)", "ote30m.confluence"));
         k.add(key("ote30m.acceptArmed", Type.BOOL, "false", "M7b accepts ARMED"));
         k.add(key("ote.stats.file", Type.PATH, "data/ote_agreement_stats.jsonl", "OTE agreement stats output"));
         // levels + raid scoring (Agent 03)
@@ -587,10 +597,15 @@ public final class EngineConfig {
         out.add("BIAS: vote.mode=" + getString("bias.vote.mode", "LOG")
                 + " hysteresis=" + (getBoolean("bias.hysteresis", false) ? "ON" : "OFF")
                 + " neutralGraceBars=" + getInt("bias.neutralGraceBars", 2));
-        out.add("DISPLACEMENT: atrMult=" + getDouble("displacement.atrMult", 1.5)
-                + " bodyPct=" + getDouble("displacement.bodyPct", 0.65)
-                + " recentBars=" + getInt("displacement.recentBars", 5)
+        out.add("DISPLACEMENT: atrMult=" + getDouble("displacement.atrMult", 1.2)
+                + " bodyPct=" + getDouble("displacement.bodyPct", 0.50)
+                + " recentBars=" + getInt("displacement.recentBars", 12)
                 + " on " + getInt("detector.timeframe", 5) + "m detector bars");
+        out.add("OTE (Agent 04): anchor=" + getString("ote.anchorMode", "DEALING_RANGE")
+                + " fibs=" + getDouble("ote.fib62", 0.618) + "/" + getDouble("ote.fib705", 0.705)
+                + "/" + getDouble("ote.fib79", 0.786) + " M7b=" + getString("ote30m.mode", "SCORING")
+                + " | ONE RR band legacy [" + getDouble("risk.rrFloor", 1.0) + ", " + getDouble("risk.rrCeiling", 5.0)
+                + "] scalp [" + getDouble("risk.rrFloor.scalp", 0.8) + ", " + getDouble("risk.rrCeiling", 5.0) + "]");
         out.add("BACKFILL: 1m " + getInt("backfill.days", 3) + " day(s) [clamped 1..7], HTF "
                 + getInt("htf.backfill.days", 30) + " day(s) [clamped 7..90]");
         out.add("TRADE PROFILE: " + getString("trade.profile", "STRICT"));

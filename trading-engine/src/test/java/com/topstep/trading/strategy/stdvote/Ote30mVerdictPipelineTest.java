@@ -195,6 +195,7 @@ class Ote30mVerdictPipelineTest {
         assertThat(g.gateCheck(true).passed()).isTrue();
         assertThat(g.evaluationCount()).isZero();
         assertThat(g.gatesToken()).isEqualTo("m7b=OFF");
-        assertThat(Ote30mConfluenceGate.parseMode("banana")).isEqualTo(Mode.LOG);
+        // V5 Agent 04 (RC-18): the fallback / default mode is SCORING.
+        assertThat(Ote30mConfluenceGate.parseMode("banana")).isEqualTo(Mode.SCORING);
     }
 }

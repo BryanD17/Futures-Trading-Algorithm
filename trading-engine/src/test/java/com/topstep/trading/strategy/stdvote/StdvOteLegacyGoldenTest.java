@@ -22,31 +22,33 @@ import static org.assertj.core.api.Assertions.within;
 /**
  * SA3 GOLDEN-FILE regression test — the proof that legacy mode is untouched.
  *
- * <p>The exact emission values below were captured by running the
- * {@code StdvOteWiringIntegrationTest} fixture at commit {@code 36f07c2}
- * (current HEAD, BEFORE any SA3 change was made):
+ * <p>RE-CAPTURED by V5 Agent 04 (chart-parity OTE, one RR band). The SA3
+ * values (stop 21011 / target 21058 −2σ / rr 2.92 / tier-default ladder) were
+ * the pre-V5 geometry; V5 intentionally changes legacy planning:
  *
  * <pre>
  *   signalType = LONG_ENTRY, side = BUY, tier = TIER_1, quantity = 6
- *   entry  = 21023.0
- *   stop   = 21011.0
- *   target = 21058.0        (the −2σ STDV projection off leg [21012, 21035])
- *   rr     = 2.9166666666666665   (= 35/12, both ctx.rr and getActualRR())
- *   signal riskRewardRatio = 2.0  (tier default — legacy signal constructor)
- *   signal partials = [[1.0, 0.5], [2.0, 0.5]]  (TIER_1 ladder)
+ *   zone   = dealing range [21012, 21052] → 0.618 21027.25 / 0.786 21020.50
+ *   entry  = 21023.0        (displacement FVG top, unchanged)
+ *   stop   = 21019.0        (FVG far edge 21020 − 4 ticks; beyond the 0.786)
+ *   T1     = 21032.0 (0.5)  RR(T1) = 2.25
+ *   target = 21036.75       (T2 = 0.382 — furthest rung within 5.0R; T3 21052 = 7.25R)
+ *   rr     = 3.4375         (= 13.75 / 4, both ctx.rr and getActualRR())
+ *   signal riskRewardRatio = 3.4375 (the REAL RR)
+ *   signal partials = [[2.25, 0.5], [3.4375, 0.5]]  (T1 half, T2 half)
  * </pre>
  *
  * With {@code scalpMode.enabled=false} (or absent — the default) every one
- * of those numbers must still be produced EXACTLY after the SA3 changes.
+ * of those numbers must be produced EXACTLY.
  */
 @DisplayName("StdvOteLegacyGoldenTest (legacy emission byte-for-byte after SA3)")
 class StdvOteLegacyGoldenTest {
 
     // Golden values captured at HEAD (36f07c2) before the SA3 change.
     private static final double GOLDEN_ENTRY = 21023.0;
-    private static final double GOLDEN_STOP = 21011.0;
-    private static final double GOLDEN_TARGET = 21058.0;
-    private static final double GOLDEN_RR = 2.9166666666666665;
+    private static final double GOLDEN_STOP = 21019.0;
+    private static final double GOLDEN_TARGET = 21036.75;
+    private static final double GOLDEN_RR = 3.4375;
     private static final int GOLDEN_QUANTITY = 6;
 
     @BeforeEach
@@ -107,13 +109,13 @@ class StdvOteLegacyGoldenTest {
         assertThat(evt.getStopPrice()).isEqualTo(GOLDEN_STOP);
         assertThat(evt.getTargetPrice()).isEqualTo(GOLDEN_TARGET);
 
-        // RR at the −2σ target: 35/12.
+        // RR at the T2 target: 13.75/4.
         assertThat(evt.getActualRR()).isCloseTo(GOLDEN_RR, within(1e-12));
 
-        // Legacy signal metadata unchanged: tier-default RR and TIER_1 ladder.
-        assertThat(evt.getRiskRewardRatio()).isEqualTo(2.0);
+        // V5: the signal carries the REAL RR and the real T1 / final ladder.
+        assertThat(evt.getRiskRewardRatio()).isCloseTo(GOLDEN_RR, within(1e-12));
         assertThat(evt.getPartialProfitTargets()).isDeepEqualTo(
-                new double[][] {{1.0, 0.5}, {2.0, 0.5}});
+                new double[][] {{2.25, 0.5}, {3.4375, 0.5}});
         assertThat(evt.getReason()).startsWith("STDV_OTE:");
     }
 

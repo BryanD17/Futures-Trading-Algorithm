@@ -496,12 +496,22 @@ public final class StdvOteStrategy implements TradingStrategy {
 
     /** Record a displacement candle and its FVG. Only valid from {@code SWEEP_DONE}. */
     void recordDisplacement(FairValueGap fvg) {
+        recordDisplacement(fvg, "FVG", null);
+    }
+
+    /**
+     * V5 Agent 04: displacement + its LINKED PD array ({@code linkKind} FVG /
+     * IFVG / BREAKER / OB — RC-10) and the displacement bar's timestamp.
+     */
+    void recordDisplacement(FairValueGap fvg, String linkKind, java.time.Instant displacementAt) {
         if (setup.state != SetupState.SWEEP_DONE) return;
         if (fvg == null) return;
         boolean biasBullish = (setup.htfBias == MarketBias.BULLISH);
         if (fvg.isBullish() != biasBullish) return;
         setup.displacement = true;
         setup.fvg = fvg;
+        setup.m5LinkKind = linkKind;
+        setup.displacementAt = displacementAt;
         setup.state = SetupState.DISPLACED;
     }
 
@@ -510,9 +520,61 @@ public final class StdvOteStrategy implements TradingStrategy {
      * valid from {@code DISPLACED}.
      */
     void recordMss() {
+        recordMss(null);
+    }
+
+    /** V5 Agent 04: MSS with the detector-bar timestamp of the break. */
+    void recordMss(java.time.Instant mssAt) {
         if (setup.state != SetupState.DISPLACED) return;
         setup.mss = true;
+        setup.mssAt = mssAt;
         setup.state = SetupState.MSS_CONFIRMED;
+    }
+
+    // -- V5 Agent 04: explicit OTE plan / ARM / ALARM (RC-11, RC-12) --
+
+    /**
+     * Fix the OTE zone on the ANCHORED leg (dealing range by default) once
+     * the MSS is confirmed. Only valid from {@code MSS_CONFIRMED}; the zone
+     * does not move afterwards (D-19). No state change.
+     */
+    boolean recordOtePlan(OteZone zone, String anchorMode, String anchorSource,
+                          double sweepExtreme) {
+        if (setup.state != SetupState.MSS_CONFIRMED || zone == null) return false;
+        boolean bullish = (setup.htfBias == MarketBias.BULLISH);
+        if (zone.bullish() != bullish) return false;
+        setup.ote = zone;
+        setup.oteAnchorMode = anchorMode;
+        setup.oteAnchorSource = anchorSource;
+        setup.sweepExtreme = sweepExtreme;
+        return true;
+    }
+
+    /**
+     * ARM: price traded into the band for the first time after the MSS.
+     * {@code MSS_CONFIRMED -> OTE_ARMED}. Requires a planned zone.
+     */
+    boolean armOte(java.time.Instant at) {
+        if (setup.state != SetupState.MSS_CONFIRMED || setup.ote == null
+                || setup.oteAnchorMode == null) return false;
+        setup.oteArmedAt = at;
+        setup.state = SetupState.OTE_ARMED;
+        return true;
+    }
+
+    /**
+     * ALARM: a PD array overlaps the band and price reacted. Records the
+     * entry level (already clamped into the band) and the array's far edge
+     * (stop side). The emission attempt ({@link #tryEmit}) follows.
+     */
+    boolean recordOteAlarm(double entryLevel, String pdKind, double farEdge,
+                           java.time.Instant at) {
+        if (setup.state != SetupState.OTE_ARMED || setup.ote == null) return false;
+        setup.pdArrayInOte = entryLevel;
+        setup.pdArrayKind = pdKind;
+        setup.pdArrayFarEdge = farEdge;
+        setup.oteAlarmAt = at;
+        return true;
     }
 
     /**
@@ -599,15 +661,59 @@ public final class StdvOteStrategy implements TradingStrategy {
 
         double entry = oteCalculator.chooseEntry(
                 setup.ote, OptionalDouble.of(setup.pdArrayInOte), tickSize);
-        double stop = oteCalculator.stopPrice(setup.ote, tickSize, stopBufferTicks);
+        boolean anchored = setup.oteAnchorMode != null;
+        double stop = anchored
+                ? anchoredStop(setup.ote, tickSize, stopBufferTicks)
+                : oteCalculator.stopPrice(setup.ote, tickSize, stopBufferTicks);
         double targetPrice;
+        double t1Price;
+        double[][] ladder = null;
         ScalpTargetCalculator.Decision scalpDecision = null;
-        if (scalpTargetCalculator == null) {
+        setup.scalpProfile = isScalpMode();
+        if (scalpTargetCalculator == null && anchored) {
+            // V5 Agent 04 -- owner's ladder on the anchored leg: T1 = 0.5,
+            // T2 = 0.382, T3 = the leg terminus. The signal carries the
+            // FURTHEST rung whose RR stays within the ONE ceiling; the M7
+            // floor is checked against T1. Recomputed on every attempt.
+            double[] rungs = oteCalculator.targetLadder(setup.ote, tickSize);
+            setup.t1 = rungs[0];
+            setup.t2 = rungs[1];
+            setup.t3 = rungs[2];
+            double ceiling = OteConfig.rrCeiling();
+            t1Price = rungs[0];
+            targetPrice = rungs[0];
+            for (double r : rungs) {
+                if (oteCalculator.rewardToRisk(entry, stop, r) <= ceiling + 1e-9) targetPrice = r;
+            }
+            double rT1 = oteCalculator.rewardToRisk(entry, stop, t1Price);
+            double rFinal = oteCalculator.rewardToRisk(entry, stop, targetPrice);
+            ladder = (targetPrice == t1Price)
+                    ? new double[][] {{ rT1, 1.0 }}
+                    : new double[][] {{ rT1, 0.5 }, { rFinal, 0.5 }};
+        } else if (scalpTargetCalculator == null) {
             // LEGACY mode: target the −2σ STDV projection — unchanged.
             StdvProjection targetMinus2 = findProjection(-2.0);
             targetPrice = (targetMinus2 != null)
                     ? targetMinus2.effectivePrice()
                     : entry;
+            // V5 Agent 04 (one RR band): when the -2σ would exceed the
+            // ceiling, step inward along the STDV ladder to the furthest
+            // projection that stays within it (a valid setup is re-planned,
+            // not thrown away for an over-ambitious target).
+            double ceiling = OteConfig.rrCeiling();
+            if (oteCalculator.rewardToRisk(entry, stop, targetPrice) > ceiling + 1e-9) {
+                for (double sigma : new double[] {-1.0, -0.27}) {
+                    StdvProjection p = findProjection(sigma);
+                    if (p == null) continue;
+                    double px = p.effectivePrice();
+                    boolean beyond = setup.legBullish ? px > entry : px < entry;
+                    if (beyond && oteCalculator.rewardToRisk(entry, stop, px) <= ceiling + 1e-9) {
+                        targetPrice = px;
+                        break;
+                    }
+                }
+            }
+            t1Price = targetPrice;
         } else {
             // SCALP mode (SA3): closer of nearest-opposing-liquidity / FVG
             // origin, hard-capped at 1R; exactly 1R when no candidate is
@@ -627,12 +733,15 @@ public final class StdvOteStrategy implements TradingStrategy {
                 return false;
             }
             targetPrice = scalpDecision.targetPrice();
+            t1Price = targetPrice;
         }
         double rr = oteCalculator.rewardToRisk(entry, stop, targetPrice);
 
         setup.entry = entry;
         setup.stop = stop;
         setup.rr = rr;
+        setup.finalTarget = targetPrice;
+        setup.rrT1 = oteCalculator.rewardToRisk(entry, stop, t1Price);
         setup.tier = tier;
         setup.sizeRequest = sizeRequest;
 
@@ -649,7 +758,17 @@ public final class StdvOteStrategy implements TradingStrategy {
         OrderSide side = bullish ? OrderSide.BUY : OrderSide.SELL;
         SignalType type = bullish ? SignalType.LONG_ENTRY : SignalType.SHORT_ENTRY;
         StrategySignalEvent signal;
-        if (scalpDecision == null) {
+        if (scalpDecision == null && ladder != null) {
+            // V5 anchored plan: carry the REAL RR and the real T1/final ladder.
+            signal = new StrategySignalEvent(
+                    type, symbol, side, entry, stop, targetPrice,
+                    "STDV_OTE: " + tier + " size=" + sizeRequest
+                            + " anchor=" + setup.oteAnchorMode
+                            + " T1=" + setup.t1 + " T2=" + setup.t2 + " T3=" + setup.t3
+                            + " RR(T1)=" + String.format("%.2f", setup.rrT1)
+                            + " RR=" + String.format("%.2f", rr),
+                    tier, sizeRequest, rr, ladder, false);
+        } else if (scalpDecision == null) {
             // LEGACY signal construction — unchanged (tier-default RR and
             // tier-default partial ladder, exactly as before).
             signal = new StrategySignalEvent(
@@ -677,6 +796,32 @@ public final class StdvOteStrategy implements TradingStrategy {
         setup.sizeFilled = sizeRequest;
         setup.state = SetupState.IN_TRADE;
         return true;
+    }
+
+    /**
+     * V5 Agent 04 stop for an anchored OTE: beyond the band's far edge
+     * (0.786) or the PD array's far edge -- whichever is further from entry --
+     * plus the buffer. The OTE thesis (sell premium / buy discount of the
+     * dealing range) is void once price accepts beyond the 0.786 AND the array
+     * the entry sits in; the range 1.0 would put the stop beyond the whole
+     * retrace. G1: max(30673.00, OB top 30650.00) + 4 ticks = 30674.00.
+     */
+    private double anchoredStop(OteZone zone, double tickSize, int bufferTicks) {
+        if ("ORIGIN".equals(OteConfig.stopMode())) {
+            return oteCalculator.stopPrice(zone, tickSize, bufferTicks);
+        }
+        double buffer = Math.max(0, bufferTicks) * tickSize;
+        double far = zone.f79();
+        if (zone.bullish()) {
+            if (!Double.isNaN(setup.pdArrayFarEdge)) far = Math.min(far, setup.pdArrayFarEdge);
+            return roundTick(far - buffer, tickSize);
+        }
+        if (!Double.isNaN(setup.pdArrayFarEdge)) far = Math.max(far, setup.pdArrayFarEdge);
+        return roundTick(far + buffer, tickSize);
+    }
+
+    private static double roundTick(double p, double tick) {
+        return tick > 0 ? Math.round(p / tick) * tick : p;
     }
 
     /**

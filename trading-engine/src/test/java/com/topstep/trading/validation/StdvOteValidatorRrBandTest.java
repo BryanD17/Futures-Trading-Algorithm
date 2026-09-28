@@ -4,8 +4,10 @@ import com.topstep.trading.domain.RiskLimits;
 import com.topstep.trading.strategy.FairValueGap;
 import com.topstep.trading.strategy.LiquiditySweep;
 import com.topstep.trading.strategy.MarketBias;
+import com.topstep.trading.strategy.stdvote.OteConfig;
 import com.topstep.trading.strategy.stdvote.OteZone;
 import com.topstep.trading.strategy.stdvote.SetupContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -15,16 +17,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * SA3 tests for the M7 RR band sourced from the ACTIVE RiskLimits.
+ * V5 Agent 04 (RC-13 / PF-07) — the ONE RR band.
  *
- * <p>The critical legacy constraint: the historical validator floor is 2.0
- * while {@code topstep50k().minRiskRewardRatio} is 3.0. The validator reads
- * the dedicated signal band ({@code signalMinRr}/{@code signalMaxRr}), NOT
- * {@code minRiskRewardRatio} — so a legacy 2.5-RR setup that emitted before
- * this change still emits with topstep50k() injected.
+ * <p>Floor 1.0R legacy / 0.8R scalp, checked against T1 ({@code ctx.rrT1});
+ * ceiling 5.0R for both profiles, checked against the FINAL target
+ * ({@code ctx.rr}). The band comes from {@link OteConfig} — the same accessor
+ * PropFirmRiskEngine reads (Agent 05) — so an injected RiskLimits profile can
+ * no longer produce a second, different band.
  */
-@DisplayName("MandatoryConfluenceValidator M7 RR band from active RiskLimits")
+@DisplayName("MandatoryConfluenceValidator M7 — ONE RR band (V5)")
 class StdvOteValidatorRrBandTest {
+
+    @AfterEach
+    void clear() {
+        System.clearProperty("risk.rrFloor");
+        System.clearProperty("risk.rrFloor.scalp");
+        System.clearProperty("risk.rrCeiling");
+    }
 
     private MandatoryConfluenceValidator newValidator() {
         return new MandatoryConfluenceValidator(
@@ -33,8 +42,8 @@ class StdvOteValidatorRrBandTest {
                 mock(com.topstep.trading.chartstate.ChartStateQueryAPI.class));
     }
 
-    /** Same happy-path context as StdvOteValidatorTest; rr is set per test. */
-    private SetupContext happyCtx(double rr) {
+    /** Happy-path context; rr (final) and rrT1 set per test. */
+    private SetupContext ctx(double rrT1, double rrFinal, boolean scalp) {
         SetupContext ctx = new SetupContext();
         ctx.symbol = "MNQ";
         ctx.htfBias = MarketBias.BULLISH;
@@ -49,55 +58,74 @@ class StdvOteValidatorRrBandTest {
         ctx.pdArrayInOte = 20020.00;
         ctx.entry = 20020.00;
         ctx.stop = 19951.00;
-        ctx.rr = rr;
+        ctx.rrT1 = rrT1;
+        ctx.rr = rrFinal;
+        ctx.scalpProfile = scalp;
         ctx.sizeRequest = 12;
         ctx.lastGateFailed = null;
         return ctx;
     }
 
-    @Test
-    @DisplayName("no RiskLimits injected: historical band [2.0, +inf) applies unchanged")
-    void noInjectionKeepsHistoricalBand() {
-        MandatoryConfluenceValidator v = newValidator();
-        assertThat(v.validateStdvOte(happyCtx(2.0)).passed()).isTrue();
-        assertThat(v.validateStdvOte(happyCtx(1.99)).passed()).isFalse();
-        assertThat(v.validateStdvOte(happyCtx(50.0)).passed()).isTrue(); // no ceiling
+    private boolean passes(double rrT1, double rrFinal, boolean scalp) {
+        return newValidator().validateStdvOte(ctx(rrT1, rrFinal, scalp)).passed();
     }
 
     @Test
-    @DisplayName("CRITICAL: topstep50k() injected does NOT tighten legacy emission to 3.0")
-    void legacyProfileDoesNotTightenTo3() {
-        MandatoryConfluenceValidator v = newValidator();
-        v.setActiveRiskLimits(RiskLimits.topstep50k());
-        // 2.5 RR is below topstep50k().minRiskRewardRatio (3.0) but above the
-        // legacy validator floor (2.0) — it must STILL pass M7, proving the
-        // validator reads signalMinRr, not minRiskRewardRatio.
-        assertThat(v.validateStdvOte(happyCtx(2.5)).passed()).isTrue();
-        assertThat(v.validateStdvOte(happyCtx(2.0)).passed()).isTrue();
-        ValidationResult below = v.validateStdvOte(happyCtx(1.99));
-        assertThat(below.passed()).isFalse();
-        assertThat(below.getSummary()).isEqualTo("M7");
-        // And still no ceiling for legacy.
-        assertThat(v.validateStdvOte(happyCtx(5.9)).passed()).isTrue();
+    @DisplayName("0.9R: rejected in legacy (floor 1.0), accepted in scalp (floor 0.8)")
+    void pointNineR() {
+        ValidationResult legacy = newValidator().validateStdvOte(ctx(0.9, 0.9, false));
+        assertThat(legacy.passed()).isFalse();
+        assertThat(legacy.getSummary()).isEqualTo("M7");
+        assertThat(legacy.getFailures().get(0)).contains("floor 1.0").contains("legacy");
+        assertThat(passes(0.9, 0.9, true)).isTrue();
     }
 
     @Test
-    @DisplayName("topstep50kScalp() injected: band [0.8, 1.5] enforced both ways")
-    void scalpBandEnforced() {
+    @DisplayName("3.2R: accepted in both legacy and scalp")
+    void threePointTwoR() {
+        assertThat(passes(3.2, 3.2, false)).isTrue();
+        assertThat(passes(3.2, 3.2, true)).isTrue();
+    }
+
+    @Test
+    @DisplayName("floor is checked against T1, ceiling against the FINAL target")
+    void floorVsT1CeilingVsFinal() {
+        // G1 geometry: RR(T1)=2.01, RR(final T2)=3.25 → pass.
+        assertThat(passes(2.01, 3.25, false)).isTrue();
+        // T1 below the floor kills it even with a juicy final target.
+        assertThat(passes(0.9, 3.25, false)).isFalse();
+        // Final above the ceiling kills it even with a fine T1.
+        ValidationResult r = newValidator().validateStdvOte(ctx(2.0, 5.5, false));
+        assertThat(r.passed()).isFalse();
+        assertThat(r.getFailures().get(0)).contains("ceiling 5.0");
+        // No ladder planned (rrT1 == 0): both checks use ctx.rr.
+        assertThat(passes(0.0, 1.0, false)).isTrue();
+        assertThat(passes(0.0, 5.0, false)).isTrue();
+        assertThat(passes(0.0, 5.01, false)).isFalse();
+        assertThat(passes(0.0, 0.79, true)).isFalse();
+    }
+
+    @Test
+    @DisplayName("an injected RiskLimits profile cannot create a second band")
+    void riskLimitsInjectionDoesNotChangeTheBand() {
         MandatoryConfluenceValidator v = newValidator();
-        v.setActiveRiskLimits(RiskLimits.topstep50kScalp());
-        assertThat(v.validateStdvOte(happyCtx(0.8)).passed()).isTrue();
-        assertThat(v.validateStdvOte(happyCtx(1.0)).passed()).isTrue();
-        assertThat(v.validateStdvOte(happyCtx(1.5)).passed()).isTrue();
+        v.setActiveRiskLimits(RiskLimits.topstep50k());      // legacy signal band [2.0, inf)
+        assertThat(v.validateStdvOte(ctx(1.5, 1.5, false)).passed()).isTrue();
+        assertThat(v.validateStdvOte(ctx(5.9, 5.9, false)).passed()).isFalse();
+        v.setActiveRiskLimits(RiskLimits.topstep50kScalp()); // scalp signal band [0.8, 1.5]
+        assertThat(v.validateStdvOte(ctx(3.2, 3.2, true)).passed()).isTrue();
+    }
 
-        ValidationResult tooLow = v.validateStdvOte(happyCtx(0.79));
-        assertThat(tooLow.passed()).isFalse();
-        assertThat(tooLow.getSummary()).isEqualTo("M7");
-        assertThat(tooLow.getFailures().get(0)).contains("floor");
-
-        ValidationResult tooHigh = v.validateStdvOte(happyCtx(1.51));
-        assertThat(tooHigh.passed()).isFalse();
-        assertThat(tooHigh.getSummary()).isEqualTo("M7");
-        assertThat(tooHigh.getFailures().get(0)).contains("ceiling");
+    @Test
+    @DisplayName("band is configurable (risk.rrFloor / risk.rrFloor.scalp / risk.rrCeiling)")
+    void configurable() {
+        assertThat(OteConfig.rrFloor(false)).isEqualTo(1.0);
+        assertThat(OteConfig.rrFloor(true)).isEqualTo(0.8);
+        assertThat(OteConfig.rrCeiling()).isEqualTo(5.0);
+        System.setProperty("risk.rrFloor", "1.5");
+        System.setProperty("risk.rrCeiling", "3.0");
+        assertThat(passes(1.2, 1.2, false)).isFalse();
+        assertThat(passes(3.2, 3.2, false)).isFalse();
+        assertThat(passes(2.0, 2.9, false)).isTrue();
     }
 }

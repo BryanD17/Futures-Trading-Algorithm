@@ -8,8 +8,9 @@ import java.util.OptionalDouble;
 /**
  * Canonical ICT Optimal Trade Entry calculator.
  *
- * <p>Builds an {@link OteZone} from an LTF impulse leg using the canonical
- * Fibonacci levels (0.50 equilibrium, 0.62, 0.705, 0.79, 1.0), and produces
+ * <p>Builds an {@link OteZone} from an anchored leg using the canonical
+ * Fibonacci levels (0.50 equilibrium, 0.618, 0.705, 0.786, 1.0 — V5 Agent 04:
+ * the chart-parity constants, read through {@link OteConfig}), and produces
  * an entry price + stop price for a valid setup. The previous statistical
  * empirical-pullback model (see {@code StatisticalRetracementEngine}) is
  * <strong>demoted</strong> by this refactor; it is no longer the entry
@@ -23,11 +24,11 @@ import java.util.OptionalDouble;
 public final class OteEntryCalculator {
 
     /** Default precise entry level (Fibonacci 0.705). */
-    public static final double PRECISE_ENTRY = 0.705;
-    /** Near edge of the OTE band (0.62 — closer to impulse terminus). */
-    public static final double ZONE_NEAR = 0.62;
-    /** Far edge of the OTE band (0.79 — deeper retracement). */
-    public static final double ZONE_FAR = 0.79;
+    public static final double PRECISE_ENTRY = OteConfig.FIB_705;
+    /** Near edge of the OTE band (0.618 — closer to impulse terminus). */
+    public static final double ZONE_NEAR = OteConfig.FIB_62;
+    /** Far edge of the OTE band (0.786 — deeper retracement). */
+    public static final double ZONE_FAR = OteConfig.FIB_79;
     /** Equilibrium (50% of leg). */
     public static final double EQUILIBRIUM = 0.50;
     /** Invalidation level (origin of the impulse). */
@@ -52,6 +53,9 @@ public final class OteEntryCalculator {
             return Optional.empty();
         }
         double range = impulseHigh - impulseLow;
+        double r62 = OteConfig.fib62();
+        double r705 = OteConfig.fib705();
+        double r79 = OteConfig.fib79();
 
         double eq50;
         double f62;
@@ -59,16 +63,16 @@ public final class OteEntryCalculator {
         double f79;
         double one00;
         if (bullish) {
-            eq50  = impulseHigh - 0.50  * range;
-            f62   = impulseHigh - 0.62  * range;
-            f705  = impulseHigh - 0.705 * range;
-            f79   = impulseHigh - 0.79  * range;
+            eq50  = impulseHigh - 0.50 * range;
+            f62   = impulseHigh - r62  * range;
+            f705  = impulseHigh - r705 * range;
+            f79   = impulseHigh - r79  * range;
             one00 = impulseLow;
         } else {
-            eq50  = impulseLow + 0.50  * range;
-            f62   = impulseLow + 0.62  * range;
-            f705  = impulseLow + 0.705 * range;
-            f79   = impulseLow + 0.79  * range;
+            eq50  = impulseLow + 0.50 * range;
+            f62   = impulseLow + r62  * range;
+            f705  = impulseLow + r705 * range;
+            f79   = impulseLow + r79  * range;
             one00 = impulseHigh;
         }
 
@@ -138,7 +142,10 @@ public final class OteEntryCalculator {
      * fall back to the bottom if the bottom is inside. For a bearish setup,
      * mirror: prefer the FVG's BOTTOM, fall back to the top.
      *
-     * <p>Returns empty when neither FVG edge lies inside the zone.
+     * <p>V5 Agent 04 (D-19 / RC-11): a gap that merely OVERLAPS the band
+     * qualifies — when neither edge is inside, the entry is the band edge the
+     * retrace reaches first inside the gap (clamped). Returns empty only when
+     * the gap does not overlap the band at all.
      */
     public OptionalDouble bestFvgEdgeInZone(OteZone zone, FairValueGap fvg) {
         if (zone == null || fvg == null) return OptionalDouble.empty();
@@ -153,7 +160,40 @@ public final class OteEntryCalculator {
         }
         if (zone.contains(primary))  return OptionalDouble.of(primary);
         if (zone.contains(fallback)) return OptionalDouble.of(fallback);
+        double lo = Math.min(zone.f62(), zone.f79());
+        double hi = Math.max(zone.f62(), zone.f79());
+        double gLo = Math.min(fvg.getBottom(), fvg.getTop());
+        double gHi = Math.max(fvg.getBottom(), fvg.getTop());
+        if (gLo <= hi && gHi >= lo) {
+            // Band sits entirely inside the gap: the retrace meets the near
+            // edge (0.618) first.
+            return OptionalDouble.of(zone.f62());
+        }
         return OptionalDouble.empty();
+    }
+
+    /**
+     * Price at retracement ratio {@code r} of the zone's leg, measured from the
+     * leg terminus (0.0) back toward the origin (1.0): bearish
+     * {@code legLow + r·range}, bullish {@code legHigh − r·range}; tick-rounded.
+     */
+    public double fibLevel(OteZone zone, double r, double tickSize) {
+        double range = zone.legHigh() - zone.legLow();
+        double raw = zone.bullish() ? zone.legHigh() - r * range : zone.legLow() + r * range;
+        return roundToTick(raw, tickSize);
+    }
+
+    /**
+     * Owner's target ladder for an anchored leg (V5 Agent 04): T1 = 0.5
+     * (equilibrium), T2 = 0.382, T3 = the leg terminus (0.0 — the range
+     * low for shorts / high for longs).
+     */
+    public double[] targetLadder(OteZone zone, double tickSize) {
+        return new double[] {
+                fibLevel(zone, OteConfig.FIB_50, tickSize),
+                fibLevel(zone, OteConfig.FIB_382, tickSize),
+                fibLevel(zone, 0.0, tickSize)
+        };
     }
 
     private static double roundToTick(double price, double tickSize) {

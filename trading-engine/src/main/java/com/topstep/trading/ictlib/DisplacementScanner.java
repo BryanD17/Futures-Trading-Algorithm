@@ -11,6 +11,15 @@ import com.topstep.trading.domain.Candle;
  * those bounds as a tradeable zone).
  *
  * <p>Retention: last 50 (§S1).
+ *
+ * <p>V5 Agent 04 (RC-09, "one displacement source"): this scanner is a CHART
+ * MARKER only. It is NOT a gate input — the M5 displacement gate reads exactly
+ * one detector, the calibrated
+ * {@code com.topstep.trading.strategy.DisplacementDetector} constructed in
+ * {@code StdvOteRunnerStrategy} (range &ge; displacement.atrMult &times; prior
+ * ATR14, body &ge; displacement.bodyPct). The §S1 body-vs-mean-body rule here
+ * is deliberately different and must never be wired into a gate
+ * (listed under "UNPLUGGED PATHS" in docs/reports/autopsy_v5/A-04.md).
  */
 public final class DisplacementScanner implements FamilyDetector {
 

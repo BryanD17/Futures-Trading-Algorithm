@@ -29,7 +29,7 @@ class StatusControllerTest {
                 .andExpect(jsonPath("$.effectiveConfig.keys['backfill.days'].source").value("DEFAULT"))
                 .andExpect(jsonPath("$.effectiveConfig.keys['session.gateMode'].value").value("SCORING"))
                 .andExpect(jsonPath("$.effectiveConfig.keys['scalp.enabled'].value").value("false"))
-                .andExpect(jsonPath("$.effectiveConfig.keys['displacement.recentBars'].value").value("5"))
+                .andExpect(jsonPath("$.effectiveConfig.keys['displacement.recentBars'].value").value("12")) // V5 Agent 04 product default
                 .andExpect(jsonPath("$.effectiveConfig.modes").isArray())
                 .andExpect(jsonPath("$.telemetry.errorCounts").exists());
     }

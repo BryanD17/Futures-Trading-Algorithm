@@ -301,14 +301,17 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private final int setupExpiryFeedBars =
             intProperty("stdvOte.setupExpiryBars", 40) * detectorTimeframe.getMinutes();
 
-    /** Maximum feed bars allowed in OTE_ARMED before the setup invalidates. */
+    /** Maximum feed bars allowed in OTE_ARMED before the setup invalidates
+     *  (V5 Agent 04 EXPIRE rule: {@code ote.windowBars}, legacy key
+     *  {@code stdvOte.oteWindowBars}; detector bars scaled to the feed). */
     private final int maxBarsInOte =
-            intProperty("stdvOte.oteWindowBars", 8) * detectorTimeframe.getMinutes();
+            OteConfig.oteWindowBars() * detectorTimeframe.getMinutes();
 
     /** Feed bars since MSS in which the impulse is still fresh (see the
-     *  FUNNEL CALIBRATION note — 30 DETECTOR bars, scaled to the feed). */
+     *  FUNNEL CALIBRATION note — 30 DETECTOR bars, scaled to the feed;
+     *  V5: {@code mss.freshBars}, legacy {@code stdvOte.mssFreshBars}). */
     private final int mssFreshBars =
-            intProperty("stdvOte.mssFreshBars", 30) * detectorTimeframe.getMinutes();
+            OteConfig.mssFreshBars() * detectorTimeframe.getMinutes();
 
     /**
      * Entry-fill timeout (2026-07-27 no-trade fix, scalp mode): feed bars
@@ -401,6 +404,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     // Post-MSS impulse leg (OTE input).
     private final ImpulseLegTracker impulseTracker = new ImpulseLegTracker();
 
+    /** V5 Agent 04: displacement/FVG/MSS/OTE driver (steps 10-13). */
+    private final OteSetupDriver oteDriver;
+
     // Killzone-open anchoring for the manipulation-leg detector.
     private final List<Candle> killzoneCandles = new ArrayList<>();
     private boolean killzoneActive = false;
@@ -451,18 +457,18 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.structureDetector = new IctStructureDetector(50);
         this.liquidityDetector = new LiquidityDetector(30);
         this.fvgDetector = new FvgDetector(20);
-        // Displacement thresholds — configurable for measured tuning
-        // (2026-07-27 funnel work); DEFAULTS UNCHANGED from the historical
-        // constants. Range >= atrMult x ATR(20) with body >= bodyPct.
-        double dispAtrMult = doubleProperty("stdvote.displacement.atrMult", 1.5);
-        double dispBodyPct = doubleProperty("stdvote.displacement.bodyPct", 0.65);
-        this.displacementDetector = new DisplacementDetector(20, dispAtrMult, dispBodyPct, symbol);
-        if (dispAtrMult != 1.5 || dispBodyPct != 0.65) {
-            System.out.println("[StdvOteRunnerStrategy] " + symbol
-                    + " displacement thresholds OVERRIDDEN: atrMult=" + dispAtrMult
-                    + " bodyPct=" + dispBodyPct + " (defaults 1.5/0.65)");
-        }
-        this.mssDetector = new MarketStructureShiftDetector(50, 2);
+        // V5 Agent 04 (RC-09) — the ONE displacement source, calibrated on the
+        // real tape: range >= displacement.atrMult x ATR14 of the PRIOR bars
+        // (true range) AND body >= displacement.bodyPct. Defaults 1.2 / 0.50
+        // (see OteConfig for the tape numbers).
+        double dispAtrMult = OteConfig.displacementAtrMult();
+        double dispBodyPct = OteConfig.displacementBodyPct();
+        this.displacementDetector = new DisplacementDetector(20, dispAtrMult, dispBodyPct, symbol)
+                .usePriorTrueRangeAtr(OteConfig.DISPLACEMENT_ATR_LEN);
+        // V5 Agent 04 — the ONE MSS source (M6): close beyond the most
+        // recent opposite swing; ictlib's shadow uses the same factory.
+        this.mssDetector = MarketStructureShiftDetector.forStdvOte();
+        System.out.println(OteConfig.describe());
         System.out.println("[StdvOteRunnerStrategy] " + symbol
                 + " entry-anatomy detectors (displacement/FVG/MSS) on "
                 + detectorTimeframe.getLabel()
@@ -540,6 +546,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                             + (huntFeedBars / Math.max(1, detectorTimeframe.getMinutes())) + " detector bars)"
                             + " preSweep=" + preSweepFeedBars + " min"
                         : " budget=" + setupExpiryFeedBars + " feed bars from BIAS_SET"));
+        // V5 Agent 04: post-sweep funnel (displacement → FVG → MSS → OTE
+        // arm / alarm / invalidate) — shared with the golden-case tests.
+        this.oteDriver = new OteSetupDriver(symbol, spec.tickSize(), displacementDetector,
+                eventBus, detectorTimeframe.getMinutes());
         System.out.println("[StdvOteRunnerStrategy] " + symbol
                 + " funnel windows (feed bars): expiry=" + setupExpiryFeedBars
                 + " oteWindow=" + maxBarsInOte + " mssFresh=" + mssFreshBars
@@ -691,7 +701,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             fvgDetector.update(anatomyCandle);
             displacementDetector.update(anatomyCandle);
             observedMss = mssDetector.update(anatomyCandle);
+            oteDriver.onAnatomyCandle(anatomyCandle, observedMss);
         }
+        oteDriver.onFeedCandle(candle, core.getSetupContext());
         if (observedMss != null) {
             lastObservedMss = observedMss;
             barsSinceMss = 0;
@@ -999,7 +1011,13 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             boolean chartAgreedAtEmission = chartEngine != null
                     && lastBias != MarketBias.NEUTRAL
                     && chartEngine.hasReactedOte(symbol, lastBias == MarketBias.BULLISH);
-            tryEmitOrder(context);
+            // V5 Agent 04 ALARM: emit only once a PD array overlaps the band
+            // AND price reacted (or on retries after that).
+            if (oteDriver.alarm(core, candle)) {
+                tryEmitOrder(context);
+            } else if (oteDriver.lastStall() != null) {
+                funnel.recordStall("OTE_ARMED", oteDriver.lastStall());
+            }
             if (ctx.state == SetupState.IN_TRADE) {
                 OteAgreementStats stats = OteAgreementStats.forSymbol(symbol);
                 if (chartAgreedAtEmission) {
@@ -1009,6 +1027,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 }
             }
         }
+
+        // V5 Agent 04: OTE invalidation events + per-setup driver reset.
+        oteDriver.afterCandle(ctx, candle);
 
         // Funnel census: one EVENT per real transition, with the reason when
         // the setup died. Measurement only.
@@ -1681,121 +1702,37 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         return fallback;
     }
 
+    /**
+     * Step 10 (M5) — V5 Agent 04: ONE displacement detector (calibrated),
+     * linked to the FVG it created (or one within fvg.linkBars, or its OB).
+     * Delegates to {@link OteSetupDriver}; stall reasons keep the historical
+     * names so funnel histograms stay comparable.
+     */
     private void tryRecordDisplacement() {
-        FunnelTelemetry funnel = FunnelTelemetry.forSymbol(symbol);
-        boolean bullish = (lastBias == MarketBias.BULLISH);
-        int recentBars = intProperty("displacement.recentBars", 5); // AGENT-01: EngineConfig key (alias stdvote.displacement.recentBars, PR #151)
-        if (!displacementDetector.hasRecentDisplacement(recentBars, bullish)) {
-            // Distinguish "no displacement at all" from "one, but the wrong
-            // way" — they call for completely different fixes.
-            funnel.recordStall("SWEEP_DONE",
-                    displacementDetector.hasRecentDisplacement(recentBars) // AGENT-01
-                            ? "displacement-wrong-direction" : "no-recent-displacement");
-            return;
-        }
-        DisplacementDetector.Displacement d = displacementDetector.getLastDisplacement();
-        if (d == null) {
-            funnel.recordStall("SWEEP_DONE", "no-displacement-object");
-            return;
-        }
-
-        // Idempotency: never consume the same displacement event twice.
-        if (d.getTimestamp() != null && d.getTimestamp().equals(lastConsumedDisplacementTs)) {
-            funnel.recordStall("SWEEP_DONE", "displacement-already-consumed");
-            return;
-        }
-
-        // Displacement→FVG linkage: prefer the FVG the displacement itself
-        // created (exact 3-candle window recorded by the detector) over the
-        // newest same-direction FVG from FvgDetector, which may be unrelated.
-        FairValueGap fvg = null;
-        double[] zone = displacementDetector.getDisplacementFvgZone();
-        if (d.createdFvg() && zone != null && zone[1] > zone[0]) {
-            fvg = new FairValueGap(bullish, /* top */ zone[1], /* bottom */ zone[0],
-                    d.getTimestamp());
-        } else {
-            fvg = pickFvgFor(bullish);
-        }
-        if (fvg == null) {
-            funnel.recordStall("SWEEP_DONE", "no-fvg-for-displacement");
-            return;
-        }
-        core.recordDisplacement(fvg);
-        if (core.getSetupContext().state == SetupState.DISPLACED) {
-            lastConsumedDisplacementTs = d.getTimestamp();
+        String stall = oteDriver.tryRecordDisplacement(core, lastBias);
+        if (stall != null) {
+            FunnelTelemetry.forSymbol(symbol).recordStall("SWEEP_DONE", stall);
         }
     }
 
-    /** Fallback FVG pick: newest same-direction unfilled FVG. */
-    private FairValueGap pickFvgFor(boolean bullish) {
-        List<FairValueGap> fvgs = fvgDetector.getUnfilledFvgs();
-        if (fvgs == null || fvgs.isEmpty()) return null;
-        // Walk from newest to oldest to find a same-direction FVG.
-        for (int i = fvgs.size() - 1; i >= 0; i--) {
-            FairValueGap f = fvgs.get(i);
-            if (f.isBullish() == bullish) return f;
-        }
-        return null;
-    }
-
+    /**
+     * Step 11 (M6) — the ONE MSS source ({@code MarketStructureShiftDetector
+     * .forStdvOte()}): a close beyond the most recent opposite swing at/after
+     * the displacement bar, within {@code mss.freshBars}.
+     */
     private void tryRecordMss(Candle candle) {
-        if (lastObservedMss == null || barsSinceMss > mssFreshBars) return;
-        boolean biasBullish = (lastBias == MarketBias.BULLISH);
-        if (lastObservedMss.isBullish != biasBullish) {
-            // Counter-bias MSS — invalidates the setup per the spec.
-            core.invalidate("counter-bias MSS observed");
-            return;
-        }
-        core.recordMss();
-        if (core.getSetupContext().state == SetupState.MSS_CONFIRMED) {
-            // Arm the impulse tracker on the true post-MSS leg: origin at the
-            // post-sweep extreme, terminus at the MSS candle extreme (extends
-            // bar by bar from here).
-            double origin;
-            double terminus;
-            if (biasBullish) {
-                origin = !Double.isNaN(lowSinceSweep)
-                        ? lowSinceSweep : lastObservedMss.displacementLow;
-                terminus = Math.max(lastObservedMss.displacementHigh, candle.getHigh());
-            } else {
-                origin = !Double.isNaN(highSinceSweep)
-                        ? highSinceSweep : lastObservedMss.displacementHigh;
-                terminus = Math.min(lastObservedMss.displacementLow, candle.getLow());
-            }
-            impulseTracker.arm(biasBullish, origin, terminus);
-        }
+        oteDriver.tryRecordMss(core, lastBias);
     }
 
+    /**
+     * Step 12 (M7 ARM) — zone fixed on the anchored leg (dealing range by
+     * default, 0.618/0.705/0.786), INVALIDATE on a close beyond the range
+     * extreme, ARM when price first trades into the band.
+     */
     private void tryArmOte(Candle candle) {
-        FunnelTelemetry funnel = FunnelTelemetry.forSymbol(symbol);
-        if (!impulseTracker.isArmed()) {
-            funnel.recordStall("MSS_CONFIRMED", "impulse-not-armed");
-            return;
-        }
-        // M7 PD-array candidates (2026-07-27 funnel fix): the spec accepts
-        // ANY PD array inside the band, so the core may fall back from the
-        // displacement's own FVG to the newest in-zone unfilled FVG.
-        core.setCandidatePdArrays(fvgDetector.getUnfilledFvgs());
-        if (impulseTracker.isViolated()) {
-            // Price took out the impulse origin (the OTE 1.0 invalidation)
-            // before any entry — the leg is dead.
-            core.invalidate("impulse origin violated before OTE entry");
-            return;
-        }
-        if (!impulseTracker.hasValidLeg()) {
-            funnel.recordStall("MSS_CONFIRMED", "no-valid-impulse-leg");
-            return;
-        }
-
-        // Reaction is derived from observable price action — a rejection
-        // wick at the OTE zone — never a hardcoded literal.
-        boolean reactionConfirmed = impulseTracker.isRejectionReaction(
-                candle, spec.tickSize(), reactionWickTicks);
-        core.recordOteImpulse(impulseTracker.impulseLow(), impulseTracker.impulseHigh(),
-                spec.tickSize(), reactionConfirmed);
-        if (core.getSetupContext().state != SetupState.OTE_ARMED) {
-            funnel.recordStall("MSS_CONFIRMED",
-                    reactionConfirmed ? "ote-not-armed-after-reaction" : "no-reaction-at-band");
+        String stall = oteDriver.tryArmOte(core, lastBias, candle);
+        if (stall != null) {
+            FunnelTelemetry.forSymbol(symbol).recordStall("MSS_CONFIRMED", stall);
         }
     }
 
@@ -1912,19 +1849,22 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         if ("DIVERGENT".equals(ctx.smtState)) opt++;                // O2
         if (ctx.sweep != null) opt++;                               // O3 (sweep present is M4, but
                                                                     //     swept-level type is the O3 hook)
-        if (ctx.fvg != null && ctx.ote != null && ctx.ote.contains(ctx.fvg.getTop())) opt++; // O4
+        if (ctx.fvg != null && ctx.ote != null
+                && ctx.fvg.getBottom() <= Math.max(ctx.ote.f62(), ctx.ote.f79())
+                && ctx.fvg.getTop() >= Math.min(ctx.ote.f62(), ctx.ote.f79())) opt++; // O4 (overlap)
+        // O5 (V5 Agent 04, RC-18): M7b in SCORING mode — a REACTED 30m OTE
+        // for this direction is a confluence point, never a block.
+        if (ote30mGate.mode() == Ote30mConfluenceGate.Mode.SCORING && ctx.htfBias != MarketBias.NEUTRAL) {
+            ote30mGate.gateCheck(ctx.htfBias == MarketBias.BULLISH);
+            if (ote30mGate.lastConfluent()) opt++;
+        }
 
         boolean indexPair = "MNQ".equals(symbol) || "MES".equals(symbol);
-        boolean smtRequired = indexPair;
-
-        int rs = ctx.raidScore;
-        if (rs >= 8 && opt >= 4 && (!smtRequired || "DIVERGENT".equals(ctx.smtState))) {
-            return TradeTier.TIER_4;
-        }
-        if (rs >= 7 && opt >= 3) return TradeTier.TIER_3;
-        if (rs >= 6 && opt >= 2) return TradeTier.TIER_2;
-        if (rs >= spec.raidMinQuality()) return TradeTier.TIER_1;
-        return null;
+        boolean smtOk = !indexPair || "DIVERGENT".equals(ctx.smtState);
+        // V5 Agent 04: monotonic, TOTAL tier ladder — once M1..M9 pass
+        // (legacy OR scalp) there is no "no qualifying tier" outcome.
+        return com.topstep.trading.strategy.VariantSelector.resolveStdvOteTier(
+                ctx.raidScore, opt, smtOk);
     }
 
     private int sizeForTier(TradeTier tier) {
