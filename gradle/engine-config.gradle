@@ -23,6 +23,8 @@ ext.engineConfigPrefixes = [
         'displacement.', 'bias.', 'pd.', 'raid.', 'trade.', 'profile.', 'chart.',
         'confluence.', 'backfill.', 'htf.', 'sim.', 'mock.', 'backtest.',
         'topstep.', 'ictlib.', 'funnel.',
+        // Agent 03 (level windows / phantom days; manipulation-leg rollback)
+        'levels.', 'manip.',
         // reserved for Agents 02-05 (V5 Appendix C keys)
         'warmup.', 'size.', 'risk.', 'news.'
 ]

@@ -14,7 +14,6 @@ import org.junit.jupiter.api.Test;
 import java.io.InputStream;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
@@ -73,13 +72,16 @@ class Agent03SweepLegTest {
     }
 
     @Test
-    @DisplayName("session windows: every ET minute maps to exactly one session (always a session)")
+    @DisplayName("session windows: the locator uses Agent 02's SessionClassifier (always a session)")
     void alwaysASession() {
-        for (int m = 0; m < 24 * 60; m++) {
-            assertThat(SessionLegLocator.sessionOf(LocalTime.of(m / 60, m % 60))).isNotNull();
-        }
-        assertThat(SessionLegLocator.sessionOf(LocalTime.of(14, 53))).isEqualTo("NY_PM");
-        assertThat(SessionLegLocator.sessionOf(LocalTime.of(21, 0))).isEqualTo("ASIA");
+        SessionLegLocator loc = new SessionLegLocator();
+        loc.onCandle(new Candle("MNQ", LocalDateTime.parse("2026-09-28T14:53").atZone(ET).toInstant(),
+                1, 2, 0.5, 1.5, 1));
+        assertThat(loc.currentSession()).isEqualTo("NY_PM");
+        loc.onCandle(new Candle("MNQ", LocalDateTime.parse("2026-09-28T21:00").atZone(ET).toInstant(),
+                1, 2, 0.5, 1.5, 1));
+        assertThat(loc.currentSession()).isEqualTo("ASIA");
+        assertThat(loc.size()).isEqualTo(1); // buffer restarts at each session boundary
     }
 
     @Test

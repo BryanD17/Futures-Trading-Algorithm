@@ -3,8 +3,6 @@ package com.topstep.trading.strategy.stdvote;
 import com.topstep.trading.chartstate.KnownLevel;
 import com.topstep.trading.domain.Candle;
 
-import java.time.LocalTime;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -28,13 +26,11 @@ import java.util.Optional;
  *   <li>fallback (caller) — the most recent swing pair, IMMEDIATELY: the
  *       leg only seeds the STDV ladder, it must never stall the funnel.</li>
  * </ol>
- * Session windows (ET): ASIA 18:00–02:00, LONDON 02:00–08:00, PRE_NY
- * 08:00–09:30, NY_AM 09:30–12:00, NY_LUNCH 12:00–13:30, NY_PM 13:30–16:00,
- * POST 16:00–18:00 — the same boundaries the autopsy harness reports on.
+ * Session windows come from Agent 02's {@code SessionClassifier} (ASIA,
+ * LONDON, PRE_NY, NY_AM, NY_LUNCH, NY_PM, NO_ENTRY, PRE_ASIA, WEEKEND).
  */
 public final class SessionLegLocator {
 
-    private static final ZoneId ET = ZoneId.of("America/New_York");
     private static final int BUFFER_MAX = 600;
 
     /** A resolved leg and how it was found. */
@@ -43,20 +39,11 @@ public final class SessionLegLocator {
     private final List<Candle> buffer = new ArrayList<>();
     private String session;
 
-    /** Session label for an ET clock time (package-visible for tests). */
-    static String sessionOf(LocalTime t) {
-        if (!t.isBefore(LocalTime.of(18, 0)) || t.isBefore(LocalTime.of(2, 0))) return "ASIA";
-        if (t.isBefore(LocalTime.of(8, 0))) return "LONDON";
-        if (t.isBefore(LocalTime.of(9, 30))) return "PRE_NY";
-        if (t.isBefore(LocalTime.of(12, 0))) return "NY_AM";
-        if (t.isBefore(LocalTime.of(13, 30))) return "NY_LUNCH";
-        if (t.isBefore(LocalTime.of(16, 0))) return "NY_PM";
-        return "POST";
-    }
-
     public void onCandle(Candle c) {
         if (c == null || c.getTimestamp() == null) return;
-        String s = sessionOf(c.getTimestamp().atZone(ET).toLocalTime());
+        // V5: the ONE session classifier (Agent 02) — candle time, DST-proof.
+        String s = com.topstep.trading.strategy.session.SessionClassifier
+                .classify(c.getTimestamp()).name();
         if (!s.equals(session)) {
             session = s;
             buffer.clear();

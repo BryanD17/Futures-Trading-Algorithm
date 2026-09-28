@@ -283,6 +283,9 @@ class SetupLifecycleV5Test {
             assertThat(g.isDuplicateInvalidation(ctx, "HTF bias flip BULLISH -> BEARISH")).isTrue();
             assertThat(g.isDuplicateInvalidation(ctx, "expired (60 bars after SWEEP_DONE without an entry)")).isFalse();
             g.observeBias(MarketBias.BEARISH);                       // a real new event
+            // Agent 03: with SetupContext.biasEpoch present the guard keys on it;
+            // the core bumps it on every REAL flip (StdvOteStrategy.recordHtfBias).
+            if (g.usesEpoch()) ctx.biasEpoch++;
             assertThat(g.isDuplicateInvalidation(ctx, "HTF bias flip BULLISH -> BEARISH")).isFalse();
             g.reset();
             assertThat(g.isDuplicateInvalidation(ctx, "HTF bias flip BULLISH -> BEARISH"))
