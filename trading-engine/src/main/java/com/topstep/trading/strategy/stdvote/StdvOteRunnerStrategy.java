@@ -31,6 +31,11 @@ import com.topstep.trading.strategy.MarketBias;
 import com.topstep.trading.strategy.MarketStructureShiftDetector;
 import com.topstep.trading.strategy.MarketStructureShiftDetector.MSS;
 import com.topstep.trading.strategy.SilverBulletClock;
+import com.topstep.trading.strategy.session.RearmBiasGuard;
+import com.topstep.trading.strategy.session.SessionClassifier;
+import com.topstep.trading.strategy.session.SessionConfig;
+import com.topstep.trading.strategy.session.SessionGateMode;
+import com.topstep.trading.strategy.session.SessionWindow;
 import com.topstep.trading.strategy.StrategyContext;
 import com.topstep.trading.strategy.TradeTier;
 import com.topstep.trading.strategy.TradingStrategy;
@@ -207,6 +212,16 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private boolean primeKillzoneNow;
     /** Timestamp of the candle being processed (candle time, not wall clock). */
     private Instant lastCandleInstant;
+
+    // ── V5 Agent 02: session domain (RC-02 / RC-03) ──────────────────────
+    /** Effective M3 gate mode ({@code session.gateMode} x {@code session.allSessions}). */
+    private final SessionGateMode gateMode = SessionConfig.effectiveGateMode();
+    /** Session window of the current candle (SessionClassifier, candle time). */
+    private SessionWindow sessionWindowNow;
+    /** Session window of the previous candle (killzone-buffer anchor in SCORING). */
+    private SessionWindow lastSessionWindow;
+    /** "No double-invalidate on the same bias event" bookkeeping. */
+    private final RearmBiasGuard rearmBiasGuard = new RearmBiasGuard();
 
     /** V2 Agent 06: identity (taggedAt) of the last REACTED zone already
      *  counted as chartReacted_machineSilent — one count per zone. */
@@ -486,6 +501,21 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.core = new StdvOteStrategy(symbol, projectionEngine, oteCalculator, validator,
                 eventBus, /* expiryBars, feed bars (see FUNNEL CALIBRATION) */
                 setupExpiryFeedBars);
+        // AGENT-02 (RC-03): setup lifecycle — expiry anchor + budgets.
+        SessionConfig.ExpiryAnchor expiryAnchor = SessionConfig.expiryAnchor(gateMode);
+        int huntFeedBars = SessionConfig.expiryFeedBars(detectorTimeframe.getMinutes(), expiryAnchor);
+        int preSweepFeedBars = SessionConfig.preSweepExpiryFeedBars();
+        core.configureExpiry(expiryAnchor, huntFeedBars, preSweepFeedBars);
+        System.out.println("[StdvOteRunnerStrategy] " + symbol + " SESSION GATE: " + gateMode
+                + (gateMode == SessionGateMode.SCORING
+                        ? " (entries allowed all sessions except 14:45-17:00 CT and the weekend; prime killzones score O1 + size)"
+                        : " (legacy killzones block M3 and re-arm)")
+                + " | expiry anchor=" + expiryAnchor
+                + (expiryAnchor == SessionConfig.ExpiryAnchor.SWEEP_DONE
+                        ? " hunt=" + huntFeedBars + " feed bars (" + huntFeedBars + " min, "
+                            + (huntFeedBars / Math.max(1, detectorTimeframe.getMinutes())) + " detector bars)"
+                            + " preSweep=" + preSweepFeedBars + " min"
+                        : " budget=" + setupExpiryFeedBars + " feed bars from BIAS_SET"));
         System.out.println("[StdvOteRunnerStrategy] " + symbol
                 + " funnel windows (feed bars): expiry=" + setupExpiryFeedBars
                 + " oteWindow=" + maxBarsInOte + " mssFresh=" + mssFreshBars
@@ -495,7 +525,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // sequential mandatory gates run exactly as in legacy mode.
         this.scalpMode = ScalpConfig.isEnabled();
         this.liquidityTargets = new LiquidityTargetIdentifier(symbol, levelEngine);
-        this.rearmCooldownBars = ScalpConfig.rearmCooldownBars();
+        this.rearmCooldownBars = SessionConfig.rearmCooldownBars(); // AGENT-02: setup.rearmCooldownBars → scalp.rearmCooldownBars
         // DEFECT FIX (V4 follow-up): in LEGACY mode the re-arm engine never
         // ran, so an INVALIDATED setup was terminal for the LIFE OF THE
         // PROCESS — one dead setup per symbol and the engine was finished for
@@ -671,12 +701,29 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // 5. Killzone bookkeeping: buffer candles from the killzone open so
         // the manipulation-leg detector can anchor the Judas swing there.
         lastCandleInstant = now;
+        // V5 Agent 02: ONE classifier, candle time. SCORING: the "killzone"
+        // (M3 gate + re-arm gate) is open whenever the window is not
+        // NO_ENTRY / WEEKEND; BLOCKING: the legacy killzones, unchanged.
+        lastSessionWindow = sessionWindowNow;
+        sessionWindowNow = SessionClassifier.classify(now);
         boolean inKillzone = isInstrumentKillzone(now);
+        boolean primeBefore = primeKillzoneNow;
         // Prime-killzone flag for tier confluence (O1) and the size boost.
-        // In legacy (non-scalp) mode it equals the legacy killzone check, so
-        // legacy behavior is unchanged.
-        primeKillzoneNow = scalpMode ? isPrimeKillzone(now) : inKillzone;
-        if (inKillzone && !killzoneActive) {
+        // SCORING: the SessionClassifier prime windows. BLOCKING: legacy —
+        // scalp prime windows, or (legacy target model) the killzone itself.
+        primeKillzoneNow = (gateMode == SessionGateMode.SCORING)
+                ? SessionClassifier.isPrimeKillzone(now)
+                : (scalpMode ? isPrimeKillzone(now) : inKillzone);
+        // Buffer anchor: the killzone open (BLOCKING) or, in SCORING — where
+        // the gate is open all session long — the most recent of (a) the
+        // open of the CURRENT session window and (b) the open of a prime
+        // killzone inside it (09:45 / 13:45 ET: the exact pre-V5 NY anchors),
+        // so the Judas-swing detector anchors per session.
+        boolean newAnchor = !killzoneActive
+                || (gateMode == SessionGateMode.SCORING
+                        && (sessionWindowNow != lastSessionWindow
+                            || (primeKillzoneNow && !primeBefore)));
+        if (inKillzone && newAnchor) {
             killzoneCandles.clear();
         }
         killzoneActive = inKillzone;
@@ -692,6 +739,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
 
         SetupContext ctx = core.getSetupContext();
         ctx.killzoneOpen = inKillzone;
+        ctx.sessionWindow = sessionWindowNow.name();   // AGENT-02
+        ctx.primeKillzone = primeKillzoneNow;         // AGENT-02
 
         // 5b. SCALP re-arm engine (SA4). Legacy mode: none of this runs —
         // IN_TRADE / INVALIDATED stay terminal (one-move discipline).
@@ -933,6 +982,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
      */
     private void processScalpRearm(SetupContext ctx, StrategyContext context,
                                    boolean inKillzone) {
+        rearmBiasGuard.observeBias(lastBias); // AGENT-02: bias-event bookkeeping first
         // Apply the async close notification on the candle thread. The
         // cooldown starts on the detection candle and counts FULL bars —
         // the decrement below is skipped on the detection candle itself.
@@ -977,6 +1027,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // already guarantees the cooldown starts exactly once per episode.
         if (ctx.state == SetupState.INVALIDATED
                 && rearmCooldownRemaining < 0) {
+            if (suppressDuplicateBiasInvalidation(ctx, context)) {
+                return;
+            }
             rearmCooldownRemaining = rearmCooldownBars;
             detectedThisBar = true;
             System.out.println("[" + symbol + "] SCALP: setup invalidated ("
@@ -1006,7 +1059,11 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
      */
     private void processLegacyRearm(SetupContext ctx, StrategyContext context,
                                     boolean inKillzone) {
+        rearmBiasGuard.observeBias(lastBias); // AGENT-02: bias-event bookkeeping first
         if (ctx.state == SetupState.INVALIDATED && rearmCooldownRemaining < 0) {
+            if (suppressDuplicateBiasInvalidation(ctx, context)) {
+                return;
+            }
             rearmCooldownRemaining = rearmCooldownBars;
             System.out.println("[" + symbol + "] setup invalidated ("
                     + ctx.lastGateFailed + ") — re-arm in " + rearmCooldownBars + " bars");
@@ -1022,12 +1079,46 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         }
     }
 
+    /**
+     * V5 Agent 02 — "no double-invalidate on the same bias event": a
+     * RE-ARMED setup that dies from a bias reason while no new bias event
+     * happened since the re-arm (same {@code biasEpoch} / same observed
+     * bias) is restored at once instead of paying a second death + cooldown
+     * for an event it already paid for. Every other re-arm gate
+     * (no position, risk frequency, NO_ENTRY/WEEKEND) still applies.
+     *
+     * @return true when the invalidation was suppressed (setup re-armed)
+     */
+    private boolean suppressDuplicateBiasInvalidation(SetupContext ctx, StrategyContext context) {
+        if (!rearmBiasGuard.isDuplicateInvalidation(ctx, ctx.lastGateFailed)) return false;
+        if (!canRearm(ctx, context, isInstrumentKillzone(lastCandleInstant))) return false;
+        rearmBiasGuard.recordSuppressed();
+        System.out.println("[" + symbol + "] duplicate invalidation on the SAME bias event suppressed ("
+                + ctx.lastGateFailed + ", event key " + rearmBiasGuard.currentKey(ctx)
+                + ") — setup restored without a second cooldown");
+        rearmCooldownRemaining = -1;
+        rearm(ctx);
+        return true;
+    }
+
+    /** Test/telemetry hook: duplicate bias invalidations suppressed so far. */
+    int suppressedDuplicateInvalidationsForTest() {
+        return rearmBiasGuard.suppressedCount();
+    }
+
     /** All re-arm gates outside the cooldown itself. */
     private boolean canRearm(SetupContext ctx, StrategyContext context, boolean inKillzone) {
         boolean terminal = ctx.state == SetupState.INVALIDATED
                 || (ctx.state == SetupState.IN_TRADE && !positionOpen);
         if (!terminal) return false;
-        if (!inKillzone) return false;
+        // V5 Agent 02 (RC-02): SCORING needs no killzone — only the SACRED
+        // NO_ENTRY / WEEKEND windows block a re-arm (candle time). BLOCKING
+        // keeps the pre-V5 "killzone must be open" rule for A/B.
+        if (gateMode == SessionGateMode.SCORING) {
+            if (lastCandleInstant == null || SessionClassifier.blocksEntry(lastCandleInstant)) return false;
+        } else if (!inKillzone) {
+            return false;
+        }
         // NO-OVERLAP: never arm a new setup while a position is open on this
         // symbol — the event-tracked flag plus the live account map.
         if (positionOpen) return false;
@@ -1068,6 +1159,14 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         if (lastBias != MarketBias.NEUTRAL) {
             core.recordHtfBias(lastBias);
         }
+        // AGENT-02: the reset cleared the per-candle session fields; restore
+        // them (candle time) and stamp the bias event this setup belongs to.
+        // BLOCKING keeps the pre-V5 artefact (killzoneOpen left false by the
+        // reset until the next candle) so the A/B baseline is byte-identical.
+        if (gateMode == SessionGateMode.SCORING) ctx.killzoneOpen = killzoneActive;
+        if (sessionWindowNow != null) ctx.sessionWindow = sessionWindowNow.name();
+        ctx.primeKillzone = primeKillzoneNow;
+        rearmBiasGuard.onRearm(ctx);
         System.out.println("[" + symbol + "] " + (scalpMode ? "SCALP: " : "")
                 + "re-armed for next setup"
                 + " (state=" + ctx.state + ", bias=" + lastBias + ")");
@@ -1121,6 +1220,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         positionOpen = false;
         rearmCooldownRemaining = -1;
         lastSeenState = SetupState.IDLE;
+        rearmBiasGuard.reset();          // AGENT-02
+        sessionWindowNow = null;         // AGENT-02
+        lastSessionWindow = null;        // AGENT-02
         core.resetForNextWindow();
     }
 
@@ -1179,6 +1281,13 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     }
 
     private boolean isInstrumentKillzone(Instant now) {
+        // V5 Agent 02 (RC-02): decoupled from scalp mode. SCORING — in BOTH
+        // the legacy and the scalp target model — opens the gate in every
+        // SessionClassifier window except the SACRED NO_ENTRY / WEEKEND.
+        if (gateMode == SessionGateMode.SCORING) {
+            return !SessionClassifier.blocksEntry(now);
+        }
+        // BLOCKING (pre-V5, A/B): the legacy windows below, unchanged.
         if (scalpMode) {
             return isScalpWindow(now);
         }
@@ -1233,6 +1342,11 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
      * (3) the killzone size boost.
      */
     private boolean isPrimeKillzone(Instant now) {
+        // V5 Agent 02: SCORING uses the SessionClassifier prime windows for
+        // every instrument; BLOCKING keeps the pre-V5 scalp prime windows.
+        if (gateMode == SessionGateMode.SCORING) {
+            return SessionClassifier.isPrimeKillzone(now);
+        }
         LocalTime et = now.atZone(ET_ZONE).toLocalTime();
         boolean nyKillzone = killzoneClock.isInNyAmKillzone(et)
                 || killzoneClock.isInNyPmKillzone(et);
@@ -1258,13 +1372,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
      * of the candle-time argument — package-private for direct unit testing.
      */
     static boolean allSessionEntryWindow(ZonedDateTime ct) {
-        DayOfWeek day = ct.getDayOfWeek();
-        LocalTime t = ct.toLocalTime();
-        if (day == DayOfWeek.SATURDAY) return false;
-        if (day == DayOfWeek.SUNDAY) return !t.isBefore(REOPEN_CT);
-        if (day == DayOfWeek.FRIDAY) return t.isBefore(ENTRY_BLOCK_START_CT);
-        boolean inDailyBlock = !t.isBefore(ENTRY_BLOCK_START_CT) && t.isBefore(REOPEN_CT);
-        return !inDailyBlock;
+        // V5 Agent 02: routed through the single classifier. 14:45 CT =
+        // 15:45 ET and 17:00 CT = 18:00 ET on every date (CT and ET switch
+        // DST together), so this is the pre-V5 CT rule exactly.
+        return !SessionClassifier.blocksEntry(ct.toInstant());
     }
 
     /**

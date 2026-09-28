@@ -150,4 +150,13 @@ public final class SetupContext {
         createdAtBar = 0L;
         expiresAtBar = 0L;
     }
+
+    // AGENT-02 fields (V5 Agent 02 — session domain). Written by the runner
+    // on EVERY primary candle from the candle timestamp (never wall clock);
+    // not cleared by resetForNextWindow because they describe the current
+    // candle, not the setup.
+    /** Current {@code SessionWindow} name (ASIA .. WEEKEND); null before the first candle. */
+    public String sessionWindow;
+    /** True inside a prime killzone (London 02-05, NY AM 09:45-11, NY PM 13:45-15:45 ET). */
+    public boolean primeKillzone;
 }
