@@ -64,7 +64,7 @@ class RiskDerivedSizingTest {
         }
         StdvOteSizer.RiskSize deny = StdvOteSizer.riskDerived(250.0, 20000, 19840, MNQ_TICK, MNQ_TICK_VALUE, 1, 20);
         assertThat(deny.denied()).isTrue();
-        assertThat(deny.reason()).isEqualTo("SIZE: stop too wide for risk budget (need $320.00, have $250.00)");
+        assertThat(deny.reason()).isEqualTo("SIZE: stop too wide for risk budget (need $320.00/micro, have $250.00)");
     }
 
     @Test
@@ -188,7 +188,7 @@ class RiskDerivedSizingTest {
             // 160-pt stop -> SIZE deny.
             var wide = engine.evaluate(longSignal(20000, 19840, 20400, 1), acct, legacy);
             assertThat(wide.isAllowed()).isFalse();
-            assertThat(wide.getReason()).isEqualTo("SIZE: stop too wide for risk budget (need $320.00, have $250.00)");
+            assertThat(wide.getReason()).isEqualTo("SIZE: stop too wide for risk budget (need $320.00/micro, have $250.00)");
 
             long deadline = System.currentTimeMillis() + 3000;
             while (gates.size() < 2 && System.currentTimeMillis() < deadline) {

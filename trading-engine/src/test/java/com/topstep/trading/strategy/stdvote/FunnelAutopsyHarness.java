@@ -169,7 +169,9 @@ class FunnelAutopsyHarness {
         // V5 Agent 05.3: order-lifecycle decisions (setup-end cancels, TTL, flatten) into the log.
         ConcurrentLinkedQueue<com.topstep.trading.event.GateDecisionEvent> orderGates = new ConcurrentLinkedQueue<>();
         bus.subscribe(com.topstep.trading.event.GateDecisionEvent.class, g -> {
-            if ("ORDER".equals(g.getGate()) || "ORDER_TTL".equals(g.getGate()) || "FLATTEN".equals(g.getGate())) {
+            // V5 Agent 05.4: plus the armed-but-not-emitted reasons (one per reason per episode).
+            if (java.util.Set.of("ORDER", "ORDER_TTL", "FLATTEN", "SIZE", "ALARM", "NO_ENTRY",
+                    "POSITION", "TIER", "EMIT", "BIAS").contains(g.getGate())) {
                 orderGates.add(g);
             }
         });
@@ -495,6 +497,7 @@ class FunnelAutopsyHarness {
             case MSS_CONFIRMED: return "M7-" + (stall.isEmpty() ? "waiting" : stall.replace("MSS_CONFIRMED:", ""));
             case OTE_ARMED: {
                 String g = ctx.lastGateFailed;
+                // V5 Agent 05.4: must never happen any more (every armed refusal writes a reason).
                 if (g == null) return "OTE_ARMED-sizer-standdown-or-tier";
                 int colon = g.indexOf(':');
                 return "GATE-" + (colon > 0 ? g.substring(0, colon) : g).trim();
