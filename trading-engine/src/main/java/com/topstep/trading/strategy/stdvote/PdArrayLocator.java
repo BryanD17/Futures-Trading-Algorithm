@@ -201,6 +201,76 @@ public final class PdArrayLocator {
         return false;
     }
 
+    // ── V5 Agent 05.2: impulse-leg entry model helpers ──────────────────
+
+    /** The detector bar at {@code idx}, or null when outside the buffer. */
+    public Candle barAt(long idx) {
+        return at(idx);
+    }
+
+    /** Index of the oldest buffered bar (-1 when empty). */
+    public long firstIndex() {
+        return bars.isEmpty() ? -1 : bars.get(0).idx();
+    }
+
+    /**
+     * Newest buffered bar at or before {@code toIdx} whose HIGH (wantHigh) or
+     * LOW equals {@code price} within half a tick; -1 when none.
+     */
+    public long lastBarAt(double price, boolean wantHigh, long toIdx, double tick) {
+        double tol = Math.max(1e-9, tick / 2.0);
+        for (int i = bars.size() - 1; i >= 0; i--) {
+            Bar b = bars.get(i);
+            if (b.idx() > toIdx) continue;
+            double v = wantHigh ? b.c().getHigh() : b.c().getLow();
+            if (Math.abs(v - price) <= tol) return b.idx();
+        }
+        return -1;
+    }
+
+    /**
+     * The LARGEST {@code bullish} 3-bar FVG whose MIDDLE candle lies in
+     * [{@code fromIdx}, {@code toIdx}] (a gap created inside the leg; the
+     * leg's most imbalanced print, not a half-point sliver).
+     */
+    public Optional<PdArray> gapInWindow(long fromIdx, long toIdx, boolean bullish) {
+        PdArray best = null;
+        for (long m = fromIdx; m <= toIdx; m++) {
+            Optional<PdArray> g = gapAt(m, bullish);
+            if (g.isPresent() && (best == null
+                    || g.get().top() - g.get().bottom() > best.top() - best.bottom())) {
+                best = g.get();
+            }
+        }
+        return Optional.ofNullable(best);
+    }
+
+    /**
+     * Order block of a liquidity sweep: the detector bar CONTAINING the sweep
+     * ({@code sweepBarIdx}) when it closed opposite to the trade (up-close
+     * for a short / down-close for a long) and TOOK the swept level (short:
+     * high &ge; level, long: low &le; level). Earlier spikes and later
+     * re-raids are not the sweep's OB. G1: 14:50 5m bar [30621.00, 30650.00]
+     * took the 30640 London high.
+     */
+    public Optional<PdArray> sweepOrderBlock(long sweepBarIdx, boolean bullish, double sweptLevel) {
+        Candle c = at(sweepBarIdx);
+        if (c == null) return Optional.empty();
+        boolean opposite = bullish ? c.getClose() < c.getOpen() : c.getClose() > c.getOpen();
+        boolean took = bullish ? c.getLow() <= sweptLevel : c.getHigh() >= sweptLevel;
+        if (!opposite || !took) return Optional.empty();
+        return Optional.of(new PdArray("OB", bullish, c.getLow(), c.getHigh(), c.getTimestamp()));
+    }
+
+    /** Index of the newest buffered bar stamped at or before {@code ts}; -1 when none. */
+    public long indexAtOrBefore(Instant ts) {
+        if (ts == null) return -1;
+        for (int i = bars.size() - 1; i >= 0; i--) {
+            if (!bars.get(i).c().getTimestamp().isAfter(ts)) return bars.get(i).idx();
+        }
+        return -1;
+    }
+
     // ── band geometry ────────────────────────────────────────────────────
 
     /** True when the zone OVERLAPS the OTE band (containment not required). */

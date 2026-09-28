@@ -983,7 +983,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
 
         // 10. From SWEEP_DONE, look for displacement + FVG in bias direction.
         if (ctx.state == SetupState.SWEEP_DONE) {
-            tryRecordDisplacement();
+            tryRecordDisplacement(candle);
         }
 
         // 11. From DISPLACED, look for an MSS in the bias direction.
@@ -1751,8 +1751,11 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
      * Delegates to {@link OteSetupDriver}; stall reasons keep the historical
      * names so funnel histograms stay comparable.
      */
-    private void tryRecordDisplacement() {
-        String stall = oteDriver.tryRecordDisplacement(core, lastBias);
+    private void tryRecordDisplacement(Candle candle) {
+        // V5 Agent 05.2: the candle lets the driver try the IMPULSE_LEG entry
+        // model first (M5/M6 proven on the dealing range's impulse leg, ARM
+        // on the OTE-band sweep); POST_SWEEP otherwise, unchanged.
+        String stall = oteDriver.tryRecordDisplacement(core, lastBias, candle);
         if (stall != null) {
             FunnelTelemetry.forSymbol(symbol).recordStall("SWEEP_DONE", stall);
         }

@@ -201,8 +201,32 @@ public final class SetupContext {
     /** Displacement bar (detector TF) and MSS bar timestamps. */
     public java.time.Instant displacementAt;
     public java.time.Instant mssAt;
-    /** How M5's FVG linkage was satisfied (FVG / IFVG / BREAKER / OB). */
+    /** How M5's FVG linkage was satisfied (FVG / IFVG / BREAKER / OB / IMPULSE_FVG). */
     public String m5LinkKind;
+
+    // ── AGENT-05.2 fields (V5: impulse-leg entry model, ote.entryModel) ────
+    // Written by OteSetupDriver when the setup is armed on an OTE-band sweep
+    // of the dealing range: M5/M6 are then proven on the range's IMPULSE LEG
+    // (the displacement + structure break that CREATED the range) and the
+    // validator re-checks these numbers. Null / NaN on the POST_SWEEP path.
+
+    /** Entry model that armed this setup: IMPULSE_LEG | POST_SWEEP (null = not armed yet). */
+    public String oteEntryModel;
+    /** Why the impulse-leg model did / did not apply on the last SWEEP_DONE bar. */
+    public String impulseLegVerdict;
+    /** Impulse leg bounds (detector-bar timestamps): short = HH bar -> LL bar. */
+    public java.time.Instant impulseLegStart;
+    public java.time.Instant impulseLegEnd;
+    /** M5 on the leg: displacement bar numbers (same detector rule + thresholds). */
+    public double impulseDispRangeAtr = Double.NaN;
+    public double impulseDispBody = Double.NaN;
+    public double impulseDispAtrMult = Double.NaN;
+    public double impulseDispBodyMin = Double.NaN;
+    /** M6 on the leg: swing broken and the close that broke it. */
+    public double impulseMssSwing = Double.NaN;
+    public double impulseMssClose = Double.NaN;
+    /** The swept level (IMPULSE_LEG: inside the OTE band of the dealing range). */
+    public double impulseSweptLevel = Double.NaN;
 
     /** Reset only the AGENT-04 fields (called from {@link #resetForNextWindow}). */
     void resetAgent04Fields() {
@@ -221,5 +245,17 @@ public final class SetupContext {
         displacementAt = null;
         mssAt = null;
         m5LinkKind = null;
+        // AGENT-05.2
+        oteEntryModel = null;
+        impulseLegVerdict = null;
+        impulseLegStart = null;
+        impulseLegEnd = null;
+        impulseDispRangeAtr = Double.NaN;
+        impulseDispBody = Double.NaN;
+        impulseDispAtrMult = Double.NaN;
+        impulseDispBodyMin = Double.NaN;
+        impulseMssSwing = Double.NaN;
+        impulseMssClose = Double.NaN;
+        impulseSweptLevel = Double.NaN;
     }
 }

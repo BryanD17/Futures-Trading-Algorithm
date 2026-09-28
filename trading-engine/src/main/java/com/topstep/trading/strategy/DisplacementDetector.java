@@ -68,7 +68,34 @@ public class DisplacementDetector {
     /** Recent confirmed displacements with the candle count at detection. */
     private final List<Displacement> history = new ArrayList<>();
     private final List<Integer> historyCounts = new ArrayList<>();
-    private static final int HISTORY_MAX = 50;
+    /** V5 Agent 05.2: {atr, range/atr, body/range} of each history entry's bar. */
+    private final List<double[]> historyMetrics = new ArrayList<>();
+    private static final int HISTORY_MAX = 200;
+
+    /**
+     * V5 Agent 05.2 (impulse-leg entry): a confirmed displacement with the
+     * numbers the detector measured on its bar (same rule, same thresholds).
+     */
+    public record Scored(Displacement displacement, double atr, double rangeOverAtr, double bodyRatio) {}
+
+    /**
+     * Confirmed displacements in {@code bullish} direction whose bar timestamp
+     * lies in [{@code from}, {@code to}] (inclusive), oldest first. Used to
+     * prove M5 on the dealing range's impulse leg with THIS detector's rule.
+     */
+    public List<Scored> between(Instant from, Instant to, boolean bullish) {
+        List<Scored> out = new ArrayList<>();
+        for (int i = 0; i < history.size(); i++) {
+            Displacement d = history.get(i);
+            Instant ts = d.getTimestamp();
+            if (d.isBullish() != bullish || ts == null) continue;
+            if (from != null && ts.isBefore(from)) continue;
+            if (to != null && ts.isAfter(to)) continue;
+            double[] m = historyMetrics.get(i);
+            out.add(new Scored(d, m[0], m[1], m[2]));
+        }
+        return out;
+    }
 
     public DisplacementDetector(int lookbackPeriod) {
         this(lookbackPeriod, 1.5, 0.65);
@@ -305,9 +332,11 @@ public class DisplacementDetector {
             lastDisplacementCreatedFvg = createdFvg;
             history.add(lastDisplacement);
             historyCounts.add(totalCandleCount);
+            historyMetrics.add(new double[] {lastAtr, lastRangeOverAtr, lastBodyRatio});
             if (history.size() > HISTORY_MAX) {
                 history.remove(0);
                 historyCounts.remove(0);
+                historyMetrics.remove(0);
             }
 
             System.out.println("[DISPLACEMENT" + (logTag.isEmpty() ? "" : " " + logTag) + "] "
@@ -426,6 +455,7 @@ public class DisplacementDetector {
         priorSwingLow = null;
         history.clear();
         historyCounts.clear();
+        historyMetrics.clear();
         lastAtr = Double.NaN;
         lastRangeOverAtr = Double.NaN;
         lastBodyRatio = Double.NaN;

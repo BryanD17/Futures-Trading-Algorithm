@@ -92,6 +92,14 @@ final class OteGoldenReplay {
     final List<Map<String, Object>> zones = new ArrayList<>();
     final List<Candle> anatomy = new ArrayList<>();
     private String lastReject = "";
+    /**
+     * V5 Agent 05.2: when true, step 10 hands the candle to the driver so the
+     * IMPULSE_LEG entry model runs (the runner's production call); false keeps
+     * Agent 04's POST_SWEEP replay byte-for-byte.
+     */
+    boolean impulseModel;
+    /** Agent 03's dealing range, fed every 1m candle when {@link #impulseModel} (ctx.rangeHigh/Low). */
+    final DealingRangeTracker dealingRange = new DealingRangeTracker();
 
     OteGoldenReplay() {
         displacement = new DisplacementDetector(20, OteConfig.displacementAtrMult(),
@@ -131,6 +139,13 @@ final class OteGoldenReplay {
             }
         }
         liquidity.updatePrimary(c);
+        if (impulseModel) {
+            dealingRange.onCandle(c);
+            DealingRangeTracker.Snapshot r = dealingRange.snapshot();
+            ctx().rangeHigh = r.high();
+            ctx().rangeLow = r.low();
+            ctx().rangeEq = r.equilibrium();
+        }
         driver.onFeedCandle(c, ctx());
     }
 
@@ -163,7 +178,23 @@ final class OteGoldenReplay {
             }
         }
         String st10 = null, st12 = null;
-        if (ctx.state == SetupState.SWEEP_DONE) st10 = driver.tryRecordDisplacement(core, bias);
+        if (ctx.state == SetupState.SWEEP_DONE) {
+            st10 = driver.tryRecordDisplacement(core, bias, impulseModel ? c : null);
+            if (impulseModel && ctx.state == SetupState.OTE_ARMED) {
+                String t = fmt(c.getTimestamp()) + " ET  ";
+                transcript.add(t + "SWEEP_DONE -> DISPLACED   (impulse leg " + fmt(ctx.impulseLegStart) + ".."
+                        + fmt(ctx.impulseLegEnd) + ": displacement bar " + fmt(ctx.displacementAt)
+                        + String.format(" range/ATR=%.2f body=%.0f%%", ctx.impulseDispRangeAtr, ctx.impulseDispBody * 100)
+                        + ", " + ctx.m5LinkKind + " [" + ctx.fvg.getBottom() + ", " + ctx.fvg.getTop() + "]@"
+                        + fmt(ctx.fvg.getTimestamp()) + ")");
+                transcript.add(t + "DISPLACED -> MSS_CONFIRMED (impulse leg MSS bar " + fmt(ctx.mssAt) + ": close "
+                        + ctx.impulseMssClose + " beyond swing " + ctx.impulseMssSwing + ")");
+                transcript.add(t + "MSS_CONFIRMED -> OTE_ARMED  zone[" + ctx.ote.f62() + ", " + ctx.ote.f79()
+                        + "] 0.705=" + ctx.ote.f705() + " eq=" + ctx.ote.eq50() + " anchor=" + ctx.oteAnchorMode
+                        + "/" + ctx.oteAnchorSource + " sweep " + ctx.impulseSweptLevel + " ext " + ctx.sweepExtreme);
+                before = SetupState.OTE_ARMED;
+            }
+        }
         if (ctx.state == SetupState.DISPLACED) driver.tryRecordMss(core, bias);
         if (ctx.state == SetupState.MSS_CONFIRMED) {
             st12 = driver.tryArmOte(core, bias, c);

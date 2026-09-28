@@ -20,6 +20,8 @@ package com.topstep.trading.strategy.stdvote;
  *   ote.fib62 / fib705 / fib79                                 0.618 / 0.705 / 0.786
  *   ote.windowBars           stdvOte.oteWindowBars             8     (detector bars, in OTE_ARMED)
  *   ote.stopMode             -                                 BAND  (BAND | ORIGIN)
+ *   ote.entryModel           -                                 IMPULSE_LEG (IMPULSE_LEG | POST_SWEEP) (Agent 05.2)
+ *   ote.impulseLeg.minSweepFib -                               0.705 (fib the sweep must reach) (Agent 05.2)
  *   mss.freshBars            stdvOte.mssFreshBars              30    (detector bars)
  *   ote30m.mode              ote30m.confluence                 SCORING
  *   risk.rrFloor             -                                 1.0   (legacy profile)
@@ -97,6 +99,34 @@ public final class OteConfig {
         return "ORIGIN".equalsIgnoreCase(m) ? "ORIGIN" : "BAND";
     }
 
+    // ── V5 Agent 05.2: entry model ──────────────────────────────────────
+    public static final String ENTRY_MODEL_IMPULSE_LEG = "IMPULSE_LEG";
+    public static final String ENTRY_MODEL_POST_SWEEP = "POST_SWEEP";
+    public static final double DEFAULT_IMPULSE_MIN_SWEEP_FIB = 0.705;
+
+    /**
+     * {@code IMPULSE_LEG} (default): when the recorded sweep sits inside the
+     * OTE band of the dealing range, M5/M6 are satisfied by the range's own
+     * impulse leg (its displacement + FVG and its structure break) and the
+     * setup ARMs on the sweep bar. {@code POST_SWEEP}: the pre-05.2 sequence
+     * (a NEW displacement + MSS after the sweep, then a retrace into the band)
+     * — kept for A/B and as the fallback when the sweep is not in the band.
+     */
+    public static String entryModel() {
+        String m = str(ENTRY_MODEL_IMPULSE_LEG, "ote.entryModel");
+        return ENTRY_MODEL_POST_SWEEP.equalsIgnoreCase(m) ? ENTRY_MODEL_POST_SWEEP : ENTRY_MODEL_IMPULSE_LEG;
+    }
+
+    /**
+     * IMPULSE_LEG: the fib of the dealing range the sweep's extreme must
+     * reach (0.705 = the OTE sweet spot). G1: the 14:45 / 14:49 raids tagged
+     * only 30627.75 / 30638.00 (below 0.705 = 30640.50); the 14:53 London-high
+     * raid reached 30650.00. 0.618 = any touch of the band.
+     */
+    public static double impulseMinSweepFib() {
+        return dbl(DEFAULT_IMPULSE_MIN_SWEEP_FIB, "ote.impulseLeg.minSweepFib");
+    }
+
     public static final int DEFAULT_OTE_WINDOW_BARS = 8;
 
     /** OTE_ARMED window in DETECTOR bars (the runner scales to feed bars). */
@@ -167,6 +197,8 @@ public final class OteConfig {
                 + " fibs=" + fib62() + "/" + fib705() + "/" + fib79()
                 + " windowBars=" + oteWindowBars()
                 + " stopMode=" + stopMode()
+                + " entryModel=" + entryModel()
+                + " impulseLeg.minSweepFib=" + impulseMinSweepFib()
                 + " | mss.freshBars=" + mssFreshBars()
                 + " | ote30m.mode=" + ote30mModeRaw()
                 + " | RR band legacy [" + rrFloor(false) + ", " + rrCeiling() + "]"
