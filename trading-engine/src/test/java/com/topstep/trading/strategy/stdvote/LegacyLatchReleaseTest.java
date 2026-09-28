@@ -28,12 +28,14 @@ class LegacyLatchReleaseTest {
 
     @BeforeEach
     void legacy() {
+        PreV5BiasCompat.apply(); // V5 Agent 03: pre-V5 bias/sweep inputs the golden fixture encodes
         System.setProperty(ScalpConfig.ENABLED_PROPERTY, "false");
         System.setProperty("stdvote.detectorTimeframe", "1");
     }
 
     @AfterEach
     void cleanup() {
+        PreV5BiasCompat.clear();
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
         System.clearProperty("stdvote.detectorTimeframe");
         StdvOteRegistry.unregister(StdvOteGoldenFixture.SYMBOL);

@@ -120,7 +120,11 @@ class SimSyntheticSignalFillIntegrationTest {
             assertThat(acct.getPosition("MNQ").getAvgEntryPrice()).isEqualTo(20000.0);
             assertThat(exec.getOrderLevels("MNQ").getCurrentStopPrice()).isEqualTo(19990.0);
             assertThat(exec.getOrderLevels("MNQ").getFinalTargetPrice()).isEqualTo(20020.0);
-            assertThat(gates).as("no gate denied the valid signal").isEmpty();
+            // Agent 01's telemetry records the path (SIGNAL received, RISK-APPROVED);
+            // no DENYING gate may appear for the valid signal.
+            assertThat(gates).extracting(GateDecisionEvent::getGate)
+                    .as("no gate denied the valid signal")
+                    .allMatch(g -> g.equals("SIGNAL") || g.equals("RISK-APPROVED"));
 
             // A replay-era signal (candle BEFORE the warmup completion candle) is dropped + published.
             StrategySignalEvent stale = new StrategySignalEvent(SignalType.LONG_ENTRY, "MGC", OrderSide.BUY,

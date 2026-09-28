@@ -564,7 +564,7 @@ public class EngineFacade {
      * AGENT-05 (V5 RC-15): signals dropped by the warmup guard — this
      * process (all runners) — for GET /api/status.
      */
-    // AGENT-01: expose on /api/status
+    // Exposed on GET /api/status -> telemetry.warmupDroppedSignals.
     public long getWarmupDroppedSignals() {
         return WarmupGuard.droppedSignals();
     }

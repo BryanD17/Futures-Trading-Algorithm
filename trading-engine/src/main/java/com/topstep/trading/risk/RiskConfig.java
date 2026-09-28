@@ -2,9 +2,9 @@ package com.topstep.trading.risk;
 
 /**
  * AGENT-05 (V5) — the post-signal pipeline's configuration keys, read in ONE
- * place. Every accessor reads the JVM system property on each call (so tests
- * can flip a key without a restart) and falls back to the documented
- * default.
+ * place through {@link com.topstep.trading.config.EngineConfig#current()} at
+ * call time (-D keeps the highest precedence, so tests can flip a key without
+ * a restart), falling back to the documented default.
  *
  * <pre>
  *   warmup.timeoutSeconds    120   warmup completes after this many seconds even
@@ -23,7 +23,8 @@ package com.topstep.trading.risk;
  *   flatten.safetyNetCt      14:45 CT — execution-path flatten/no-entry safety net
  * </pre>
  */
-// AGENT-01: migrate to EngineConfig
+// V5: a thin typed VIEW over EngineConfig.current() (BiasConfig pattern); every
+// key is registered in EngineConfig.KEYS and printed in the boot table.
 public final class RiskConfig {
 
     public static final String WARMUP_TIMEOUT_SECONDS = "warmup.timeoutSeconds";
@@ -78,7 +79,7 @@ public final class RiskConfig {
 
     /** Scalp-profile RR floor (risk.rrFloor.scalp, else risk.rrFloor, else 0.8). */
     public static double rrFloorScalp() {
-        String v = System.getProperty(RR_FLOOR_SCALP);
+        String v = cfg().getRaw(RR_FLOOR_SCALP);
         if (v != null && !v.isBlank()) return doubleProp(RR_FLOOR_SCALP, DEFAULT_RR_FLOOR_SCALP);
         return doubleProp(RR_FLOOR, DEFAULT_RR_FLOOR_SCALP);
     }
@@ -90,14 +91,14 @@ public final class RiskConfig {
 
     /** risk.haltOnProfitTarget; default depends on mode (LIVE true, SIM false). */
     public static boolean haltOnProfitTarget(boolean live) {
-        String v = System.getProperty(HALT_ON_PROFIT_TARGET);
+        String v = cfg().getRaw(HALT_ON_PROFIT_TARGET);
         if (v == null || v.isBlank()) return live;
         return Boolean.parseBoolean(v.trim());
     }
 
     /** news.blockWithoutCalendar (default false): a Mock/absent calendar never blocks. */
     public static boolean newsBlockWithoutCalendar() {
-        return Boolean.parseBoolean(System.getProperty(NEWS_BLOCK_WITHOUT_CALENDAR, "false").trim());
+        return cfg().getBoolean(NEWS_BLOCK_WITHOUT_CALENDAR, false);
     }
 
     /**
@@ -106,8 +107,8 @@ public final class RiskConfig {
      * = 80, the same budget as the runner's entry-fill timeout.
      */
     public static int orderTtlBars() {
-        int ote = intProp("stdvOte.oteWindowBars", 8);
-        int tf = intProp("stdvote.detectorTimeframe", 5);
+        int ote = intProp("ote.windowBars", 8);
+        int tf = intProp("detector.timeframe", 5);
         int def = Math.max(1, ote * Math.max(1, tf) * 2);
         return Math.max(1, intProp(ORDER_TTL_BARS, def));
     }
@@ -123,32 +124,21 @@ public final class RiskConfig {
         return !ct.isBefore(FLATTEN_SAFETY_NET_CT) && ct.isBefore(NO_ENTRY_END_CT);
     }
 
-    // ── helpers ────────────────────────────────────────────────────────
+    // ── helpers (EngineConfig view) ─────────────────────────────────────
+    private static com.topstep.trading.config.EngineConfig cfg() {
+        return com.topstep.trading.config.EngineConfig.current();
+    }
+
     static int intProp(String key, int def) {
-        String v = System.getProperty(key);
-        if (v == null || v.isBlank()) return def;
-        try { return Integer.parseInt(v.trim()); } catch (NumberFormatException e) {
-            System.err.println("[RiskConfig] ERROR bad int for " + key + "='" + v + "' — using " + def);
-            return def;
-        }
+        return cfg().getInt(key, def);
     }
 
     static long longProp(String key, long def) {
-        String v = System.getProperty(key);
-        if (v == null || v.isBlank()) return def;
-        try { return Long.parseLong(v.trim()); } catch (NumberFormatException e) {
-            System.err.println("[RiskConfig] ERROR bad long for " + key + "='" + v + "' — using " + def);
-            return def;
-        }
+        return cfg().getLong(key, def);
     }
 
     static double doubleProp(String key, double def) {
-        String v = System.getProperty(key);
-        if (v == null || v.isBlank()) return def;
-        try { return Double.parseDouble(v.trim()); } catch (NumberFormatException e) {
-            System.err.println("[RiskConfig] ERROR bad double for " + key + "='" + v + "' — using " + def);
-            return def;
-        }
+        return cfg().getDouble(key, def);
     }
 
     private static int clamp(int v, int lo, int hi) {
