@@ -40,8 +40,18 @@ class SetupLifecycleV5Test {
         @Override public void publish(Event event) { /* drop */ }
     }
 
+    @org.junit.jupiter.api.BeforeEach
+    void pinHysteresisOff() {
+        // V5 Agent 01: engine-defaults.properties turns bias.hysteresis ON.
+        // The re-arm fixtures below kill the setup through the REAL path
+        // ("HTF bias became NEUTRAL" on a 15m close), which only exists with
+        // hysteresis OFF — pin it (same pattern as StdvOteScalpRearmStuckTest).
+        System.setProperty("bias.hysteresis", "false");
+    }
+
     @AfterEach
     void cleanup() {
+        System.clearProperty("bias.hysteresis");
         System.clearProperty(SessionConfig.GATE_MODE);
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
         StdvOteRegistry.unregister("MNQ");

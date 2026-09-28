@@ -5,8 +5,12 @@ import com.topstep.trading.strategy.stdvote.ScalpConfig;
 /**
  * Agent 02's configuration keys, read in ONE place.
  *
- * <p>// AGENT-01: migrate to EngineConfig — every {@code System.getProperty}
- * below becomes an EngineConfig read; the method names are the stable API.
+ * <p>Every read goes through {@link com.topstep.trading.config.EngineConfig}
+ * (V5 Agent 01: -D &gt; ENGINE_* env &gt; engine.properties &gt; classpath
+ * engine-defaults.properties &gt; code default; legacy aliases such as
+ * {@code scalp.allSessions} / {@code scalp.rearmCooldownBars} /
+ * {@code stdvOte.setupExpiryBars} resolve to the canonical keys). System
+ * properties are resolved live, so tests / the harness may set them at runtime.
  *
  * <pre>
  *   session.gateMode             SCORING | BLOCKING          default SCORING
@@ -46,12 +50,12 @@ public final class SessionConfig {
 
     /** Configured mode ({@code session.gateMode}, default SCORING). */
     public static SessionGateMode gateMode() {
-        return SessionGateMode.parse(System.getProperty(GATE_MODE)); // AGENT-01: migrate to EngineConfig
+        return SessionGateMode.parse(cfg().getRaw(GATE_MODE));
     }
 
     /** {@code session.allSessions}, falling back to {@code scalp.allSessions} (default true). */
     public static boolean allSessions() {
-        String raw = System.getProperty(ALL_SESSIONS); // AGENT-01: migrate to EngineConfig
+        String raw = cfg().getRaw(ALL_SESSIONS); // alias: scalp.allSessions
         if (raw == null || raw.isBlank()) return ScalpConfig.allSessions();
         return !"false".equalsIgnoreCase(raw.trim());
     }
@@ -68,12 +72,12 @@ public final class SessionConfig {
     }
 
     public static int rearmCooldownBars() {
-        Integer v = intOrNull(REARM_COOLDOWN_BARS); // AGENT-01: migrate to EngineConfig
+        Integer v = intOrNull(REARM_COOLDOWN_BARS); // alias: scalp.rearmCooldownBars
         return v != null ? Math.max(0, v) : ScalpConfig.rearmCooldownBars();
     }
 
     public static ExpiryAnchor expiryAnchor(SessionGateMode mode) {
-        String raw = System.getProperty(EXPIRY_ANCHOR); // AGENT-01: migrate to EngineConfig
+        String raw = cfg().getRaw(EXPIRY_ANCHOR);
         if (raw != null && !raw.isBlank()) {
             try {
                 return ExpiryAnchor.valueOf(raw.trim().toUpperCase());
@@ -87,18 +91,16 @@ public final class SessionConfig {
 
     /**
      * Hunting budget in FEED (1m) bars = minutes. Precedence:
-     * setup.expiryMinutes &gt; setup.expiryBars x detector minutes &gt;
-     * stdvOte.setupExpiryBars x detector minutes &gt; anchor default
+     * setup.expiryMinutes &gt; setup.expiryBars (alias stdvOte.setupExpiryBars)
+     * x detector minutes &gt; anchor default
      * (SWEEP_DONE: 60 min; BIAS_SET: 40 detector bars, the pre-V5 value).
      */
     public static int expiryFeedBars(int detectorMinutes, ExpiryAnchor anchor) {
         int det = Math.max(1, detectorMinutes);
-        Integer minutes = intOrNull(EXPIRY_MINUTES); // AGENT-01: migrate to EngineConfig
+        Integer minutes = intOrNull(EXPIRY_MINUTES);
         if (minutes != null) return Math.max(0, minutes);
-        Integer bars = intOrNull(EXPIRY_BARS); // AGENT-01: migrate to EngineConfig
+        Integer bars = intOrNull(EXPIRY_BARS); // alias: stdvOte.setupExpiryBars
         if (bars != null) return Math.max(0, bars) * det;
-        Integer legacy = intOrNull(LEGACY_EXPIRY_BARS); // AGENT-01: migrate to EngineConfig
-        if (legacy != null) return Math.max(0, legacy) * det;
         return anchor == ExpiryAnchor.BIAS_SET
                 ? LEGACY_DEFAULT_EXPIRY_DETECTOR_BARS * det
                 : DEFAULT_EXPIRY_MINUTES;
@@ -106,12 +108,16 @@ public final class SessionConfig {
 
     /** Pre-sweep budget in feed bars (minutes); only used with the SWEEP_DONE anchor. */
     public static int preSweepExpiryFeedBars() {
-        Integer v = intOrNull(PRE_SWEEP_EXPIRY_MINUTES); // AGENT-01: migrate to EngineConfig
+        Integer v = intOrNull(PRE_SWEEP_EXPIRY_MINUTES);
         return v != null ? Math.max(0, v) : DEFAULT_PRE_SWEEP_EXPIRY_MINUTES;
     }
 
+    private static com.topstep.trading.config.EngineConfig cfg() {
+        return com.topstep.trading.config.EngineConfig.current();
+    }
+
     private static Integer intOrNull(String key) {
-        String raw = System.getProperty(key);
+        String raw = cfg().getRaw(key);
         if (raw == null || raw.isBlank()) return null;
         try {
             return Integer.parseInt(raw.trim());
