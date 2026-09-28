@@ -26,7 +26,7 @@ ext.engineConfigPrefixes = [
         // Agent 03 (level windows / phantom days; manipulation-leg rollback)
         'levels.', 'manip.',
         // reserved for Agents 02-05 (V5 Appendix C keys)
-        'warmup.', 'size.', 'risk.', 'news.',
+        'warmup.', 'size.', 'risk.', 'news.', 'order.',
         // Agent 04 (M5 FVG linkage)
         'fvg.'
 ]

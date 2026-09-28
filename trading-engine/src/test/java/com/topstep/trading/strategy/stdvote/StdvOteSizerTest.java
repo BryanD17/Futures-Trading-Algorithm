@@ -66,17 +66,21 @@ class StdvOteSizerTest {
         }
 
         @Test
-        @DisplayName("Case C: MNQ too-tight room cannot fund 5 micros -> SKIP")
+        @DisplayName("Case C (V5): tight room funds 3 micros -> 3 (floor is size.minMicros=1); room for 0 -> SKIP")
         void caseCCannotFundFiveMnq() {
             // room 300 ; risk$ = 36 ; stop 6 pts ; perContract = 12
-            // raw = floor(36/12) = 3 -> below floor 5 -> SKIP
+            // raw = floor(36/12) = 3 -> >= floor 1 -> 3 (was SKIP under the old hard floor 5)
             StdvOteSizer.SizeRequest req = new StdvOteSizer.SizeRequest(
                     20100.0, 20094.0, mnq(), TradeTier.TIER_2);
             StdvOteSizer.SizeContext ctx = new StdvOteSizer.SizeContext(
                     49_600, 49_000, 300, 0.12, 1.0, 20);
-            StdvOteSizer.SizingDecision d = sizer.decide(req, ctx);
+            assertThat(sizer.decide(req, ctx).contracts()).isEqualTo(3);
+            // room 50 ; risk$ = 6 < perContract 12 -> raw 0 -> SIZE deny
+            StdvOteSizer.SizingDecision d = sizer.decide(req, new StdvOteSizer.SizeContext(
+                    49_350, 49_000, 300, 0.12, 1.0, 20));
             assertThat(d.contracts()).isEqualTo(0);
             assertThat(d.reason()).isEqualTo(StdvOteSizer.SkipReason.BELOW_FLOOR);
+            assertThat(d.detail()).contains("SIZE: stop too wide for risk budget");
         }
 
         @Test
@@ -190,12 +194,15 @@ class StdvOteSizerTest {
         }
 
         @Test
-        @DisplayName("0.3x: 12 -> 3 -> below floor -> SKIP (NEWS_MULTIPLIER_TOO_LOW)")
+        @DisplayName("0.3x: 12 -> 3 (>= floor 1, V5); 0.05x: 12 -> 0 -> SKIP (NEWS_MULTIPLIER_TOO_LOW)")
         void thirtyPercentSkips() {
             StdvOteSizer.SizeRequest req = new StdvOteSizer.SizeRequest(
                     20100.0, 20094.0, mnq(), TradeTier.TIER_2);
+            StdvOteSizer.SizingDecision d3 = sizer.decide(req, new StdvOteSizer.SizeContext(
+                    60_000, 49_000, 300, 0.12, 0.3, 20));
+            assertThat(d3.contracts()).isEqualTo(3);
             StdvOteSizer.SizeContext ctx = new StdvOteSizer.SizeContext(
-                    60_000, 49_000, 300, 0.12, 0.3, 20);
+                    60_000, 49_000, 300, 0.12, 0.05, 20);
             StdvOteSizer.SizingDecision d = sizer.decide(req, ctx);
             assertThat(d.contracts()).isEqualTo(0);
             assertThat(d.reason()).isEqualTo(StdvOteSizer.SkipReason.NEWS_MULTIPLIER_TOO_LOW);
@@ -251,7 +258,7 @@ class StdvOteSizerTest {
         }
 
         @Test
-        @DisplayName("output is always 0 or in [5,20] across a randomized grid")
+        @DisplayName("output is always 0 or in [size.minMicros=1, 20] across a randomized grid")
         void outputAlwaysValid() {
             for (TradeableInstrument.Spec spec : TradeableInstrument.all()) {
                 for (TradeTier tier : TradeTier.values()) {
@@ -263,7 +270,7 @@ class StdvOteSizerTest {
                                     new StdvOteSizer.SizeRequest(entry, stop, spec, tier),
                                     new StdvOteSizer.SizeContext(equity, 49_000, 300, 0.12, 1.0, 20));
                             int n = d.contracts();
-                            assertThat(n == 0 || (n >= 5 && n <= 20))
+                            assertThat(n == 0 || (n >= 1 && n <= 20))
                                     .as("instrument=%s tier=%s equity=%d stop=%s -> %d",
                                             spec.symbol(), tier, equity, stopPts, n)
                                     .isTrue();

@@ -98,7 +98,7 @@ class SetupControllerTest {
                 .andExpect(jsonPath("$[0].symbol").value("MNQ"))
                 .andExpect(jsonPath("$[0].tickSize").value(0.25))
                 .andExpect(jsonPath("$[0].pointValue").value(2.0))
-                .andExpect(jsonPath("$[0].minMicros").value(5))
+                .andExpect(jsonPath("$[0].minMicros").value(1)) // AGENT-05 V5 RC-14: size.minMicros default 1
                 .andExpect(jsonPath("$[0].maxMicros").value(20));
     }
 

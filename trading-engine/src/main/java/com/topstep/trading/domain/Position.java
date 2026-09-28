@@ -85,7 +85,9 @@ public class Position {
         double priceDiff = isLong() ?
             (currentPrice - avgEntryPrice) :
             (avgEntryPrice - currentPrice);
-        return priceDiff * Math.abs(quantity) * tickValue;
+        // AGENT-05 (V5 RC-17): points -> ticks -> dollars. The old
+        // priceDiff * tickValue treated a POINT as a TICK (MNQ 4x low).
+        return priceDiff / ContractSpecs.tickSize(symbol) * Math.abs(quantity) * tickValue;
     }
 
     /**

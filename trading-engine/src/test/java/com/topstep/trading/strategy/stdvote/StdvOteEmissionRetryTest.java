@@ -71,8 +71,8 @@ class StdvOteEmissionRetryTest {
         StdvOteStrategy s = armedStrategy();
         SetupContext ctx = s.getSetupContext();
 
-        // First attempt: size below the 5-micro floor → M8 rejection.
-        assertThat(s.tryEmit(0.25, 4, TradeTier.TIER_2, 3)).isFalse();
+        // First attempt: size below the configured floor (size.minMicros=1) → M8 rejection.
+        assertThat(s.tryEmit(0.25, 4, TradeTier.TIER_2, 0)).isFalse();
         assertThat(ctx.lastGateFailed).isEqualTo("M8");
         assertThat(ctx.state).isEqualTo(SetupState.OTE_ARMED);
 

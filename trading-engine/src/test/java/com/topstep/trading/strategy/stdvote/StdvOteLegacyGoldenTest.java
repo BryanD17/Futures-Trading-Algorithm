@@ -49,7 +49,10 @@ class StdvOteLegacyGoldenTest {
     private static final double GOLDEN_STOP = 21019.0;
     private static final double GOLDEN_TARGET = 21036.75;
     private static final double GOLDEN_RR = 3.4375;
-    private static final int GOLDEN_QUANTITY = 6;
+    // V5 RC-14 (AGENT-05): quantity is RISK-DERIVED — floor($250 / $per-micro),
+    // capped at topstep50k().maxContracts = 5 (the pre-V5 tier table sent 6,
+    // which the risk engine then silently re-sized). Prices/RR are Agent 04's.
+    private static final int GOLDEN_QUANTITY = 5;
 
     @BeforeEach
     void forceLegacyMode() {

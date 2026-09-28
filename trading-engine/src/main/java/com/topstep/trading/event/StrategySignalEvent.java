@@ -28,6 +28,10 @@ public class StrategySignalEvent extends BaseEvent {
     private final double riskRewardRatio;
     private final double[][] partialProfitTargets;  // [[R-multiple, % to close], ...]
     private final boolean wasPromoted;  // True if artificially promoted to higher tier
+    // AGENT-05 (V5 RC-15): MARKET time of the candle that produced this
+    // signal. The warmup guard compares this (never the wall-clock creation
+    // stamp of BaseEvent). Null only when no candle context was known.
+    private final java.time.Instant candleTime;
 
     /**
      * Original constructor for backward compatibility.
@@ -65,7 +69,24 @@ public class StrategySignalEvent extends BaseEvent {
                                double entryPrice, double stopPrice, double targetPrice, String reason,
                                TradeTier tier, int quantity, double riskRewardRatio,
                                double[][] partialProfitTargets, boolean wasPromoted) {
+        this(signalType, symbol, side, entryPrice, stopPrice, targetPrice, reason,
+             tier, quantity, riskRewardRatio, partialProfitTargets, wasPromoted,
+             SignalCandleClock.current());
+    }
+
+    /**
+     * AGENT-05 (V5 RC-15): full constructor with an explicit candle time.
+     * The other constructors default {@code candleTime} to
+     * {@link SignalCandleClock#current()} (the candle being dispatched on
+     * the emitting thread).
+     */
+    public StrategySignalEvent(SignalType signalType, String symbol, OrderSide side,
+                               double entryPrice, double stopPrice, double targetPrice, String reason,
+                               TradeTier tier, int quantity, double riskRewardRatio,
+                               double[][] partialProfitTargets, boolean wasPromoted,
+                               java.time.Instant candleTime) {
         super(EventType.STRATEGY_SIGNAL);
+        this.candleTime = candleTime;
         this.signalType = Objects.requireNonNull(signalType, "signalType cannot be null");
         this.symbol = Objects.requireNonNull(symbol, "symbol cannot be null");
         this.side = Objects.requireNonNull(side, "side cannot be null");
@@ -95,6 +116,8 @@ public class StrategySignalEvent extends BaseEvent {
     public double getRiskRewardRatio() { return riskRewardRatio; }
     public double[][] getPartialProfitTargets() { return partialProfitTargets; }
     public boolean wasPromoted() { return wasPromoted; }
+    /** AGENT-05: market time of the producing candle; null when unknown. */
+    public java.time.Instant getCandleTime() { return candleTime; }
 
     /**
      * Get the risk distance (entry to stop).

@@ -75,7 +75,9 @@ public class StatusController {
             status.put("effectiveConfig", engine.getEngineConfig().toApiMap());
             status.put("telemetry", Map.of(
                     "errorCounts", com.topstep.trading.event.EngineTelemetry.errorCounts(),
-                    "gateCounts", com.topstep.trading.event.EngineTelemetry.gateCounts()));
+                    "gateCounts", com.topstep.trading.event.EngineTelemetry.gateCounts(),
+                    // AGENT-05 (V5 RC-15): signals dropped by the warmup guard.
+                    "warmupDroppedSignals", engine.getWarmupDroppedSignals()));
 
         } catch (Exception e) {
             com.topstep.trading.event.EngineTelemetry.error("StatusController.getStatus", e);

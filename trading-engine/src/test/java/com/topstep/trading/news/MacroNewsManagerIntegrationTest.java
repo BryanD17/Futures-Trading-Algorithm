@@ -26,6 +26,10 @@ class MacroNewsManagerIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        // AGENT-05 (V5): a Mock calendar is non-blocking by default; these
+        // flow tests use the Mock as a stand-in for a REAL calendar, so they
+        // opt in explicitly.
+        System.setProperty("news.blockWithoutCalendar", "true");
         calendarProvider = new MockCalendarProvider();
         config = MacroNewsConfig.forBacktest();
         newsManager = new MacroNewsManager(calendarProvider, config, null);
@@ -35,6 +39,26 @@ class MacroNewsManagerIntegrationTest {
     @AfterEach
     void tearDown() {
         newsManager.stop();
+        System.clearProperty("news.blockWithoutCalendar");
+    }
+
+    @Test
+    @DisplayName("AGENT-05: a Mock calendar never blocks by default (news.blockWithoutCalendar=false)")
+    void mockCalendarNonBlockingByDefault() {
+        System.clearProperty("news.blockWithoutCalendar");
+        Instant now = Instant.now();
+        calendarProvider.setSimulatedTime(now);
+        calendarProvider.addEvent(EconomicEvent.builder()
+                .id("cpi-mock")
+                .name("US CPI MoM")
+                .currency(Currency.USD)
+                .impact(EventImpact.HIGH)
+                .category(EventCategory.INFLATION)
+                .scheduledTime(now.plus(Duration.ofMinutes(3)))
+                .forecast(0.3)
+                .build());
+        assertThat(newsManager.hasRealCalendar()).isFalse();
+        assertThat(newsManager.checkTradeGating("ES", now).getAction()).isEqualTo(GatingAction.ALLOW);
     }
 
     @Nested

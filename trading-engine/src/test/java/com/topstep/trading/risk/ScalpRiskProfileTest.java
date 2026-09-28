@@ -46,7 +46,7 @@ class ScalpRiskProfileTest {
         return new StrategySignalEvent(
                 SignalType.LONG_ENTRY, "MNQ", OrderSide.BUY,
                 21000.0, 20990.0, 21030.0, "legacy test",
-                TradeTier.TIER_1, 6);
+                TradeTier.TIER_1, 5); // V5: within legacy maxContracts 5 (over-cap requests are DENIED)
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -70,10 +70,14 @@ class ScalpRiskProfileTest {
             assertThat(s.isAllowWeekendTrading()).isFalse();
             // Scalp knobs.
             assertThat(s.getRiskPerTrade()).isEqualTo(150.0);
+            // V5 ONE band (RC-13): floor 0.8 (scalp), ceiling 5.0; the
+            // signal* getters are aliases of the same two numbers.
+            assertThat(s.getRrFloor()).isEqualTo(0.8);
+            assertThat(s.getRrCeiling()).isEqualTo(5.0);
             assertThat(s.getMinRiskRewardRatio()).isEqualTo(0.8);
-            assertThat(s.getMaxRiskRewardRatio()).isEqualTo(1.5);
+            assertThat(s.getMaxRiskRewardRatio()).isEqualTo(5.0);
             assertThat(s.getSignalMinRr()).isEqualTo(0.8);
-            assertThat(s.getSignalMaxRr()).isEqualTo(1.5);
+            assertThat(s.getSignalMaxRr()).isEqualTo(5.0);
             assertThat(s.getMaxContracts()).isEqualTo(20);
             assertThat(s.getMaxTotalContracts()).isEqualTo(20);
             assertThat(s.getMaxTradesPerDay()).isEqualTo(6);
@@ -91,16 +95,15 @@ class ScalpRiskProfileTest {
             assertThat(l.getMaxContracts()).isEqualTo(5);
             assertThat(l.getMaxTotalContracts()).isEqualTo(10);
             assertThat(l.getRiskPerTrade()).isEqualTo(250.0);
-            assertThat(l.getMinRiskRewardRatio()).isEqualTo(3.0);
-            assertThat(l.getMaxRiskRewardRatio()).isEqualTo(6.0);
+            // V5 ONE band (RC-13): legacy floor 1.0, ceiling 5.0 (was a
+            // second, disagreeing band [3.0, 6.0] in the risk engine).
+            assertThat(l.getMinRiskRewardRatio()).isEqualTo(1.0);
+            assertThat(l.getMaxRiskRewardRatio()).isEqualTo(5.0);
             assertThat(l.getFlattenByTime()).isEqualTo(LocalTime.of(15, 10));
             assertThat(l.isAllowWeekendTrading()).isFalse();
-            // New fields carry legacy-neutral defaults: the validator band is
-            // exactly the historical effective behaviour [2.0, +inf) — NOT
-            // minRiskRewardRatio (3.0), which would have tightened legacy
-            // emission — and both frequency gates are disabled.
-            assertThat(l.getSignalMinRr()).isEqualTo(2.0);
-            assertThat(l.getSignalMaxRr()).isEqualTo(Double.POSITIVE_INFINITY);
+            // The validator reads the SAME band; frequency gates disabled.
+            assertThat(l.getSignalMinRr()).isEqualTo(1.0);
+            assertThat(l.getSignalMaxRr()).isEqualTo(5.0);
             assertThat(l.getMaxTradesPerDay()).isZero();
             assertThat(l.getMaxConsecutiveLosses()).isZero();
         }
@@ -213,17 +216,23 @@ class ScalpRiskProfileTest {
         }
 
         @Test
-        @DisplayName("scalp RR band: the engine accepts RR 1.0 and rejects RR 3.0 as too high")
+        @DisplayName("V5: the engine accepts RR 1.0 AND RR 3.0 (no second ceiling) and still rejects below the floor")
         void scalpRrBandEnforced() {
             RiskLimits scalp = RiskLimits.topstep50kScalp();
             AccountState account = new AccountState(50_000.0);
 
             assertThat(engine.evaluate(scalpSignal(), account, scalp).isAllowed()).isTrue();
 
-            // A 3R signal is outside the scalp band (max 1.5) → rejected.
-            RiskDecision tooHigh = engine.evaluate(legacySignal(), account, scalp);
-            assertThat(tooHigh.isAllowed()).isFalse();
-            assertThat(tooHigh.getReason()).contains("R:R too high");
+            // V5 RC-13: the "R:R too high (unrealistic)" ceiling is GONE from
+            // the risk engine — a 3R signal is allowed (the band's 5.0
+            // ceiling is enforced once, by the validator).
+            RiskDecision threeR = engine.evaluate(legacySignal(), account, scalp);
+            assertThat(threeR.isAllowed()).as(threeR.getReason()).isTrue();
+            // The floor is still enforced, from RiskLimits.rrFloor.
+            RiskLimits strict = scalp.toBuilder().rrFloor(4.0).build();
+            RiskDecision tooLow = engine.evaluate(legacySignal(), account, strict);
+            assertThat(tooLow.isAllowed()).isFalse();
+            assertThat(tooLow.getReason()).contains("R:R too low");
         }
     }
 }

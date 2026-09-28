@@ -198,7 +198,15 @@ public class MultiInstrumentEngine {
                 conditionFilter.evaluate(strategyContext.getCurrentTime(), symbol, atr, profile);
 
         if (!condition.shouldTrade()) {
-            return "Market conditions unfavorable: " + condition.getRecommendation();
+            // AGENT-05 (V5): every reject carries its numbers — the score vs
+            // the SKIP threshold (< -4) and the contributing factors.
+            StringBuilder f = new StringBuilder();
+            for (MarketConditionFilter.ConditionFactor cf : condition.getFactors()) {
+                if (f.length() > 0) f.append("; ");
+                f.append(cf);
+            }
+            return "Market conditions unfavorable: " + condition.getRecommendation()
+                    + " (score " + condition.getTotalScore() + " < -4; factors: " + f + ")";
         }
 
         return null; // Conditions OK

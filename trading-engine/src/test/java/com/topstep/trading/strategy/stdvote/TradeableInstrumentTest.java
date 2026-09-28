@@ -68,7 +68,8 @@ class TradeableInstrumentTest {
         assertThat(s.tickSize()).isEqualTo(0.25);
         assertThat(s.tickValue()).isEqualTo(0.50);
         assertThat(s.pointValue()).isEqualTo(2.00);
-        assertThat(s.minMicros()).isEqualTo(5);
+        // V5 RC-14: band from size.minMicros (default 1) / size.maxMicros (20).
+        assertThat(s.minMicros()).isEqualTo(1);
         assertThat(s.maxMicros()).isEqualTo(20);
         assertThat(s.raidMinQuality()).isEqualTo(5);
         assertThat(s.correlate()).isEqualTo("MES");
@@ -109,10 +110,10 @@ class TradeableInstrumentTest {
     }
 
     @Test
-    @DisplayName("every spec sits within the hard [5, 20] micro band")
+    @DisplayName("every spec sits within the configurable [1, 20] micro band")
     void specsWithinHardBand() {
         for (TradeableInstrument.Spec s : TradeableInstrument.all()) {
-            assertThat(s.minMicros()).isGreaterThanOrEqualTo(5);
+            assertThat(s.minMicros()).isGreaterThanOrEqualTo(1);
             assertThat(s.maxMicros()).isLessThanOrEqualTo(20);
             assertThat(s.minMicros()).isLessThanOrEqualTo(s.maxMicros());
         }

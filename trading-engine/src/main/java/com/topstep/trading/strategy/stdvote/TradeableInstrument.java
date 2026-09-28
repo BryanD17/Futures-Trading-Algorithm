@@ -15,9 +15,12 @@ import java.util.Optional;
  * truth for tick size, tick value, point value, micro size bounds, raid
  * quality threshold, and the SMT correlate symbol.
  *
- * The hard size band {@code [minMicros, maxMicros]} is {@code [5, 20]} for
- * all three instruments. If buffer-based sizing cannot fund 5 micros, the
- * order is skipped — partial sub-5 orders are never produced.
+ * The size band {@code [minMicros, maxMicros]} comes from configuration
+ * ({@code size.minMicros}, default 1; {@code size.maxMicros}, default 20 —
+ * see {@code RiskConfig}); any band inside {@code [1, 20]} is valid (V5
+ * RC-14: the old hard floor of 5 made every 39-pt MNQ stop at $150-$250
+ * un-tradeable). A risk-derived size below minMicros is DENIED with a
+ * "SIZE: ..." reason, never rounded up.
  *
  * Contract specs MUST satisfy {@code pointValue == tickValue / tickSize}
  * (asserted at construction). The user has been advised in the baseline
@@ -52,9 +55,11 @@ public final class TradeableInstrument {
              int maxMicros,
              int raidMinQuality,
              String correlate) {
-            if (minMicros < 5 || maxMicros > 20 || minMicros > maxMicros) {
+            if (minMicros < com.topstep.trading.risk.RiskConfig.ABS_MIN_MICROS
+                    || maxMicros > com.topstep.trading.risk.RiskConfig.ABS_MAX_MICROS
+                    || minMicros > maxMicros) {
                 throw new IllegalArgumentException(
-                        "Size band out of [5,20] for " + symbol
+                        "Size band out of [1,20] for " + symbol
                                 + ": minMicros=" + minMicros
                                 + " maxMicros=" + maxMicros);
             }
@@ -101,9 +106,12 @@ public final class TradeableInstrument {
 
     static {
         Map<Symbol, Spec> m = new LinkedHashMap<>();
-        m.put(Symbol.MNQ, new Spec(Symbol.MNQ, 0.25, 0.50,  2.00, 5, 20, 5, "MES"));
-        m.put(Symbol.MES, new Spec(Symbol.MES, 0.25, 1.25,  5.00, 5, 20, 5, "MNQ"));
-        m.put(Symbol.MGC, new Spec(Symbol.MGC, 0.10, 1.00, 10.00, 5, 20, 6, "DXY"));
+        // AGENT-05 (V5 RC-14): band from size.minMicros / size.maxMicros.
+        int lo = com.topstep.trading.risk.RiskConfig.minMicros();
+        int hi = com.topstep.trading.risk.RiskConfig.maxMicros();
+        m.put(Symbol.MNQ, new Spec(Symbol.MNQ, 0.25, 0.50,  2.00, lo, hi, 5, "MES"));
+        m.put(Symbol.MES, new Spec(Symbol.MES, 0.25, 1.25,  5.00, lo, hi, 5, "MNQ"));
+        m.put(Symbol.MGC, new Spec(Symbol.MGC, 0.10, 1.00, 10.00, lo, hi, 6, "DXY"));
         SPECS = Collections.unmodifiableMap(m);
     }
 

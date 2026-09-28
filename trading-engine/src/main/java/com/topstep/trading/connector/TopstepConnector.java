@@ -161,7 +161,9 @@ public class TopstepConnector implements TradingConnector {
     /**
      * Tracks a pending order awaiting fill confirmation.
      */
-    private static class PendingOrder {
+    static class PendingOrder {
+        /** AGENT-05: terminal-callback attempts that threw (fill-loss guard). */
+        int callbackFailures = 0;
         final String orderId;
         final String symbol;
         final int quantity;
@@ -342,16 +344,12 @@ public class TopstepConnector implements TradingConnector {
                         logger.info("Order {} FILLED: {} {} @ {}",
                             orderId, pending.symbol, fillQty, fillPrice);
 
-                        // CRITICAL: Use try-finally to ensure order is always removed from pending
-                        // even if listener callback throws an exception
-                        try {
-                            if (pending.listener != null) {
-                                pending.listener.onOrderUpdate(orderId, OrderStatus.FILLED, fillPrice, fillQty);
-                            }
-                        } catch (Exception e) {
-                            // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
-                            logger.error("Exception in fill listener for order {}: {}", orderId, e.getMessage());
-                        } finally {
+                        // AGENT-05 (V5 RC-17): a throwing fill listener no
+                        // longer LOSES the fill. The order stays pending and
+                        // the callback is retried on the next poll(s); only
+                        // after FILL_CALLBACK_ATTEMPTS failures is it dropped,
+                        // at ERROR with a counter.
+                        if (deliverTerminalUpdate(orderId, pending, OrderStatus.FILLED, fillPrice, fillQty)) {
                             pendingOrders.remove(orderId);
                             orderListeners.remove(orderId);
                         }
@@ -391,6 +389,36 @@ public class TopstepConnector implements TradingConnector {
         } catch (Exception e) {
             // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
             logger.error("Error in pollOrderStatuses: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Deliver a terminal order update to the pending order's listener.
+     *
+     * @return true when the order may be removed from tracking (delivered,
+     *         or abandoned after {@link #FILL_CALLBACK_ATTEMPTS} failures)
+     */
+    boolean deliverTerminalUpdate(String orderId, PendingOrder pending, OrderStatus status,
+                                  Double price, Integer qty) {
+        if (pending.listener == null) {
+            return true;
+        }
+        try {
+            pending.listener.onOrderUpdate(orderId, status, price, qty);
+            return true;
+        } catch (Exception e) {
+            pending.callbackFailures++;
+            fillListenerFailures.incrementAndGet();
+            com.topstep.trading.event.EngineTelemetry.error("TopstepConnector.fillListener", e);
+            if (pending.callbackFailures < FILL_CALLBACK_ATTEMPTS) {
+                logger.error("ERROR in {} listener for order {} (attempt {}/{}): {} — keeping order pending, will retry",
+                    status, orderId, pending.callbackFailures, FILL_CALLBACK_ATTEMPTS, e.toString(), e);
+                return false;
+            }
+            logger.error("CRITICAL {} callback for order {} FAILED {} times — giving up; broker state "
+                    + "({} x {} @ {}) must be reconciled manually: {}",
+                status, orderId, pending.callbackFailures, pending.symbol, qty, price, e.toString(), e);
+            return true;
         }
     }
 
@@ -782,25 +810,16 @@ public class TopstepConnector implements TradingConnector {
             // Sort candles by timestamp ASCENDING (oldest first) for correct indicator processing
             parsedCandles.sort((c1, c2) -> c1.getTimestamp().compareTo(c2.getTimestamp()));
 
-            // Deliver candles in chronological order
-            int newBarsCount = 0;
-            Instant maxTimestamp = lastTimestamp;
-
-            for (Candle candle : parsedCandles) {
-                // Skip bars we've already processed
-                if (lastTimestamp != null && !candle.getTimestamp().isAfter(lastTimestamp)) {
-                    continue;
-                }
-                listener.onCandle(candle);
-                newBarsCount++;
-                logger.info("CANDLE {} | {} | O:{} H:{} L:{} C:{} V:{}",
-                    symbol, candle.getTimestamp(), candle.getOpen(), candle.getHigh(),
-                    candle.getLow(), candle.getClose(), candle.getVolume());
-
-                // Track the maximum timestamp
-                if (maxTimestamp == null || candle.getTimestamp().isAfter(maxTimestamp)) {
-                    maxTimestamp = candle.getTimestamp();
-                }
+            // Deliver candles in chronological order. AGENT-05 (V5 RC-17):
+            // a bar whose listener throws is SKIPPED (logged at ERROR,
+            // counted) and lastBarTimestamp still advances past it — the old
+            // code aborted the loop before the watermark update, so one bad
+            // bar was re-delivered on every poll forever (poison pill).
+            DeliveryResult dr = deliverNewBars(symbol, parsedCandles, lastTimestamp, listener::onCandle);
+            int newBarsCount = dr.delivered;
+            Instant maxTimestamp = dr.watermark;
+            if (dr.failed > 0) {
+                poisonBarsSkipped.addAndGet(dr.failed);
             }
 
             // Update lastBarTimestamp to the max delivered timestamp
@@ -819,6 +838,61 @@ public class TopstepConnector implements TradingConnector {
         } catch (Exception e) {
             logger.error("Error fetching bars for {}: {}", symbol, e.getMessage());
         }
+    }
+
+    /** Outcome of one delivery pass (AGENT-05 poison-pill guard). */
+    static final class DeliveryResult {
+        final int delivered;
+        final int failed;
+        final Instant watermark;
+        DeliveryResult(int delivered, int failed, Instant watermark) {
+            this.delivered = delivered;
+            this.failed = failed;
+            this.watermark = watermark;
+        }
+    }
+
+    /** Bars skipped because the listener threw on them (telemetry). */
+    private final java.util.concurrent.atomic.AtomicLong poisonBarsSkipped = new java.util.concurrent.atomic.AtomicLong();
+    /** Fill callbacks that threw and were retried / finally given up on. */
+    private final java.util.concurrent.atomic.AtomicLong fillListenerFailures = new java.util.concurrent.atomic.AtomicLong();
+    /** Attempts before a terminal-order callback is abandoned (then ERROR + counted). */
+    static final int FILL_CALLBACK_ATTEMPTS = 3;
+
+    public long getPoisonBarsSkipped() { return poisonBarsSkipped.get(); }
+    public long getFillListenerFailures() { return fillListenerFailures.get(); }
+
+    /**
+     * Deliver ascending candles newer than {@code lastTimestamp}. A candle
+     * whose delivery throws is skipped (ERROR) and the watermark still
+     * advances past it. Pure apart from the consumer; unit-tested.
+     */
+    static DeliveryResult deliverNewBars(String symbol, java.util.List<Candle> ascending,
+                                         Instant lastTimestamp,
+                                         java.util.function.Consumer<Candle> consumer) {
+        int delivered = 0;
+        int failed = 0;
+        Instant watermark = lastTimestamp;
+        for (Candle candle : ascending) {
+            if (lastTimestamp != null && !candle.getTimestamp().isAfter(lastTimestamp)) {
+                continue;
+            }
+            try {
+                consumer.accept(candle);
+                delivered++;
+                logger.info("CANDLE {} | {} | O:{} H:{} L:{} C:{} V:{}",
+                    symbol, candle.getTimestamp(), candle.getOpen(), candle.getHigh(),
+                    candle.getLow(), candle.getClose(), candle.getVolume());
+            } catch (RuntimeException e) {
+                failed++;
+                logger.error("POISON BAR skipped for {} at {}: {} — watermark advances past it",
+                    symbol, candle.getTimestamp(), e.toString(), e);
+            }
+            if (watermark == null || candle.getTimestamp().isAfter(watermark)) {
+                watermark = candle.getTimestamp();
+            }
+        }
+        return new DeliveryResult(delivered, failed, watermark);
     }
 
     /**
@@ -1568,8 +1642,8 @@ public class TopstepConnector implements TradingConnector {
         // Skip cancellation for orders without a valid server-assigned ID
         // This can happen when API response didn't include orderId/id fields
         if (orderId == null || orderId.isEmpty()) {
-            logger.warn("Cannot cancel order with null or empty ID - order may not have been submitted to server");
-            return;
+            logger.error("ERROR cannot cancel order with null or empty ID - order may not have been submitted to server");
+            throw new IllegalArgumentException("cancelOrder: null/empty order id");
         }
 
         // Parse order ID - must be numeric (server-assigned ID)
@@ -1579,7 +1653,7 @@ public class TopstepConnector implements TradingConnector {
         } catch (NumberFormatException e) {
             // Order has a client-generated ID (ORD-xxx or UUID), not a server-assigned numeric ID
             // This means the server never acknowledged the order or didn't return an ID
-            logger.warn("Cannot cancel order with non-numeric ID '{}' - order may not have server acknowledgment. " +
+            logger.error("ERROR cannot cancel order with non-numeric ID '{}' - order may not have server acknowledgment. " +
                 "Removing from local tracking only.", orderId);
             // Remove from listeners since we can't cancel it on the server
             orderListeners.remove(orderId);
@@ -1607,6 +1681,18 @@ public class TopstepConnector implements TradingConnector {
             if (!response.isSuccessful()) {
                 String body = response.body() != null ? response.body().string() : "No body";
                 throw new IOException("Order cancellation failed: " + response.code() + " - " + body);
+            }
+            // AGENT-05 (V5 RC-17): HTTP 200 with success=false is a FAILED
+            // cancel — fail loudly instead of reporting success.
+            String cancelResponse = response.body() != null ? response.body().string() : "";
+            if (!cancelResponse.isBlank()) {
+                JsonNode cj = objectMapper.readTree(cancelResponse);
+                boolean ok = !cj.has("success") || cj.get("success").asBoolean();
+                int code = cj.path("errorCode").asInt(0);
+                if (!ok || code != 0) {
+                    String msg = cj.has("errorMessage") ? cj.get("errorMessage").asText() : "Unknown error";
+                    throw new IOException("Order cancellation rejected by TopstepX: " + msg + " (code: " + code + ")");
+                }
             }
 
             logger.info("Order cancelled successfully: {}", orderId);

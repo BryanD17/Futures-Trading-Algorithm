@@ -806,6 +806,18 @@ public final class StdvOteStrategy implements TradingStrategy {
      * the entry sits in; the range 1.0 would put the stop beyond the whole
      * retrace. G1: max(30673.00, OB top 30650.00) + 4 ticks = 30674.00.
      */
+    /**
+     * AGENT-05 (V5 RC-14): the stop {@link #tryEmit} WILL plan for the current
+     * setup — same branch (anchored vs OTE-1.0) — so the runner sizes on the
+     * exact geometry the signal carries. Read-only; NaN without a zone.
+     */
+    double plannedStopForSizing(double tickSize, int stopBufferTicks) {
+        if (setup.ote == null) return Double.NaN;
+        return setup.oteAnchorMode != null
+                ? anchoredStop(setup.ote, tickSize, stopBufferTicks)
+                : oteCalculator.stopPrice(setup.ote, tickSize, stopBufferTicks);
+    }
+
     private double anchoredStop(OteZone zone, double tickSize, int bufferTicks) {
         if ("ORIGIN".equals(OteConfig.stopMode())) {
             return oteCalculator.stopPrice(zone, tickSize, bufferTicks);

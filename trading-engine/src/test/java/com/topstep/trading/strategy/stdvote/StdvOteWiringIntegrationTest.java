@@ -200,8 +200,9 @@ class StdvOteWiringIntegrationTest {
         assertThat(evt.getSymbol()).isEqualTo(SYMBOL);
         assertThat(evt.getSide()).isEqualTo(OrderSide.BUY);
         assertThat(evt.getTier()).isEqualTo(TradeTier.TIER_1);
-        assertThat(evt.getQuantity()).isEqualTo(6);
-        assertThat(ctx.sizeFilled).isEqualTo(6);
+        // V5 RC-14: risk-derived floor($250/$24) = 10, capped at maxContracts 5.
+        assertThat(evt.getQuantity()).isEqualTo(5);
+        assertThat(ctx.sizeFilled).isEqualTo(5);
 
         // Manipulation leg came from the Judas detector (killzone-open
         // anchored), NOT from the legacy swing-pair fallback.
