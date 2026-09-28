@@ -26,12 +26,13 @@ public class MockConnector implements TradingConnector {
     //                                if real 1m data streamed in
     //   -Dmock.virtualMinutes=2000   how far in the past the virtual
     //                                timeline starts (default 2000 min)
-    private static final long CANDLE_INTERVAL_MS =
-            Long.getLong("mock.candleIntervalMs", 5000L);
-    private static final boolean VIRTUAL_CLOCK =
-            Boolean.getBoolean("mock.virtualClock");
-    private static final long VIRTUAL_START_MINUTES =
-            Long.getLong("mock.virtualMinutes", 2000L);
+    // V5 Agent 01: per-instance reads from EngineConfig (were static -D reads at class load).
+    private final long CANDLE_INTERVAL_MS =
+            com.topstep.trading.config.EngineConfig.current().getLong("mock.candleIntervalMs", 5000L);
+    private final boolean VIRTUAL_CLOCK =
+            com.topstep.trading.config.EngineConfig.current().getBoolean("mock.virtualClock", false);
+    private final long VIRTUAL_START_MINUTES =
+            com.topstep.trading.config.EngineConfig.current().getLong("mock.virtualMinutes", 2000L);
     private final Map<String, Instant> virtualTime = new ConcurrentHashMap<>();
 
     // ── SIM WARM BOOT (V2 Agent 02) ─────────────────────────────────────
@@ -39,8 +40,8 @@ public class MockConnector implements TradingConnector {
     // (SimWarmBoot, seeded + deterministic) replayed through the SAME
     // listener path before the first live-sim tick. -Dsim.warmBoot=false
     // restores the old cold boot (used by tests that need the cold path).
-    private static final boolean WARM_BOOT =
-            !"false".equalsIgnoreCase(System.getProperty("sim.warmBoot", "true"));
+    private final boolean WARM_BOOT =
+            com.topstep.trading.config.EngineConfig.current().getBoolean("sim.warmBoot", true);
     /** Symbols already warm-booted — a re-subscription must not replay twice. */
     private final java.util.Set<String> warmBootedSymbols = ConcurrentHashMap.newKeySet();
     /**
@@ -305,6 +306,7 @@ public class MockConnector implements TradingConnector {
 
             listener.onCandle(candle);
         } catch (Exception e) {
+            // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
             logger.error("Error generating mock candle", e);
             listener.onError(symbol, e);
         }

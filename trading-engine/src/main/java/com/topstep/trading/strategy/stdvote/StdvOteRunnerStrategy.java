@@ -259,7 +259,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private final Timeframe detectorTimeframe = resolveDetectorTimeframe();
 
     static Timeframe resolveDetectorTimeframe() {
-        int minutes = Integer.getInteger("stdvote.detectorTimeframe", 5);
+        int minutes = com.topstep.trading.config.EngineConfig.current().getInt("stdvote.detectorTimeframe", 5);
         switch (minutes) {
             case 1:  return Timeframe.M1;
             case 3:  return Timeframe.M3;
@@ -507,8 +507,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // trade allowance, so refusing to look again is not discipline, it is
         // a stall. IN_TRADE stays terminal in legacy mode — that part IS the
         // discipline and is unchanged.
-        this.rearmOnInvalidated = !"false".equalsIgnoreCase(
-                System.getProperty("stdvOte.rearmOnInvalidated", "true"));
+        this.rearmOnInvalidated = com.topstep.trading.config.EngineConfig.current().getBoolean(
+                "stdvOte.rearmOnInvalidated", true);
         this.londonPrimeStartEt = ScalpConfig.londonPrimeStartEt();
         this.londonPrimeEndEt = ScalpConfig.londonPrimeEndEt();
         this.allSessions = ScalpConfig.allSessions();
@@ -1341,11 +1341,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private void tryRecordDisplacement() {
         FunnelTelemetry funnel = FunnelTelemetry.forSymbol(symbol);
         boolean bullish = (lastBias == MarketBias.BULLISH);
-        if (!displacementDetector.hasRecentDisplacement(5, bullish)) {
+        int recentBars = intProperty("displacement.recentBars", 5); // AGENT-01: EngineConfig key (alias stdvote.displacement.recentBars, PR #151)
+        if (!displacementDetector.hasRecentDisplacement(recentBars, bullish)) {
             // Distinguish "no displacement at all" from "one, but the wrong
             // way" — they call for completely different fixes.
             funnel.recordStall("SWEEP_DONE",
-                    displacementDetector.hasRecentDisplacement(5)
+                    displacementDetector.hasRecentDisplacement(recentBars) // AGENT-01
                             ? "displacement-wrong-direction" : "no-recent-displacement");
             return;
         }
@@ -1599,7 +1600,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
 
     /** Read a double system property with a safe fallback (stdvOte.* pattern). */
     private static double doubleProperty(String name, double defaultValue) {
-        String raw = System.getProperty(name);
+        String raw = com.topstep.trading.config.EngineConfig.current().getRaw(name);
         if (raw == null) return defaultValue;
         try {
             return Double.parseDouble(raw.trim());
@@ -1612,7 +1613,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
 
     /** Read an int system property with a safe fallback (stdvOte.* pattern). */
     private static int intProperty(String name, int defaultValue) {
-        String raw = System.getProperty(name);
+        String raw = com.topstep.trading.config.EngineConfig.current().getRaw(name);
         if (raw == null) return defaultValue;
         try {
             return Integer.parseInt(raw.trim());

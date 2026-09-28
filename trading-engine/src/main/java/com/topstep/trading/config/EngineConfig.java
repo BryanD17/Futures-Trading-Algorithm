@@ -1,0 +1,602 @@
+package com.topstep.trading.config;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
+
+/**
+ * THE single source of truth for every behavioural engine flag
+ * (TRADE_FLOW_UNBLOCK_MASTER_PROMPT_V5, Agent 01, rule R8).
+ *
+ * <p>Every flag the engine reads is registered in {@link #KEYS} with a type,
+ * a documented code default and (where V5 Appendix C renamed it) the legacy
+ * names it still answers to. Every read in the engine goes through the typed
+ * getters below; nothing else in {@code trading-engine/src/main} reads a JVM
+ * system property directly. The only class that touches the raw sources is
+ * {@link EngineConfigLoader}.
+ *
+ * <h2>Precedence (highest first)</h2>
+ * <ol>
+ *   <li>{@code -D} JVM system property ({@link Source#SYSTEM_PROPERTY})</li>
+ *   <li>{@code ENGINE_<KEY>} environment variable, key upper-cased with every
+ *       non-alphanumeric character replaced by {@code _}
+ *       (e.g. {@code ENGINE_BACKFILL_DAYS}) ({@link Source#ENV})</li>
+ *   <li>{@code ${user.home}/topstep-trading/engine.properties} (or the file
+ *       named by {@code -Dengine.props}) ({@link Source#PROPERTIES_FILE})</li>
+ *   <li>classpath {@code engine-defaults.properties} ({@link Source#DEFAULT})</li>
+ *   <li>the code default registered here / at the call site ({@link Source#DEFAULT})</li>
+ * </ol>
+ * Within one layer the canonical (V5) name wins over a legacy alias.
+ *
+ * <p>The file / env / classpath layers are loaded ONCE (at EngineFacade
+ * construction, or lazily on the first read). The system-property layer is
+ * consulted through a reader supplied by the loader at read time so that
+ * {@code -D} flags keep the highest precedence even for unit tests that call
+ * {@code System.setProperty} after the config was loaded; in production no
+ * code sets system properties after boot, so the boot table IS the runtime
+ * configuration.
+ */
+public final class EngineConfig {
+
+    /** Where an effective value came from. */
+    public enum Source { DEFAULT, PROPERTIES_FILE, SYSTEM_PROPERTY, ENV }
+
+    /** Value type (documentation). */
+    public enum Type { BOOL, INT, LONG, DOUBLE, STRING, ENUM, TIME, PATH, CSV }
+
+    /**
+     * A registered key. {@code name} may end in one {@code <SYM>} or
+     * {@code <FIELD>} placeholder (a templated family, e.g.
+     * {@code chart.minLegTicks.<SYM>}). {@code defaultValue} is the CODE
+     * default ({@code null} = derived at the call site; see {@code doc}).
+     */
+    public record Key(String name, Type type, String defaultValue, String doc,
+                      List<String> aliases, boolean secret) {
+        public boolean isTemplate() { return name.contains("<"); }
+        String templatePrefix() { return name.substring(0, name.indexOf('<')); }
+    }
+
+    /** One effective value. */
+    public record Entry(String key, String value, Source source, String origin,
+                        String codeDefault, String doc) {}
+
+    // ──────────────────────────────────────────────────────────────────────
+    // REGISTRY — every key in DIAGNOSIS_V5.md §2 (94) + the V5 additions
+    // ──────────────────────────────────────────────────────────────────────
+
+    /** Symbols a {@code <SYM>} template expands to. */
+    public static final List<String> SYMBOLS = List.of("MNQ", "MES", "MGC");
+
+    /** Keys a {@code confluence.weight.<FIELD>} template expands to (ConfluenceField keys). */
+    public static final List<String> CONFLUENCE_FIELDS = List.of(
+            "inTradingKillzone", "htfBiasAligned", "voteBiasAligned", "pdVerdict",
+            "recentSweep", "raidScore", "machineOteState", "activeFvgInDirection",
+            "priceInsideFvg", "nearestObZone", "bprPresent", "viNearby",
+            "openingGapMagnet", "poolSweptRecently", "structureState", "chartOteState");
+
+    /** Every registered key, in boot-table order. */
+    public static final Map<String, Key> KEYS;
+    private static final Map<String, String> ALIAS_TO_CANONICAL;
+
+    static {
+        List<Key> k = new ArrayList<>();
+        // strategy selection (M1)
+        k.add(key("strategy.stdvOte", Type.BOOL, "true", "StdvOte runner strategy vs legacy IctHighConfluenceStrategy", "stdvOte.enabled"));
+        k.add(key("strategy.legacyFallback", Type.BOOL, "false", "allow a non-{MNQ,MES,MGC} symbol to fall back to the legacy strategy (else fail fast)"));
+        // engine wiring
+        k.add(key("engine.symbol", Type.STRING, "MNQ", "single-symbol primary (multiInstrument=false)", "stdvote.symbol"));
+        k.add(key("engine.smtSymbol", Type.STRING, "MES", "single-symbol SMT pair (LIVE)", "stdvote.smt"));
+        k.add(key("engine.multiInstrument", Type.BOOL, "true", "multi-instrument engine (MNQ+MGC active, MES SMT)", "stdvote.multiInstrument"));
+        k.add(key("stdvote.symbols.active", Type.CSV, "MNQ,MGC", "active symbols in multi-instrument mode"));
+        k.add(key("stdvote.symbols.smt.<SYM>", Type.STRING, null, "SMT pair per active symbol (default MNQ->MES)"));
+        k.add(key("notify.discord.enabled", Type.BOOL, "true", "Discord alerts (read by PR #151 builds; carried)"));
+        // session / time (Agent 02 consumes session.gateMode)
+        k.add(key("session.allSessions", Type.BOOL, "true", "entries in any open session, not just prime killzones", "scalp.allSessions"));
+        k.add(key("session.gateMode", Type.ENUM, "SCORING", "M3 session gate SCORING | BLOCKING (consumer: Agent 02)"));
+        k.add(key("session.killzoneSizeBoost", Type.DOUBLE, "1.5", "size multiplier inside prime killzones [1,2]", "scalp.killzoneSizeBoost"));
+        // setup state machine windows
+        k.add(key("detector.timeframe", Type.INT, "5", "entry-anatomy detector timeframe minutes (1|3|5|15)", "stdvote.detectorTimeframe"));
+        k.add(key("setup.expiryBars", Type.INT, "40", "setup expiry in detector bars", "stdvOte.setupExpiryBars"));
+        k.add(key("ote.windowBars", Type.INT, "8", "OTE window in detector bars", "stdvOte.oteWindowBars"));
+        k.add(key("mss.freshBars", Type.INT, "30", "MSS freshness in detector bars", "stdvOte.mssFreshBars"));
+        k.add(key("setup.entryTimeoutBars", Type.INT, null, "unfilled-entry timeout in feed bars (default 2 x OTE window)", "stdvOte.entryTimeoutBars"));
+        k.add(key("setup.rearmOnInvalidated", Type.BOOL, "true", "legacy re-arm after invalidation", "stdvOte.rearmOnInvalidated"));
+        k.add(key("setup.rearmCooldownBars", Type.INT, "5", "re-arm cooldown in feed bars", "scalp.rearmCooldownBars"));
+        k.add(key("stdvOte.stopBufferTicks", Type.INT, "4", "stop buffer beyond OTE 1.0 (ticks)"));
+        k.add(key("stdvOte.reactionWickTicks", Type.INT, "2", "minimum OTE rejection wick (ticks)"));
+        // displacement (owner's live flags)
+        k.add(key("displacement.atrMult", Type.DOUBLE, "1.5", "displacement range >= atrMult x ATR", "stdvote.displacement.atrMult"));
+        k.add(key("displacement.bodyPct", Type.DOUBLE, "0.65", "displacement body fraction", "stdvote.displacement.bodyPct"));
+        k.add(key("displacement.recentBars", Type.INT, "5", "displacement recency window in detector bars (PR #151 key)", "stdvote.displacement.recentBars"));
+        // bias
+        k.add(key("bias.vote.mode", Type.ENUM, "LOG", "LEGACY | LOG | VOTE - which bias feeds recordHtfBias"));
+        k.add(key("bias.v1.includeH4", Type.BOOL, "false", "V1 vote consults H4"));
+        k.add(key("bias.hysteresis", Type.BOOL, "false", "NEUTRAL-flip grace for in-flight setups", "bias.hysteresis.enabled"));
+        k.add(key("bias.neutralGraceBars", Type.INT, "2", "NEUTRAL grace length [1,4]"));
+        // premium/discount, 30m OTE
+        k.add(key("pd.gate.mode", Type.ENUM, "LOG", "M2b mode"));
+        k.add(key("pd.eqBandTicks", Type.INT, "2", "equilibrium band (ticks)"));
+        k.add(key("pd.minRangeTicks", Type.INT, null, "min dealing range ticks (default 2 x chart.minLegTicks)"));
+        k.add(key("pd.minRangeTicks.<SYM>", Type.INT, null, "per-symbol min dealing range"));
+        k.add(key("pd.d1MinBars", Type.INT, "10", "D1 depth before R0 governs"));
+        k.add(key("ote30m.confluence", Type.ENUM, "LOG", "M7b mode OFF | LOG | GATE"));
+        k.add(key("ote30m.acceptArmed", Type.BOOL, "false", "M7b accepts ARMED"));
+        k.add(key("ote.stats.file", Type.PATH, "data/ote_agreement_stats.jsonl", "OTE agreement stats output"));
+        // scalp
+        k.add(key("scalp.enabled", Type.BOOL, "false", "scalp master switch (risk profile, windows, re-arm, sizer, brackets)", "scalpMode.enabled"));
+        k.add(key("scalp.breakevenAtHalfR", Type.BOOL, "true", "breakeven at +0.5R"));
+        k.add(key("scalp.minTargetClearanceTicks", Type.INT, "2", "scalp target clearance (ticks)"));
+        k.add(key("scalp.candidateWindowR", Type.DOUBLE, "1.5", "scalp target window (R)"));
+        k.add(key("raid.minScore.scalp", Type.INT, "6", "scalp raid-score floor", "scalp.minRaidScore"));
+        k.add(key("scalp.londonPrimeStartEt", Type.TIME, "03:00", "MGC London prime start (ET)"));
+        k.add(key("scalp.londonPrimeEndEt", Type.TIME, "05:00", "MGC London prime end (ET)"));
+        k.add(key("scalp.sizerSafetyCushion", Type.DOUBLE, "200", "sizer cushion ($)"));
+        // trade profile
+        k.add(key("trade.profile", Type.ENUM, "STRICT", "STRICT | STANDARD | MINIMAL"));
+        k.add(key("profile.sim.file", Type.PATH, "data/profile_sim.jsonl", "profile simulator output"));
+        // chart
+        k.add(key("chart.minLegTicks.<SYM>", Type.INT, null, "chart min leg ticks (ChartEngine ctor default)"));
+        k.add(key("chart.swingStrength.<SYM>", Type.INT, null, "chart fractal strength (ctor default)"));
+        k.add(key("chart.zoneExpiryBars.<SYM>", Type.INT, null, "chart zone expiry (ctor default)"));
+        k.add(key("chart.anchorCompare", Type.BOOL, "false", "log both anchor modes"));
+        k.add(key("chart.anchorMode", Type.ENUM, "FRACTAL_LEG", "OTE leg anchoring"));
+        k.add(key("chart.anchorMode.<SYM>", Type.ENUM, null, "per-symbol anchoring (falls back to chart.anchorMode)"));
+        k.add(key("chart.oteBand", Type.STRING, null, "OTE band (unset = engine default)"));
+        k.add(key("chart.oteBand.<SYM>", Type.STRING, null, "per-symbol band (falls back to chart.oteBand)"));
+        // confluence
+        k.add(key("confluence.weight.<FIELD>", Type.DOUBLE, null, "confluence weight per field (ConfluenceField default)"));
+        k.add(key("confluence.nearTicks", Type.INT, "40", "near-price distance (ticks)"));
+        k.add(key("confluence.raidScoreFloor", Type.INT, "5", "raid-score confluence floor"));
+        k.add(key("confluence.recentMinutes", Type.INT, "120", "recency window (minutes)"));
+        // SIM / mock / backfill
+        k.add(key("backfill.days", Type.INT, "3", "1m backfill depth [1,7]"));
+        k.add(key("htf.backfill.days", Type.INT, "30", "HTF backfill depth [7,90]"));
+        k.add(key("sim.warmBoot", Type.BOOL, "true", "SIM synthetic warm boot"));
+        k.add(key("sim.tape", Type.ENUM, "CHOREOGRAPHY", "SIM tape CHOREOGRAPHY | RANDOM"));
+        k.add(key("sim.backfill.seed", Type.LONG, "42", "SIM RNG seed"));
+        k.add(key("mock.candleIntervalMs", Type.LONG, "5000", "SIM candle cadence (ms)"));
+        k.add(key("mock.virtualClock", Type.BOOL, "false", "SIM virtual timeline"));
+        k.add(key("mock.virtualMinutes", Type.LONG, "2000", "virtual timeline offset (min)"));
+        // backtest
+        k.add(key("backtest.commissionPerSide", Type.DOUBLE, "1.55", "backtest commission ($/side/contract)"));
+        k.add(key("backtest.slippageTicks", Type.INT, "1", "backtest slippage (ticks/side)"));
+        // broker
+        k.add(key("topstep.allowNonSimulated", Type.BOOL, "false", "allow a real-money (non-simulated) account"));
+        k.add(secret("topstep.apiUrl", "TopstepX API URL (else credentials file / env)"));
+        k.add(secret("topstep.username", "TopstepX username"));
+        k.add(secret("topstep.apiKey", "TopstepX API key"));
+        k.add(secret("topstep.accountId", "TopstepX account id"));
+        // ictlib (observation only)
+        k.add(key("ictlib.enabled", Type.BOOL, "true", "ictlib master"));
+        k.add(key("ictlib.displacement.meanLen", Type.INT, "5", "ictlib"));
+        k.add(key("ictlib.displacement.wickRatioMax", Type.DOUBLE, "0.36", "ictlib"));
+        k.add(key("ictlib.retain.displacement", Type.INT, "50", "ictlib"));
+        k.add(key("ictlib.fvg.mode", Type.ENUM, "FVG", "ictlib FVG | IFVG"));
+        k.add(key("ictlib.retain.fvg", Type.INT, "10", "ictlib"));
+        k.add(key("ictlib.retain.bpr", Type.INT, "5", "ictlib"));
+        k.add(key("ictlib.retain.volumeImbalance", Type.INT, "6", "ictlib"));
+        k.add(key("ictlib.vi.projectBars", Type.INT, "3", "ictlib"));
+        k.add(key("ictlib.retain.gapWeekly", Type.INT, "3", "ictlib"));
+        k.add(key("ictlib.retain.gapDaily", Type.INT, "2", "ictlib"));
+        k.add(key("ictlib.pool.swingLen", Type.INT, "5", "ictlib"));
+        k.add(key("ictlib.pool.toleranceDiv", Type.DOUBLE, "2.5", "ictlib"));
+        k.add(key("ictlib.pool.minCluster", Type.INT, "3", "ictlib"));
+        k.add(key("ictlib.pool.scanDepth", Type.INT, "50", "ictlib"));
+        k.add(key("ictlib.retain.pool", Type.INT, "4", "ictlib"));
+        k.add(key("ictlib.pool.atrPeriod", Type.INT, "10", "ictlib"));
+        k.add(key("ictlib.ob.swingLen", Type.INT, "10", "ictlib"));
+        k.add(key("ictlib.ob.useBody", Type.BOOL, "true", "ictlib"));
+        k.add(key("ictlib.retain.orderBlock", Type.INT, "5", "ictlib"));
+        k.add(key("ictlib.structure.pivotLeft", Type.INT, "5", "ictlib"));
+        k.add(key("ictlib.structure.pivotRight", Type.INT, "1", "ictlib"));
+        k.add(key("ictlib.structure.historyCap", Type.INT, "200", "ictlib"));
+        k.add(key("ictlib.structure.mssAgreeWindow", Type.INT, "5", "ictlib"));
+
+        Map<String, Key> keys = new LinkedHashMap<>();
+        Map<String, String> aliases = new LinkedHashMap<>();
+        for (Key key : k) {
+            if (keys.put(key.name(), key) != null) {
+                throw new IllegalStateException("duplicate EngineConfig key " + key.name());
+            }
+            for (String a : key.aliases()) {
+                if (aliases.put(a, key.name()) != null) {
+                    throw new IllegalStateException("duplicate EngineConfig alias " + a);
+                }
+            }
+        }
+        KEYS = Collections.unmodifiableMap(keys);
+        ALIAS_TO_CANONICAL = Collections.unmodifiableMap(aliases);
+    }
+
+    private static Key key(String name, Type type, String def, String doc, String... aliases) {
+        return new Key(name, type, def, doc, List.of(aliases), false);
+    }
+
+    private static Key secret(String name, String doc) {
+        return new Key(name, Type.STRING, null, doc, List.of(), true);
+    }
+
+    /** Every concrete name the engine may read (canonical + aliases + expanded templates). */
+    public static Set<String> allReadableNames() {
+        Set<String> out = new TreeSet<>();
+        for (Key k : KEYS.values()) {
+            List<String> names = new ArrayList<>();
+            names.add(k.name());
+            names.addAll(k.aliases());
+            for (String n : names) {
+                if (n.contains("<")) {
+                    String prefix = n.substring(0, n.indexOf('<'));
+                    for (String x : n.contains("<FIELD>") ? CONFLUENCE_FIELDS : SYMBOLS) {
+                        out.add(prefix + x);
+                    }
+                } else {
+                    out.add(n);
+                }
+            }
+        }
+        return out;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // INSTANCE
+    // ──────────────────────────────────────────────────────────────────────
+
+    private final Map<String, String> classpathDefaults;
+    private final String classpathOrigin;
+    private final Map<String, String> fileProps;
+    private final String filePath;
+    private final boolean fileLoaded;
+    private final Map<String, String> env;
+    private final Function<String, String> systemProperty;
+    private final Set<String> warned = ConcurrentHashMap.newKeySet();
+
+    EngineConfig(Map<String, String> classpathDefaults, String classpathOrigin,
+                 Map<String, String> fileProps, String filePath, boolean fileLoaded,
+                 Map<String, String> env, Function<String, String> systemProperty) {
+        this.classpathDefaults = Map.copyOf(classpathDefaults);
+        this.classpathOrigin = classpathOrigin;
+        this.fileProps = Map.copyOf(fileProps);
+        this.filePath = filePath;
+        this.fileLoaded = fileLoaded;
+        this.env = Map.copyOf(env);
+        this.systemProperty = Objects.requireNonNull(systemProperty);
+    }
+
+    private static volatile EngineConfig current;
+
+    /** The installed config; loads it (once) on first use. */
+    public static EngineConfig current() {
+        EngineConfig c = current;
+        if (c == null) {
+            synchronized (EngineConfig.class) {
+                c = current;
+                if (c == null) {
+                    c = EngineConfigLoader.load();
+                    current = c;
+                }
+            }
+        }
+        return c;
+    }
+
+    /** True once a config has been loaded/installed in this JVM. */
+    public static boolean isLoaded() {
+        return current != null;
+    }
+
+    /** Install a config (EngineFacade at construction; tests). */
+    public static synchronized void install(EngineConfig config) {
+        current = Objects.requireNonNull(config);
+    }
+
+    /** Drop the installed config so the next {@link #current()} reloads (tests). */
+    public static synchronized void reset() {
+        current = null;
+    }
+
+    public String filePath() { return filePath; }
+    public boolean fileLoaded() { return fileLoaded; }
+    public Map<String, String> fileProperties() { return fileProps; }
+
+    // ── resolution ──
+
+    /** Canonical V5 name for a key or legacy alias (identity when unknown). */
+    public static String canonical(String name) {
+        return ALIAS_TO_CANONICAL.getOrDefault(name, name);
+    }
+
+    /** Every name the key answers to: canonical first, then legacy aliases. */
+    static List<String> namesFor(String name) {
+        String c = canonical(name);
+        Key k = KEYS.get(c);
+        if (k == null || k.aliases().isEmpty()) return List.of(c);
+        List<String> out = new ArrayList<>(1 + k.aliases().size());
+        out.add(c);
+        out.addAll(k.aliases());
+        return out;
+    }
+
+    /** ENGINE_ environment variable name for a key. */
+    public static String envName(String key) {
+        return "ENGINE_" + key.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "_");
+    }
+
+    /** The effective raw value and its source, or {@code null} when unset in every layer. */
+    public Entry lookup(String name) {
+        List<String> names = namesFor(name);
+        for (String n : names) {
+            String v = systemProperty.apply(n);
+            if (v != null) return entry(names.get(0), v, Source.SYSTEM_PROPERTY, "-D" + n);
+        }
+        for (String n : names) {
+            String v = env.get(envName(n));
+            if (v != null) return entry(names.get(0), v, Source.ENV, envName(n));
+        }
+        for (String n : names) {
+            String v = fileProps.get(n);
+            if (v != null) return entry(names.get(0), v, Source.PROPERTIES_FILE, filePath);
+        }
+        for (String n : names) {
+            String v = classpathDefaults.get(n);
+            if (v != null) return entry(names.get(0), v, Source.DEFAULT, classpathOrigin);
+        }
+        return null;
+    }
+
+    private Entry entry(String key, String value, Source source, String origin) {
+        Key k = registered(key);
+        return new Entry(key, value, source, origin,
+                k == null ? null : k.defaultValue(), k == null ? null : k.doc());
+    }
+
+    /** The registered definition for a concrete key (template-aware), or null. */
+    public static Key registered(String name) {
+        String c = canonical(name);
+        Key k = KEYS.get(c);
+        if (k != null) return k;
+        for (Key t : KEYS.values()) {
+            if (!t.isTemplate()) continue;
+            String p = t.templatePrefix();
+            if (c.startsWith(p) && c.length() > p.length() && c.indexOf('.', p.length()) < 0) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    /** Raw string value or {@code null} when unset in every layer. */
+    public String getRaw(String name) {
+        Entry e = lookup(name);
+        return e == null ? null : e.value();
+    }
+
+    public String getString(String name, String defaultValue) {
+        String v = getRaw(name);
+        return v == null ? defaultValue : v;
+    }
+
+    /** "true"/"false" (case-insensitive); anything else = the default (preserves every legacy parser). */
+    public boolean getBoolean(String name, boolean defaultValue) {
+        String v = getRaw(name);
+        if (v == null) return defaultValue;
+        String t = v.trim();
+        if ("true".equalsIgnoreCase(t)) return true;
+        if ("false".equalsIgnoreCase(t)) return false;
+        warnInvalid(name, v, defaultValue);
+        return defaultValue;
+    }
+
+    public int getInt(String name, int defaultValue) {
+        String v = getRaw(name);
+        if (v == null) return defaultValue;
+        try {
+            return Integer.parseInt(v.trim());
+        } catch (NumberFormatException e) {
+            warnInvalid(name, v, defaultValue);
+            return defaultValue;
+        }
+    }
+
+    public long getLong(String name, long defaultValue) {
+        String v = getRaw(name);
+        if (v == null) return defaultValue;
+        try {
+            return Long.parseLong(v.trim());
+        } catch (NumberFormatException e) {
+            warnInvalid(name, v, defaultValue);
+            return defaultValue;
+        }
+    }
+
+    public double getDouble(String name, double defaultValue) {
+        String v = getRaw(name);
+        if (v == null) return defaultValue;
+        try {
+            return Double.parseDouble(v.trim());
+        } catch (NumberFormatException e) {
+            warnInvalid(name, v, defaultValue);
+            return defaultValue;
+        }
+    }
+
+    private void warnInvalid(String name, String raw, Object def) {
+        if (warned.add(name + "=" + raw)) {
+            System.out.println("[EngineConfig] WARN: invalid " + name + "='" + raw
+                    + "', using default " + def);
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // EFFECTIVE TABLE
+    // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * Every effective key: all registered exact keys (value or code default),
+     * the concrete members of templated families that some layer sets, and
+     * any unregistered key present in the file/classpath layers (flags other
+     * agents add before they are registered).
+     */
+    public List<Entry> effectiveEntries() {
+        Map<String, Entry> out = new LinkedHashMap<>();
+        for (Key k : KEYS.values()) {
+            if (k.isTemplate()) {
+                List<String> exp = k.name().contains("<FIELD>") ? CONFLUENCE_FIELDS : SYMBOLS;
+                boolean any = false;
+                for (String x : exp) {
+                    String concrete = k.templatePrefix() + x;
+                    Entry e = lookup(concrete);
+                    if (e != null) {
+                        out.put(concrete, mask(k, e));
+                        any = true;
+                    }
+                }
+                if (!any) {
+                    out.put(k.name(), new Entry(k.name(), null, Source.DEFAULT, "code",
+                            k.defaultValue(), k.doc()));
+                }
+                continue;
+            }
+            Entry e = lookup(k.name());
+            if (e == null) {
+                e = new Entry(k.name(), k.defaultValue(), Source.DEFAULT, "code",
+                        k.defaultValue(), k.doc());
+            }
+            out.put(k.name(), mask(k, e));
+        }
+        Set<String> extra = new TreeSet<>();
+        extra.addAll(classpathDefaults.keySet());
+        extra.addAll(fileProps.keySet());
+        for (String name : extra) {
+            String c = canonical(name);
+            if (out.containsKey(c) || registered(c) != null) continue;
+            Entry e = lookup(c);
+            if (e != null) out.put(c, e);
+        }
+        return new ArrayList<>(out.values());
+    }
+
+    /** Keys present in engine.properties that no registry entry knows (typos or not-yet-registered flags). */
+    public List<String> unknownFileKeys() {
+        List<String> out = new ArrayList<>();
+        for (String name : new TreeSet<>(fileProps.keySet())) {
+            if (registered(name) == null) out.add(name);
+        }
+        return out;
+    }
+
+    private static Entry mask(Key k, Entry e) {
+        if (!k.secret() || e.value() == null) return e;
+        return new Entry(e.key(), "****", e.source(), e.origin(), e.codeDefault(), e.doc());
+    }
+
+    /** Value as the table shows it. */
+    private static String shown(Entry e) {
+        if (e.value() != null) return e.value();
+        return e.codeDefault() == null ? "(unset)" : e.codeDefault();
+    }
+
+    /** The fixed-width boot table: key | value | source, then one line per mode consequence. */
+    public String formatBootTable() {
+        List<Entry> entries = effectiveEntries();
+        int kw = "key".length();
+        int vw = "value".length();
+        for (Entry e : entries) {
+            kw = Math.max(kw, e.key().length());
+            vw = Math.max(vw, Math.min(40, shown(e).length()));
+        }
+        String fmt = "| %-" + kw + "s | %-" + vw + "s | %-15s |%n";
+        String rule = "+" + "-".repeat(kw + 2) + "+" + "-".repeat(vw + 2) + "+" + "-".repeat(17) + "+";
+        StringBuilder sb = new StringBuilder();
+        sb.append("================ EFFECTIVE ENGINE CONFIG ================\n");
+        sb.append("precedence: -D > ENGINE_<KEY> env > ").append(filePath)
+                .append(fileLoaded ? " (LOADED, " + fileProps.size() + " keys)" : " (not present)")
+                .append(" > ").append(classpathOrigin).append(" > code\n");
+        sb.append(rule).append('\n');
+        sb.append(String.format(fmt, "key", "value", "source"));
+        sb.append(rule).append('\n');
+        for (Entry e : entries) {
+            String v = shown(e);
+            if (v.length() > 40) v = v.substring(0, 37) + "...";
+            sb.append(String.format(fmt, e.key(), v, e.source().name()));
+        }
+        sb.append(rule).append('\n');
+        for (String line : modeConsequences()) sb.append(line).append('\n');
+        for (String unknown : unknownFileKeys()) {
+            sb.append("WARN unknown key in ").append(filePath).append(": ").append(unknown)
+                    .append(" (not in the EngineConfig registry; carried, read only if a consumer asks for it)\n");
+        }
+        sb.append("=========================================================");
+        return sb.toString();
+    }
+
+    /** One line per behavioural consequence of the effective flags. */
+    public List<String> modeConsequences() {
+        List<String> out = new ArrayList<>();
+        boolean stdv = getBoolean("strategy.stdvOte", true);
+        boolean fallback = getBoolean("strategy.legacyFallback", false);
+        boolean scalp = getBoolean("scalp.enabled", false);
+        boolean multi = getBoolean("engine.multiInstrument", true);
+        boolean nonSim = getBoolean("topstep.allowNonSimulated", false);
+        String gateMode = getString("session.gateMode", "SCORING").trim().toUpperCase(Locale.ROOT);
+        out.add("STRATEGY: " + (stdv ? "StdvOteRunnerStrategy" : "IctHighConfluenceStrategy (legacy)")
+                + " | non-{MNQ,MES,MGC} symbol -> "
+                + (fallback ? "legacy fallback (strategy.legacyFallback=true)"
+                            : "FAIL FAST (strategy.legacyFallback=false)"));
+        out.add("INSTRUMENTS: " + (multi && stdv
+                ? "multi-instrument active=" + getString("stdvote.symbols.active", "MNQ,MGC") + " (MES = SMT feed)"
+                : "single-symbol " + getString("engine.symbol", "MNQ")
+                        + " (SMT " + getString("engine.smtSymbol", "MES") + ")"));
+        out.add("SCALP MODE: " + (scalp
+                ? "ON (1R-capped targets, RiskLimits.topstep50kScalp, raid floor "
+                        + getInt("raid.minScore.scalp", 6) + ")"
+                : "OFF (legacy -2 sigma targets, RiskLimits.topstep50k)"));
+        out.add("SESSION GATE: " + ("BLOCKING".equals(gateMode)
+                ? "BLOCKING (entries only inside prime killzones)"
+                : gateMode + " (entries allowed all sessions except 14:45-17:00 CT)")
+                + " [session.gateMode consumer = Agent 02; session.allSessions="
+                + getBoolean("session.allSessions", true) + "]");
+        out.add("BIAS: vote.mode=" + getString("bias.vote.mode", "LOG")
+                + " hysteresis=" + (getBoolean("bias.hysteresis", false) ? "ON" : "OFF")
+                + " neutralGraceBars=" + getInt("bias.neutralGraceBars", 2));
+        out.add("DISPLACEMENT: atrMult=" + getDouble("displacement.atrMult", 1.5)
+                + " bodyPct=" + getDouble("displacement.bodyPct", 0.65)
+                + " recentBars=" + getInt("displacement.recentBars", 5)
+                + " on " + getInt("detector.timeframe", 5) + "m detector bars");
+        out.add("BACKFILL: 1m " + getInt("backfill.days", 3) + " day(s) [clamped 1..7], HTF "
+                + getInt("htf.backfill.days", 30) + " day(s) [clamped 7..90]");
+        out.add("TRADE PROFILE: " + getString("trade.profile", "STRICT"));
+        out.add("ACCOUNT GUARD: topstep.allowNonSimulated=" + nonSim
+                + (nonSim ? " (REAL-MONEY ACCOUNTS ALLOWED)" : " (practice/simulated accounts only)"));
+        return out;
+    }
+
+    /** JSON-friendly view for GET /api/status ({@code effectiveConfig}). */
+    public Map<String, Object> toApiMap() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("configFile", filePath);
+        out.put("configFileLoaded", fileLoaded);
+        out.put("precedence",
+                "SYSTEM_PROPERTY > ENV (ENGINE_<KEY>) > PROPERTIES_FILE > DEFAULT (classpath engine-defaults.properties > code)");
+        Map<String, Object> keys = new LinkedHashMap<>();
+        for (Entry e : effectiveEntries()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("value", e.value() != null ? e.value() : e.codeDefault());
+            row.put("source", e.source().name());
+            row.put("origin", e.origin());
+            row.put("codeDefault", e.codeDefault());
+            keys.put(e.key(), row);
+        }
+        out.put("keys", keys);
+        out.put("modes", modeConsequences());
+        out.put("unknownFileKeys", unknownFileKeys());
+        return out;
+    }
+}

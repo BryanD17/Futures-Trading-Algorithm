@@ -39,23 +39,29 @@ import java.util.stream.Collectors;
  */
 public class SimEngineRunner {
 
-    // STDV+OTE refactor: default to MNQ (the registry-allowed micro symbol).
-    // Override via -Dstdvote.symbol=<MNQ|MES|MGC> if desired. Setting any
-    // other symbol routes the factory to the legacy strategy as a fallback.
-    private static final String DEFAULT_SYMBOL =
-            System.getProperty("stdvote.symbol", "MNQ");
+    // V5 Agent 01: configuration comes from the ONE EngineConfig loaded at
+    // construction (no static -D reads). engine.symbol (legacy
+    // stdvote.symbol) defaults to MNQ; a non-{MNQ,MES,MGC} symbol FAILS FAST
+    // in StdvOteFactory unless strategy.legacyFallback=true.
+    private final com.topstep.trading.config.EngineConfig config =
+            com.topstep.trading.config.EngineConfig.current();
+    private final String DEFAULT_SYMBOL = config.getString("engine.symbol", "MNQ");
 
     /**
      * When true (the default under stdvOte mode), the runner uses
      * {@link StdvOteMultiInstrumentEngine} to drive MNQ + MGC concurrently
-     * with MES as an SMT feed. Override with
-     * {@code -Dstdvote.multiInstrument=false} to fall back to single-symbol
-     * mode driven by {@code DEFAULT_SYMBOL}.
+     * with MES as an SMT feed. engine.multiInstrument=false (legacy
+     * stdvote.multiInstrument) falls back to single-symbol mode driven by
+     * {@code DEFAULT_SYMBOL}.
      */
-    private static final boolean MULTI_INSTRUMENT_ENABLED =
-            StdvOteFactory.isEnabled()
-                    && !"false".equalsIgnoreCase(
-                        System.getProperty("stdvote.multiInstrument", "true"));
+    private final boolean MULTI_INSTRUMENT_ENABLED =
+            StdvOteFactory.isEnabled() && config.getBoolean("engine.multiInstrument", true);
+
+    /** V5 Agent 01 wiring check: set at the first candle this runner sees. */
+    private final AtomicBoolean firstCandleSeen = new AtomicBoolean(false);
+    private volatile boolean wiredBeforeFirstCandle = false;
+    /** Last (state|gate) published per symbol — GateDecisionEvents are transitions, not per-bar spam. */
+    private final java.util.Map<String, String> lastSetupDecision = new java.util.concurrent.ConcurrentHashMap<>();
 
     private final TradingConnector connector;
     private final AccountState accountState;
@@ -177,9 +183,11 @@ public class SimEngineRunner {
             // every candle passes through in this mode, so the execution
             // engine has to hang off it too.
             multiEngine.setCandleTap(candle -> {
+                verifyWiringAtFirstCandle(candle);
                 chartEngine.onCandle(candle);
                 strategyContext.setCurrentTime(candle.getTimestamp());
                 executionEngine.onNewCandle(candle);
+                publishSetupDecision(candle);
             });
             multiEngine.setChartEngine(chartEngine);
             multiEngine.setIctLibEngine(ictLibEngine);
@@ -225,6 +233,11 @@ public class SimEngineRunner {
             // Initialize strategy
             strategy.initialize();
 
+            // V5 Agent 01 (D-14): every handler must be subscribed and the bus
+            // running BEFORE the connector can deliver its first candle (the
+            // warm boot replays synchronously inside the subscribe below).
+            assertWiredForCandles();
+
             // Register with facade
             EngineFacade.getInstance().initialize(
                     EngineFacade.Mode.SIM,
@@ -268,8 +281,8 @@ public class SimEngineRunner {
             shutdownLatch.await();
 
         } catch (Exception e) {
+            com.topstep.trading.event.EngineTelemetry.error("SimEngineRunner.start", e);
             System.err.println("Failed to start SIM engine: " + e.getMessage());
-            e.printStackTrace();
             stop();
         }
     }
@@ -359,6 +372,7 @@ public class SimEngineRunner {
         }
 
         try {
+            verifyWiringAtFirstCandle(candle);
             // Chart-in-memory first: the internal 30m chart sees every
             // candle this runner processes (single-instrument path; the
             // multi-engine path feeds the chart via its candle tap).
@@ -377,10 +391,10 @@ public class SimEngineRunner {
 
             // Check risk limits
             checkRiskLimits();
+            publishSetupDecision(candle);
 
         } catch (Exception e) {
-            System.err.println("Error processing candle: " + e.getMessage());
-            e.printStackTrace();
+            com.topstep.trading.event.EngineTelemetry.error("SimEngineRunner.onMarketData", e);
         }
     }
 
@@ -396,11 +410,13 @@ public class SimEngineRunner {
     private void releaseUnexecutedSignal(StrategySignalEvent signal, String why) {
         System.out.println("[SignalRelease] SIM " + signal.getSymbol() + ": " + why
                 + " — releasing strategy latch (no order/position created)");
+        publishSignalDecision(signal, why);
         eventBus.publish(new com.topstep.trading.event.PositionClosedEvent(
                 signal.getSymbol(), 0.0, false, java.time.Instant.now()));
     }
 
     private void handleStrategySignal(StrategySignalEvent signal) {
+        publishSignalDecision(signal, "SIGNAL received");
         // ── WARMUP GUARD layer 1 (SIM): nothing trades until every
         // subscription (and its synchronous synthetic warm boot) returned.
         if (!warmupComplete) {
@@ -436,6 +452,7 @@ public class SimEngineRunner {
             // Submit order to execution engine
             Order order = decision.getOrder();
             executionEngine.submitOrder(order, signal.getStopPrice(), signal.getTargetPrice());
+            publishSignalDecision(signal, "APPROVED: " + decision.getReason());
 
             // Record signal context for trade journal enrichment
             List<String> confluenceFactors = parseConfluenceFromReason(signal.getReason());
@@ -447,8 +464,102 @@ public class SimEngineRunner {
         } else {
             System.out.println("\n❌ Signal DENIED: " + signal.getReason());
             System.out.println("  Reason: " + decision.getReason());
-            releaseUnexecutedSignal(signal, "risk engine deny");
+            releaseUnexecutedSignal(signal, "risk engine deny: " + decision.getReason());
         }
+    }
+
+    // ── V5 Agent 01: wiring assertions + runtime gate telemetry ─────────
+
+    /**
+     * Throws when a handler the candle path relies on is missing or the bus
+     * is not running — a candle delivered before this is D-14 (signals
+     * silently dropped by EventBus.publish while !running).
+     */
+    void assertWiredForCandles() {
+        if (eventBus.handlerCount(StrategySignalEvent.class) == 0) {
+            throw new IllegalStateException("SIM wiring: no StrategySignalEvent handler subscribed before the first candle");
+        }
+        if (!eventBus.isRunning()) {
+            throw new IllegalStateException("SIM wiring: EventBus not running before the first candle");
+        }
+    }
+
+    /** Records (once) whether the wiring was complete when the first candle arrived. */
+    private void verifyWiringAtFirstCandle(Candle candle) {
+        if (!firstCandleSeen.compareAndSet(false, true)) return;
+        boolean ok = eventBus.handlerCount(StrategySignalEvent.class) > 0 && eventBus.isRunning();
+        wiredBeforeFirstCandle = ok;
+        if (!ok) {
+            com.topstep.trading.event.EngineTelemetry.error("SimEngineRunner.wiring",
+                    "first candle " + candle.getSymbol() + " @ " + candle.getTimestamp()
+                            + " arrived before the signal handler / EventBus were ready");
+        }
+    }
+
+    /** True when the first candle found every handler subscribed and the bus running (test hook). */
+    boolean wasWiredBeforeFirstCandle() {
+        return wiredBeforeFirstCandle;
+    }
+
+    /** True once the first candle has been seen (test hook). */
+    boolean hasSeenFirstCandle() {
+        return firstCandleSeen.get();
+    }
+
+    /** The runner's bus (tests). */
+    EventBus getEventBus() {
+        return eventBus;
+    }
+
+    /**
+     * One GateDecisionEvent per setup TRANSITION (state or holding gate
+     * changed) for a candle whose symbol has a live setup: which gate holds
+     * it now. numberA = candle close, numberB = setup raid score.
+     */
+    private void publishSetupDecision(Candle candle) {
+        try {
+            var s = com.topstep.trading.strategy.stdvote.StdvOteRegistry.get(candle.getSymbol());
+            if (s.isEmpty()) return;
+            var ctx = s.get().getSetupContext();
+            String state = ctx.state == null ? "IDLE" : ctx.state.name();
+            String gate = ctx.lastGateFailed;
+            if ("IDLE".equals(state) && gate == null) {
+                lastSetupDecision.remove(candle.getSymbol());
+                return;
+            }
+            String keyNow = state + "|" + gate;
+            if (keyNow.equals(lastSetupDecision.put(candle.getSymbol(), keyNow))) return;
+            com.topstep.trading.event.EngineTelemetry.publish(eventBus,
+                    new com.topstep.trading.event.GateDecisionEvent(candle.getSymbol(),
+                            candle.getTimestamp(),
+                            com.topstep.trading.event.EngineTelemetry.sessionOf(candle.getTimestamp()),
+                            state, gate == null ? "SETUP-" + state : "SETUP",
+                            gate == null ? "setup progressing (no gate failed)" : gate,
+                            candle.getClose(), ctx.raidScore));
+        } catch (RuntimeException e) {
+            com.topstep.trading.event.EngineTelemetry.error("SimEngineRunner.publishSetupDecision", e);
+        }
+    }
+
+    /**
+     * One GateDecisionEvent per signal outcome (received / warmup drop /
+     * pause / risk deny / approved). numberA = signal R:R, numberB = signal
+     * quantity; the reason carries the deciding component's text.
+     */
+    private void publishSignalDecision(StrategySignalEvent signal, String why) {
+        String w = why == null ? "" : why;
+        String lw = w.toLowerCase(java.util.Locale.ROOT);
+        String gate = lw.startsWith("signal") ? "SIGNAL"
+                : lw.startsWith("approved") ? "RISK-APPROVED"
+                : lw.contains("warm") || lw.contains("stale") ? "WARMUP"
+                : lw.contains("pause") ? "PAUSED"
+                : "RISK";
+        // AGENT-05: signal events carry the BaseEvent wall-clock stamp (D-01); switch to candle time when it exists.
+        java.time.Instant t = signal.getTimestamp();
+        com.topstep.trading.event.EngineTelemetry.publish(eventBus,
+                new com.topstep.trading.event.GateDecisionEvent(signal.getSymbol(), t,
+                        com.topstep.trading.event.EngineTelemetry.sessionOf(t),
+                        "SIGNAL", gate, w, signal.getRiskRewardRatio(), signal.getQuantity()));
     }
 
     /**

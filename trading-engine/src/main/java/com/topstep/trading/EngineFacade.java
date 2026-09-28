@@ -65,9 +65,35 @@ public class EngineFacade {
     private PhaseAwareRiskCalculator phaseAwareRiskCalculator;
 
     /**
+     * V5 Agent 01: the ONE engine configuration, loaded exactly once when the
+     * facade is constructed (api-backend constructs it at Spring startup, so
+     * both {@code ./gradlew bootRun} and {@code java -jar api-backend-*.jar}
+     * load ${user.home}/topstep-trading/engine.properties here) and injected
+     * into every runner / factory through {@link com.topstep.trading.config.EngineConfig#current()}.
+     */
+    private final com.topstep.trading.config.EngineConfig engineConfig;
+
+    /**
      * Private constructor for singleton.
      */
     private EngineFacade() {
+        this.engineConfig = loadAndLogEngineConfig();
+    }
+
+    /**
+     * Load (or reuse, when something already loaded it in this JVM) the
+     * EngineConfig, install it as THE config and print the EFFECTIVE ENGINE
+     * CONFIG table (rule R9).
+     */
+    public static com.topstep.trading.config.EngineConfig loadAndLogEngineConfig() {
+        com.topstep.trading.config.EngineConfig cfg = com.topstep.trading.config.EngineConfig.current();
+        System.out.println(cfg.formatBootTable());
+        return cfg;
+    }
+
+    /** The effective engine configuration (GET /api/status -> effectiveConfig). */
+    public com.topstep.trading.config.EngineConfig getEngineConfig() {
+        return engineConfig;
     }
 
     /**

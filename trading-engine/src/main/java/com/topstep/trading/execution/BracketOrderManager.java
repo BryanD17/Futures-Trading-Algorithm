@@ -314,6 +314,7 @@ public class BracketOrderManager {
             orderIdToBracket.put(stopOrderId, bracket);
             System.out.println("  ✓ Stop Loss submitted: " + stopOrderId + " (qty: " + quantity + ")");
         } catch (Exception e) {
+            // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
             System.err.println("  ❌ Failed to submit Stop Loss: " + e.getMessage());
             return;
         }
@@ -382,6 +383,7 @@ public class BracketOrderManager {
             orderIdToBracket.put(stopOrderId, bracket);
             System.out.println("  ✓ Stop Loss submitted: " + stopOrderId);
         } catch (Exception e) {
+            // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
             System.err.println("  ❌ Failed to submit Stop Loss: " + e.getMessage());
             return;
         }
@@ -399,6 +401,7 @@ public class BracketOrderManager {
             orderIdToBracket.put(tpOrderId, bracket);
             System.out.println("  ✓ Take Profit submitted: " + tpOrderId);
         } catch (Exception e) {
+            // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
             System.err.println("  ❌ Failed to submit Take Profit: " + e.getMessage());
             cancelOrder(bracket.stopOrderId, "Take Profit submission failed");
             return;
@@ -514,6 +517,7 @@ public class BracketOrderManager {
             }
 
         } catch (Exception e) {
+            // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
             System.err.println("  ❌ Failed to move stop to breakeven: " + e.getMessage());
             // Keep old stop in place
         }
@@ -548,6 +552,7 @@ public class BracketOrderManager {
             System.out.println("  ✓ Stop updated: " + newStopOrderId + " (qty: " + bracket.remainingQuantity + ")");
 
         } catch (Exception e) {
+            // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
             System.err.println("  ❌ Failed to update stop quantity: " + e.getMessage());
         }
     }

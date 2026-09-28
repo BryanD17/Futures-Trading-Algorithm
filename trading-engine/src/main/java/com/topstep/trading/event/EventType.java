@@ -11,6 +11,7 @@ public enum EventType {
 
     // Strategy events
     STRATEGY_SIGNAL,
+    GATE_DECISION,            // V5 Agent 01: runtime gate telemetry (GateDecisionEvent)
 
     // Order events
     ORDER_SUBMITTED,

@@ -254,7 +254,7 @@ public final class ProfileSimulator {
     // ═══════════════════════════════════════════════════════════════════════
 
     private static Path file() {
-        return Path.of(System.getProperty(FILE_PROPERTY, "data/profile_sim.jsonl"));
+        return Path.of(com.topstep.trading.config.EngineConfig.current().getString(FILE_PROPERTY, "data/profile_sim.jsonl"));
     }
 
     /** Append one event. Failures are logged and swallowed — never the tape. */

@@ -49,16 +49,16 @@ public final class TopstepCredentials {
 
     public static TopstepCredentials load() {
         // 1. System properties
-        String apiUrl = System.getProperty("topstep.apiUrl");
-        String username = System.getProperty("topstep.username");
-        String apiKey = System.getProperty("topstep.apiKey");
-        String accountId = System.getProperty("topstep.accountId");
+        String apiUrl = com.topstep.trading.config.EngineConfig.current().getRaw("topstep.apiUrl");
+        String username = com.topstep.trading.config.EngineConfig.current().getRaw("topstep.username");
+        String apiKey = com.topstep.trading.config.EngineConfig.current().getRaw("topstep.apiKey");
+        String accountId = com.topstep.trading.config.EngineConfig.current().getRaw("topstep.accountId");
         if (isComplete(apiUrl, username, apiKey, accountId)) {
             return logged(new TopstepCredentials(apiUrl, username, apiKey, accountId, "system properties"));
         }
 
         // 2. Credentials file
-        Path credFile = Paths.get(System.getProperty("user.home"), ".topstep", "credentials.properties");
+        Path credFile = Paths.get(com.topstep.trading.config.EngineConfigLoader.userHome(), ".topstep", "credentials.properties");
         if (Files.isReadable(credFile)) {
             Properties props = new Properties();
             try (InputStream in = Files.newInputStream(credFile)) {

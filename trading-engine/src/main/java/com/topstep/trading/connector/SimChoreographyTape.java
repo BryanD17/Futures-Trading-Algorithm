@@ -124,7 +124,7 @@ final class SimChoreographyTape {
     }
 
     static boolean enabled() {
-        return !"RANDOM".equalsIgnoreCase(System.getProperty(MODE_PROPERTY, "CHOREOGRAPHY"));
+        return !"RANDOM".equalsIgnoreCase(com.topstep.trading.config.EngineConfig.current().getString(MODE_PROPERTY, "CHOREOGRAPHY"));
     }
 
     /**

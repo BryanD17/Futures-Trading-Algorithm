@@ -62,7 +62,7 @@ public enum ConfluenceField {
 
     /** Resolved weight: {@code confluence.weight.<key>}, clamped to >= 0. */
     public double weight() {
-        String raw = System.getProperty("confluence.weight." + key);
+        String raw = com.topstep.trading.config.EngineConfig.current().getRaw("confluence.weight." + key);
         if (raw == null) return defaultWeight;
         try {
             return Math.max(0.0, Double.parseDouble(raw.trim()));

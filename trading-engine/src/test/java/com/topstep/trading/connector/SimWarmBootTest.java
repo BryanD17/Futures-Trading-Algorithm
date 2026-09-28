@@ -102,7 +102,9 @@ class SimWarmBootTest {
         assertEquals(3, SimWarmBoot.clampDays(3));
 
         System.clearProperty(SimWarmBoot.DAYS_PROPERTY);
-        assertEquals(3, SimWarmBoot.configuredDays(), "default depth is 3 days");
+        // V5 Agent 01: engine-defaults.properties sets backfill.days=7 (the
+        // owner's proven depth); the CODE default (no defaults file) stays 3.
+        assertEquals(7, SimWarmBoot.configuredDays(), "default depth is 7 days (engine-defaults.properties)");
         System.setProperty(SimWarmBoot.DAYS_PROPERTY, "99");
         assertEquals(7, SimWarmBoot.configuredDays(), "depth clamps to 7");
         System.setProperty(SimWarmBoot.DAYS_PROPERTY, "1");

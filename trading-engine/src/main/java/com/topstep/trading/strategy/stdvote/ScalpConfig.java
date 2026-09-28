@@ -112,16 +112,29 @@ public final class ScalpConfig {
 
     private ScalpConfig() {}
 
+    /**
+     * V5 Agent 01: ScalpConfig is a thin VIEW over
+     * {@link com.topstep.trading.config.EngineConfig} (the single source of
+     * truth). The public constants above keep their legacy names
+     * ({@code scalpMode.enabled}, {@code scalp.minRaidScore}, ...); EngineConfig
+     * resolves them to the V5 canonical keys ({@code scalp.enabled},
+     * {@code raid.minScore.scalp}, ...) with precedence -D &gt; ENGINE_* env &gt;
+     * engine.properties &gt; engine-defaults.properties &gt; code default.
+     */
+    private static com.topstep.trading.config.EngineConfig cfg() {
+        return com.topstep.trading.config.EngineConfig.current();
+    }
+
     /** True when scalp mode is on. Absent property means OFF (opt-in). */
     public static boolean isEnabled() {
-        String prop = System.getProperty(ENABLED_PROPERTY);
+        String prop = cfg().getRaw(ENABLED_PROPERTY);
         if (prop == null) return false; // default OFF — additive opt-in
         return "true".equalsIgnoreCase(prop.trim());
     }
 
     /** True when the stop should move to entry at +0.5R (scalp mode only). */
     public static boolean breakevenAtHalfR() {
-        String prop = System.getProperty(BREAKEVEN_AT_HALF_R_PROPERTY);
+        String prop = cfg().getRaw(BREAKEVEN_AT_HALF_R_PROPERTY);
         if (prop == null) return DEFAULT_BREAKEVEN_AT_HALF_R;
         return "true".equalsIgnoreCase(prop.trim());
     }
@@ -179,7 +192,7 @@ public final class ScalpConfig {
 
     /** True when scalp entries are allowed in any open session (see property doc). */
     public static boolean allSessions() {
-        String prop = System.getProperty(ALL_SESSIONS_PROPERTY);
+        String prop = cfg().getRaw(ALL_SESSIONS_PROPERTY);
         if (prop == null) return DEFAULT_ALL_SESSIONS;
         return "true".equalsIgnoreCase(prop.trim());
     }
@@ -191,7 +204,7 @@ public final class ScalpConfig {
     }
 
     private static int intProperty(String name, int defaultValue) {
-        String raw = System.getProperty(name);
+        String raw = cfg().getRaw(name);
         if (raw == null) return defaultValue;
         try {
             return Integer.parseInt(raw.trim());
@@ -203,7 +216,7 @@ public final class ScalpConfig {
     }
 
     private static LocalTime timeProperty(String name, LocalTime defaultValue) {
-        String raw = System.getProperty(name);
+        String raw = cfg().getRaw(name);
         if (raw == null) return defaultValue;
         try {
             return LocalTime.parse(raw.trim());
@@ -215,7 +228,7 @@ public final class ScalpConfig {
     }
 
     private static double doubleProperty(String name, double defaultValue) {
-        String raw = System.getProperty(name);
+        String raw = cfg().getRaw(name);
         if (raw == null) return defaultValue;
         try {
             return Double.parseDouble(raw.trim());

@@ -68,6 +68,27 @@ class SetupControllerTest {
     }
 
     @Test
+    @DisplayName("GET /api/setup returns the last runtime gate decisions (gate + reason + two numbers)")
+    void gateDecisions() throws Exception {
+        com.topstep.trading.event.EngineTelemetry.resetForTests();
+        com.topstep.trading.event.EngineTelemetry.record(new com.topstep.trading.event.GateDecisionEvent(
+                "MNQ", java.time.Instant.parse("2026-09-28T19:05:00Z"), "NY_PM", "SIGNAL", "RISK",
+                "PropFirmRiskEngine deny: R:R too low: 2.00 < 3.00", 2.0, 3.0));
+        mockMvc.perform(get("/api/setup"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.gateDecisions").isArray())
+                .andExpect(jsonPath("$.gateDecisions[-1].symbol").value("MNQ"))
+                .andExpect(jsonPath("$.gateDecisions[-1].candleTime").value("2026-09-28T19:05:00Z"))
+                .andExpect(jsonPath("$.gateDecisions[-1].session").value("NY_PM"))
+                .andExpect(jsonPath("$.gateDecisions[-1].gate").value("RISK"))
+                .andExpect(jsonPath("$.gateDecisions[-1].reason").value(
+                        org.hamcrest.Matchers.containsString("R:R too low")))
+                .andExpect(jsonPath("$.gateDecisions[-1].numberA").value(2.0))
+                .andExpect(jsonPath("$.gateDecisions[-1].numberB").value(3.0));
+        com.topstep.trading.event.EngineTelemetry.resetForTests();
+    }
+
+    @Test
     @DisplayName("GET /api/setup/instruments returns MNQ/MES/MGC specs")
     void instruments() throws Exception {
         mockMvc.perform(get("/api/setup/instruments"))

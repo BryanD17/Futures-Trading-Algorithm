@@ -110,9 +110,9 @@ public final class ChartEngine {
      */
     public void applySystemPropertyTuning(String symbol) {
         if (symbol == null) return;
-        int mlt = Integer.getInteger("chart.minLegTicks." + symbol, minLegTicks);
-        int ss  = Integer.getInteger("chart.swingStrength." + symbol, swingStrength);
-        int zeb = Integer.getInteger("chart.zoneExpiryBars." + symbol, zoneExpiryBars);
+        int mlt = com.topstep.trading.config.EngineConfig.current().getInt("chart.minLegTicks." + symbol, minLegTicks);
+        int ss  = com.topstep.trading.config.EngineConfig.current().getInt("chart.swingStrength." + symbol, swingStrength);
+        int zeb = com.topstep.trading.config.EngineConfig.current().getInt("chart.zoneExpiryBars." + symbol, zoneExpiryBars);
         configureInstrument(symbol, mlt, ss, zeb);
         // V4 Agent 05: resolve the anchoring switch ONCE at wiring time and
         // print it, so Agent 09's default-behaviour audit reads the resolved
@@ -155,22 +155,22 @@ public final class ChartEngine {
      * is evidence-gathering for a future owner decision, not a behaviour.
      */
     private volatile boolean anchorCompare =
-            Boolean.parseBoolean(System.getProperty("chart.anchorCompare", "false"));
+            com.topstep.trading.config.EngineConfig.current().getBoolean("chart.anchorCompare", false);
 
     /** Which leg-selection strategy this symbol uses. Default FRACTAL_LEG. */
     public AnchorMode anchorModeFor(String symbol) {
         AnchorMode m = anchorModes.get(symbol);
         if (m != null) return m;
-        return AnchorMode.parse(System.getProperty("chart.anchorMode." + symbol,
-                System.getProperty("chart.anchorMode", "FRACTAL_LEG")));
+        return AnchorMode.parse(com.topstep.trading.config.EngineConfig.current().getString("chart.anchorMode." + symbol,
+                com.topstep.trading.config.EngineConfig.current().getString("chart.anchorMode", "FRACTAL_LEG")));
     }
 
     /** The retracement band this symbol's zones are armed on. */
     public OteBand bandFor(String symbol) {
         OteBand b = bands.get(symbol);
         if (b != null) return b;
-        return OteBand.parse(System.getProperty("chart.oteBand." + symbol,
-                System.getProperty("chart.oteBand", null)));
+        return OteBand.parse(com.topstep.trading.config.EngineConfig.current().getString("chart.oteBand." + symbol,
+                com.topstep.trading.config.EngineConfig.current().getString("chart.oteBand", null)));
     }
 
     /** True when the dual-mode comparison log is on. */

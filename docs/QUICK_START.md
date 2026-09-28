@@ -29,6 +29,55 @@ refactor and were already present at the baseline commit.
 
 ## Run
 
+### ENGINE CONFIGURATION — one source of truth (V5 Agent 01)
+
+Every engine flag is resolved by `EngineConfig` with ONE precedence, in every
+JVM (`java -jar`, `./gradlew bootRun`, `./gradlew test`, the CLI):
+
+```
+-D<key>=v  >  ENGINE_<KEY> env  >  ${user.home}/topstep-trading/engine.properties
+           >  classpath engine-defaults.properties  >  code default
+```
+
+- `${user.home}/topstep-trading/engine.properties` is read at boot by BOTH
+  `java -jar api-backend/build/libs/api-backend-1.0.0-SNAPSHOT.jar` and
+  `./gradlew :api-backend:bootRun`. Point elsewhere with
+  `-Dengine.props=<path>` (java -jar) or `-Pengine.props=<path>` (gradle).
+- Env form: key upper-cased, non-alphanumerics -> `_`, prefixed `ENGINE_`
+  (e.g. `ENGINE_BACKFILL_DAYS=7`).
+- The boot log prints an **EFFECTIVE ENGINE CONFIG** table (key | value |
+  source) plus one line per mode consequence; the same data is at
+  `curl -s localhost:8080/api/status | jq .effectiveConfig`.
+- V5 defaults (`trading-engine/src/main/resources/engine-defaults.properties`):
+  `session.allSessions=true`, `session.gateMode=SCORING`, `backfill.days=7`,
+  `bias.hysteresis=true`, `strategy.legacyFallback=false`. `scalp.enabled`
+  stays `false`.
+- Legacy names still work as aliases: `scalpMode.enabled` = `scalp.enabled`,
+  `stdvote.displacement.{atrMult,bodyPct,recentBars}` = `displacement.*`,
+  `bias.hysteresis.enabled` = `bias.hysteresis`, `stdvote.symbol` =
+  `engine.symbol`, ... (full list: `EngineConfig.KEYS`).
+- A non-{MNQ,MES,MGC} symbol FAILS FAST naming `strategy.legacyFallback`
+  (no silent legacy fallback).
+- `./gradlew bootRun` forwards the SAME `-D` list the test task forwards
+  (`gradle/engine-config.gradle`), plus `-Dserver.port`; `-Pengine.userHome=<dir>`
+  mirrors `java -Duser.home=<dir> -jar ...`. Unit tests default to
+  `engine.props=NONE` (hermetic) unless `-Pengine.props=<path>` is given.
+- Runtime gate telemetry: `curl -s localhost:8080/api/setup | jq '.gateDecisions[-20:]'`
+  (last 200 GateDecisionEvents: symbol, candleTime, session, state, gate,
+  reason, numberA, numberB).
+
+Owner launch (unchanged; engine.properties is now honoured too):
+
+```bash
+java -Duser.home=$HOME -Dserver.port=8080 -Dbackfill.days=7 \
+     -Dstdvote.displacement.recentBars=12 -Dstdvote.displacement.atrMult=1.2 \
+     -Dstdvote.displacement.bodyPct=0.55 \
+     -jar api-backend/build/libs/api-backend-1.0.0-SNAPSHOT.jar
+# equivalent:
+./gradlew :api-backend:bootRun -Dbackfill.days=7 -Dstdvote.displacement.recentBars=12 \
+     -Dstdvote.displacement.atrMult=1.2 -Dstdvote.displacement.bodyPct=0.55
+```
+
 ### BACKTEST mode (default)
 
 ```bash
@@ -161,7 +210,7 @@ LevelEngine PDH/PDL, the raid pipeline, and the in-memory 30m ChartEngine
 in ~30 seconds — instead of the 5–24 hours of blindness a cold start used
 to cost.
 
-- **Depth**: `-Dbackfill.days=N` (default `3`, clamped to `[1,7]`). The
+- **Depth**: `-Dbackfill.days=N` (default `7` since V5 engine-defaults.properties; code default 3; clamped to `[1,7]`). The
   chosen value is logged at startup.
 - **The log line to look for** (one per instrument):
   `[Backfill] MNQ: delivered <N> historical 1m bars (3 days). Chart memory is warm.`
@@ -184,7 +233,7 @@ restart). The synthetic path is structured (session-scaled volatility,
 one multi-hour leg + retraces per day) so the ChartEngine forms real OTE
 zones during replay.
 
-- `-Dbackfill.days=N` — same depth + clamp `[1,7]` as LIVE (default 3).
+- `-Dbackfill.days=N` — same depth + clamp `[1,7]` as LIVE (default 7 via engine-defaults.properties).
 - `-Dsim.backfill.seed=42` — RNG seed; same seed = identical SIM history
   (reproducible sessions). Default 42.
 - `-Dsim.warmBoot=false` — restore the old cold boot if you need it.
@@ -342,7 +391,7 @@ Field evidence 2026-07-09: a session passed M1–M4 and was destroyed by
 OPPOSITE bias is *contradiction* — hysteresis makes the machine treat
 them differently for **in-flight setups only**:
 
-- `-Dbias.hysteresis.enabled` (default **false**) — when true, an
+- `-Dbias.hysteresis.enabled` (alias of `bias.hysteresis`; default **true** since V5 engine-defaults.properties) — when true, an
   in-flight setup survives brief NEUTRAL wobbles; an OPPOSITE flip still
   kills it instantly.
 - `-Dbias.neutralGraceBars` (default 2, clamped [1,4]) — consecutive

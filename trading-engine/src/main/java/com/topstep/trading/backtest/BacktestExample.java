@@ -53,7 +53,7 @@ public class BacktestExample {
         List<Candle> esCandles = null;
 
         // Debug: show current working directory
-        String cwd = System.getProperty("user.dir");
+        String cwd = com.topstep.trading.config.EngineConfigLoader.userDir();
         System.out.println("\nDEBUG: Current working directory: " + cwd);
 
         // Try to find and load real data files
@@ -125,7 +125,10 @@ public class BacktestExample {
         // purposes — switch to MNQ to exercise the new path).
         EventBus eventBus = new EventBus();
         com.topstep.trading.strategy.TradingStrategy strategy =
-                com.topstep.trading.strategy.stdvote.StdvOteFactory.build("NQ", "ES", eventBus);
+                // V5 Agent 01: StdvOteFactory now FAILS FAST for non-{MNQ,MES,MGC}
+                // symbols; this full-size NQ demo always ran the legacy strategy
+                // (via the old silent fallback), so construct it explicitly.
+                new com.topstep.trading.strategy.IctHighConfluenceStrategy("NQ", "ES", eventBus);
 
         System.out.println("\nStrategy: " + strategy.getName());
         System.out.println("Primary Instrument: NQ (Nasdaq 100 E-mini)");

@@ -191,11 +191,11 @@ public final class StdvOteStrategy implements TradingStrategy {
 
     /** {@code bias.hysteresis.enabled} — DEFAULT false (counterfactual-log-only). */
     private boolean biasHysteresisEnabled =
-            Boolean.getBoolean("bias.hysteresis.enabled");
+            com.topstep.trading.config.EngineConfig.current().getBoolean("bias.hysteresis.enabled", false);
     /** {@code bias.neutralGraceBars} — consecutive NEUTRAL 15m evaluations
      *  an in-flight setup survives; default 2, clamped [1,4]. */
     private int neutralGraceBars = clampGraceBars(
-            Integer.getInteger("bias.neutralGraceBars", 2));
+            com.topstep.trading.config.EngineConfig.current().getInt("bias.neutralGraceBars", 2));
     /** Consecutive NEUTRAL evaluations seen while holding the setup. */
     private int neutralGraceCount = 0;
     /** The most recent bias EVALUATION (as opposed to the setup's stored

@@ -114,7 +114,7 @@ public class TopstepConnector implements TradingConnector {
      * hundred bars, near-instant next to the 1m tier.
      */
     static final int HTF_BACKFILL_DAYS =
-        Math.min(90, Math.max(7, Integer.getInteger("htf.backfill.days", 30)));
+        Math.min(90, Math.max(7, com.topstep.trading.config.EngineConfig.current().getInt("htf.backfill.days", 30)));
 
     /**
      * Fetch HTF_BACKFILL_DAYS of H1 bars and hand them to the symbol's
@@ -151,7 +151,7 @@ public class TopstepConnector implements TradingConnector {
      * Read once at class load so every symbol uses the same depth.
      */
     private static final int BACKFILL_DAYS =
-        Math.min(7, Math.max(1, Integer.getInteger("backfill.days", 3)));
+        Math.min(7, Math.max(1, com.topstep.trading.config.EngineConfig.current().getInt("backfill.days", 3)));
 
     // Polling interval in seconds (30 seconds for near real-time data)
     private static final int POLL_INTERVAL_SECONDS = 30;
@@ -249,6 +249,7 @@ public class TopstepConnector implements TradingConnector {
             try {
                 pollOrderStatuses();
             } catch (Exception e) {
+                // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
                 logger.error("Error polling order statuses: {}", e.getMessage());
             }
         }, ORDER_POLL_INTERVAL_SECONDS, ORDER_POLL_INTERVAL_SECONDS, TimeUnit.SECONDS);
@@ -348,6 +349,7 @@ public class TopstepConnector implements TradingConnector {
                                 pending.listener.onOrderUpdate(orderId, OrderStatus.FILLED, fillPrice, fillQty);
                             }
                         } catch (Exception e) {
+                            // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
                             logger.error("Exception in fill listener for order {}: {}", orderId, e.getMessage());
                         } finally {
                             pendingOrders.remove(orderId);
@@ -362,6 +364,7 @@ public class TopstepConnector implements TradingConnector {
                                 pending.listener.onOrderUpdate(orderId, OrderStatus.CANCELED, null, null);
                             }
                         } catch (Exception e) {
+                            // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
                             logger.error("Exception in cancel listener for order {}: {}", orderId, e.getMessage());
                         } finally {
                             pendingOrders.remove(orderId);
@@ -376,6 +379,7 @@ public class TopstepConnector implements TradingConnector {
                                 pending.listener.onOrderUpdate(orderId, OrderStatus.REJECTED, null, null);
                             }
                         } catch (Exception e) {
+                            // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
                             logger.error("Exception in reject listener for order {}: {}", orderId, e.getMessage());
                         } finally {
                             pendingOrders.remove(orderId);
@@ -385,6 +389,7 @@ public class TopstepConnector implements TradingConnector {
                 }
             }
         } catch (Exception e) {
+            // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
             logger.error("Error in pollOrderStatuses: {}", e.getMessage());
         }
     }
@@ -924,11 +929,13 @@ public class TopstepConnector implements TradingConnector {
                         parsedCandles.add(candle);
 
                     } catch (Exception e) {
+                        // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
                         logger.error("Error parsing bar for {}: {}", symbol, e.getMessage());
                     }
                 }
             }
         } catch (Exception e) {
+            // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
             logger.error("Error fetching bars for {}: {}", symbol, e.getMessage());
         }
         return parsedCandles;
@@ -1538,7 +1545,7 @@ public class TopstepConnector implements TradingConnector {
                 }
 
                 boolean simulated = account.has("simulated") && account.get("simulated").asBoolean();
-                if (!simulated && !Boolean.getBoolean("topstep.allowNonSimulated")) {
+                if (!simulated && !com.topstep.trading.config.EngineConfig.current().getBoolean("topstep.allowNonSimulated", false)) {
                     throw new IOException("Account " + accName + " is NOT simulated. Refusing to trade "
                         + "real money without -Dtopstep.allowNonSimulated=true");
                 }

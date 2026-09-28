@@ -42,6 +42,27 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+    // Controller tests construct EngineFacade (which loads EngineConfig):
+    // keep them hermetic from a developer's ~/topstep-trading/engine.properties.
+    systemProperty 'engine.props', 'NONE'
+}
+
+// V5 Agent 01 — bootRun parity with the trading-engine test JVM and with
+// `java -jar api-backend-*.jar`: forward the SAME engine -D list
+// (gradle/engine-config.gradle), plus server.port. The engine itself loads
+// ${user.home}/topstep-trading/engine.properties at EngineFacade construction
+// (or the file given with -Pengine.props=<path>), exactly as the jar does.
+apply from: rootProject.file('gradle/engine-config.gradle')
+
+tasks.named('bootRun') {
+    engineForwardedSystemProperties().each { k, v -> systemProperty k, v }
+    if (System.getProperty('server.port') != null) {
+        systemProperty 'server.port', System.getProperty('server.port')
+    }
+    // -Pengine.userHome=<dir> mirrors the owner's `java -Duser.home=<dir> -jar ...`
+    if (project.hasProperty('engine.userHome')) {
+        systemProperty 'user.home', project.property('engine.userHome').toString()
+    }
 }
 
 java {

@@ -61,7 +61,7 @@ public final class OteAgreementStatsStore {
     private OteAgreementStatsStore() {}
 
     private static Path file() {
-        return Path.of(System.getProperty(FILE_PROPERTY, "data/ote_agreement_stats.jsonl"));
+        return Path.of(com.topstep.trading.config.EngineConfig.current().getString(FILE_PROPERTY, "data/ote_agreement_stats.jsonl"));
     }
 
     /** Test hook: point at a fresh file and drop the cache. */
@@ -90,7 +90,7 @@ public final class OteAgreementStatsStore {
                 Map<String, Object> line = new LinkedHashMap<>();
                 line.put("date", session.toString());
                 line.put("symbol", symbol);
-                line.put("mode", System.getProperty(
+                line.put("mode", com.topstep.trading.config.EngineConfig.current().getString(
                         Ote30mConfluenceGate.MODE_PROPERTY, "LOG"));
                 line.put("machineEmitted_chartAgreed", s.agreed());
                 line.put("machineEmitted_chartDisagreed", s.disagreed());

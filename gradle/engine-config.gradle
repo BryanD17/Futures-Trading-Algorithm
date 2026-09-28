@@ -1,0 +1,43 @@
+// ============================================================================
+// V5 Agent 01 — ONE -D forwarding list for every JVM that runs the engine.
+// Applied by trading-engine (test task) AND api-backend (bootRun), so
+//   ./gradlew :trading-engine:test -Dbackfill.days=7 ...
+//   ./gradlew :api-backend:bootRun  -Dbackfill.days=7 ...
+// hand the engine the SAME system properties. Both JVMs then resolve every
+// flag through EngineConfig: -D > ENGINE_<KEY> env > engine.properties >
+// classpath engine-defaults.properties > code default.
+//
+// engine.properties: -Pengine.props=<path> (or -Dengine.props=<path>) is
+// forwarded to both. Without it, bootRun (like `java -jar`) reads
+// ${user.home}/topstep-trading/engine.properties; the TEST JVM defaults to
+// engine.props=NONE so unit tests never depend on a developer's local file.
+//
+// EngineConfigRegistryTest asserts every registered key/alias starts with one
+// of these prefixes — a new key with a new prefix fails the build until it is
+// added here.
+// ============================================================================
+
+ext.engineConfigPrefixes = [
+        'strategy.', 'stdvOte.', 'stdvote.', 'engine.', 'notify.', 'session.',
+        'scalp.', 'scalpMode.', 'detector.', 'setup.', 'ote.', 'ote30m.', 'mss.',
+        'displacement.', 'bias.', 'pd.', 'raid.', 'trade.', 'profile.', 'chart.',
+        'confluence.', 'backfill.', 'htf.', 'sim.', 'mock.', 'backtest.',
+        'topstep.', 'ictlib.', 'funnel.',
+        // reserved for Agents 02-05 (V5 Appendix C keys)
+        'warmup.', 'size.', 'risk.', 'news.'
+]
+
+/** System properties of THIS gradle JVM that belong to the engine. */
+ext.engineForwardedSystemProperties = { ->
+    Map<String, String> out = new TreeMap<>()
+    System.properties.each { k, v ->
+        String key = k.toString()
+        if (engineConfigPrefixes.any { key.startsWith(it) }) {
+            out[key] = v.toString()
+        }
+    }
+    if (project.hasProperty('engine.props')) {
+        out['engine.props'] = project.property('engine.props').toString()
+    }
+    return out
+}

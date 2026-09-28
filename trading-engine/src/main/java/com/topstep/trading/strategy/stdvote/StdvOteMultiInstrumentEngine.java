@@ -329,7 +329,7 @@ public final class StdvOteMultiInstrumentEngine {
     // ──────────────────────────────────────────────────────────────────────
 
     static List<String> resolveActiveSymbols() {
-        String prop = System.getProperty(ACTIVE_SYMBOLS_PROPERTY);
+        String prop = com.topstep.trading.config.EngineConfig.current().getRaw(ACTIVE_SYMBOLS_PROPERTY);
         if (prop == null || prop.isBlank()) return DEFAULT_ACTIVE;
         return Arrays.stream(prop.split(","))
                 .map(String::trim)
@@ -342,7 +342,7 @@ public final class StdvOteMultiInstrumentEngine {
         // Apply per-symbol overrides if present.
         for (String active : resolveActiveSymbols()) {
             String key = SMT_PROPERTY_PREFIX + active;
-            String override = System.getProperty(key);
+            String override = com.topstep.trading.config.EngineConfig.current().getRaw(key);
             if (override != null) {
                 out.put(active, override);
             } else if (!out.containsKey(active)) {

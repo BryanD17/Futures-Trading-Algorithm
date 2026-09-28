@@ -383,7 +383,7 @@ public final class ConfluenceService {
 
     private static int intProp(String key, int def) {
         try {
-            String v = System.getProperty(key);
+            String v = com.topstep.trading.config.EngineConfig.current().getRaw(key);
             return v == null ? def : Integer.parseInt(v.trim());
         } catch (NumberFormatException e) {
             return def;

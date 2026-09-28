@@ -70,6 +70,7 @@ public final class HistoricalBackfill {
                 List<Candle> chunk = fetchRange.apply(cursor, chunkEnd);
                 if (chunk != null) all.addAll(chunk);
             } catch (Exception e) {
+                // AGENT-05: swallowed on the signal->order path (DIAGNOSIS_V5 §5) — log ERROR + EngineTelemetry.error(site, e) counter
                 // A failed chunk (weekend gap, transient 5xx) must not abort
                 // the whole backfill — log and continue.
                 System.err.println("[Backfill] " + symbol + " chunk "

@@ -64,14 +64,14 @@ import java.util.stream.Collectors;
  */
 public class LiveEngineRunner {
 
-    // STDV+OTE refactor: defaults to MNQ + MES (the registry-allowed micros).
-    // Override via -Dstdvote.symbol=<MNQ|MES|MGC> and -Dstdvote.smt=<...>.
-    // Setting an off-registry symbol routes the factory to the legacy
-    // strategy as a fallback — see StdvOteFactory.
-    private static final String DEFAULT_SYMBOL =
-            System.getProperty("stdvote.symbol", "MNQ");
-    private static final String SMT_SYMBOL =
-            System.getProperty("stdvote.smt", "MES");
+    // V5 Agent 01: configuration comes from the ONE EngineConfig (no static
+    // -D reads). engine.symbol / engine.smtSymbol (legacy stdvote.symbol /
+    // stdvote.smt) default to MNQ + MES; an off-registry symbol FAILS FAST in
+    // StdvOteFactory unless strategy.legacyFallback=true.
+    private final com.topstep.trading.config.EngineConfig config =
+            com.topstep.trading.config.EngineConfig.current();
+    private final String DEFAULT_SYMBOL = config.getString("engine.symbol", "MNQ");
+    private final String SMT_SYMBOL = config.getString("engine.smtSymbol", "MES");
 
     // Multi-instrument mode flag (legacy MultiInstrumentEngine path).
     private static final boolean MULTI_INSTRUMENT_MODE = true;
@@ -82,12 +82,18 @@ public class LiveEngineRunner {
      * to drive MNQ + MGC concurrently with MES as SMT-only feed. When this is
      * on, the legacy {@code MultiInstrumentEngine} path above is disabled
      * (multiEngine == null), and {@link #onMarketData} routes candles to the
-     * new engine instead. Override with {@code -Dstdvote.multiInstrument=false}.
+     * new engine instead. Override with engine.multiInstrument=false (legacy
+     * stdvote.multiInstrument).
      */
-    private static final boolean STDV_OTE_MULTI_INSTRUMENT =
+    private final boolean STDV_OTE_MULTI_INSTRUMENT =
             com.topstep.trading.strategy.stdvote.StdvOteFactory.isEnabled()
-                    && !"false".equalsIgnoreCase(
-                        System.getProperty("stdvote.multiInstrument", "true"));
+                    && config.getBoolean("engine.multiInstrument", true);
+
+    /** V5 Agent 01 wiring check: set at the first candle this runner sees. */
+    private final AtomicBoolean firstCandleSeen = new AtomicBoolean(false);
+    private volatile boolean wiredBeforeFirstCandle = false;
+    /** Last (state|gate) published per symbol — GateDecisionEvents are transitions. */
+    private final Map<String, String> lastSetupDecision = new ConcurrentHashMap<>();
 
     // Timezone for Topstep (Chicago - Central Time)
     // Note: Topstep requires being flat by 3:10 PM CT
@@ -447,8 +453,10 @@ public class LiveEngineRunner {
         // on the real candle path in that mode.
         if (stdvOteMultiEngine != null) {
             stdvOteMultiEngine.setCandleTap(c -> {
+                verifyWiringAtFirstCandle(c);
                 lastCandleTs.put(c.getSymbol(), c.getTimestamp());
                 chartEngine.onCandle(c);
+                publishSetupDecision(c);
             });
             stdvOteMultiEngine.setChartEngine(chartEngine);
             stdvOteMultiEngine.setIctLibEngine(ictLibEngine);
@@ -513,6 +521,7 @@ public class LiveEngineRunner {
             System.out.println("✓ Subscribed to market data for " + symbol);
             return true;
         } catch (Exception e) {
+            com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.subscribe", e);
             System.err.println("❌ Failed to subscribe to " + symbol + ": " + e.getMessage());
             // Don't add to subscribedSymbols if subscription failed
             return false;
@@ -531,6 +540,7 @@ public class LiveEngineRunner {
             subscribedSymbols.remove(symbol);
             System.out.println("✓ Unsubscribed from market data for " + symbol);
         } catch (Exception e) {
+            com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.unsubscribe", e);
             System.err.println("❌ Failed to unsubscribe from " + symbol + ": " + e.getMessage());
         }
     }
@@ -602,6 +612,11 @@ public class LiveEngineRunner {
             EngineFacade.getInstance().setChartEngine(chartEngine);
             EngineFacade.getInstance().setIctLibEngine(ictLibEngine);
             EngineFacade.getInstance().setConfluenceService(confluenceService);
+
+            // V5 Agent 01 (D-14): every handler must be subscribed and the bus
+            // running BEFORE the connector can deliver its first candle (the
+            // historical backfill replays synchronously inside the subscribes).
+            assertWiredForCandles();
 
             // Start the appropriate engine mode. STDV+OTE multi-instrument
             // wins if enabled; otherwise legacy multi-instrument; otherwise
@@ -681,8 +696,8 @@ public class LiveEngineRunner {
             shutdownLatch.await();
 
         } catch (Exception e) {
+            com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.start", e);
             System.err.println("\n❌ FATAL ERROR: " + e.getMessage());
-            e.printStackTrace();
             emergencyShutdown("Fatal error during startup");
         }
     }
@@ -697,6 +712,7 @@ public class LiveEngineRunner {
         }
 
         try {
+            verifyWiringAtFirstCandle(candle);
             // Chart-in-memory FIRST: the internal 30m chart must see every
             // candle this runner processes (backfill replay and live alike).
             chartEngine.onCandle(candle);
@@ -751,10 +767,11 @@ public class LiveEngineRunner {
                     strategy.onCandle(candle, strategyContext);
                 }
             }
+            publishSetupDecision(candle);
 
         } catch (Exception e) {
+            com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.onMarketData", e);
             System.err.println("Error processing candle for " + candle.getSymbol() + ": " + e.getMessage());
-            e.printStackTrace();
         }
     }
 
@@ -778,11 +795,13 @@ public class LiveEngineRunner {
     private void releaseUnexecutedSignal(StrategySignalEvent signal, String why) {
         System.out.println("[SignalRelease] " + signal.getSymbol() + ": " + why
                 + " — releasing strategy latch (no order/position created)");
+        publishSignalDecision(signal, why);
         eventBus.publish(new com.topstep.trading.event.PositionClosedEvent(
                 signal.getSymbol(), 0.0, false, Instant.now()));
     }
 
     private void handleStrategySignal(StrategySignalEvent signal) {
+        publishSignalDecision(signal, "SIGNAL received");
         // ── WARMUP GUARD layer 1: nothing trades until every initial
         // subscription (and its synchronous historical backfill) returned.
         if (!warmupComplete) {
@@ -846,6 +865,7 @@ public class LiveEngineRunner {
                                 " (" + pending.getSide() + " @ " + String.format("%.5f", pending.getLimitPrice()) + ")");
                         }
                     } catch (Exception e) {
+                        com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.cancelOnTierUpgrade", e);
                         System.err.println("  ❌ Failed to cancel order: " + e.getMessage());
                         // Even if cancel fails, we'll continue - the old order may have already filled
                     }
@@ -922,7 +942,7 @@ public class LiveEngineRunner {
         if (!riskCalc.isTradingAllowed()) {
             System.out.println("\n❌ Signal DENIED by PhaseAwareRiskCalculator: " + signal.getReason());
             System.out.println("  Reason: " + riskCalc.getBlockReason());
-            releaseUnexecutedSignal(signal, "PhaseAwareRiskCalculator deny");
+            releaseUnexecutedSignal(signal, "PhaseAwareRiskCalculator deny: " + riskCalc.getBlockReason());
             return;
         }
 
@@ -961,10 +981,12 @@ public class LiveEngineRunner {
 
                 order.setOrderId(orderId);
                 System.out.println("  Order submitted: " + orderId);
+                publishSignalDecision(signal, "APPROVED: " + decision.getReason());
 
                 printAccountStatus();
 
             } catch (Exception e) {
+                com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.submitOrder", e);
                 System.err.println("❌ Order submission failed: " + e.getMessage());
                 // The order never reached the market — free the strategy.
                 executionEngine.removeOrder(signal.getSymbol());
@@ -974,8 +996,88 @@ public class LiveEngineRunner {
         } else {
             System.out.println("\n❌ Signal DENIED by PropFirmRiskEngine: " + signal.getReason());
             System.out.println("  Reason: " + decision.getReason());
-            releaseUnexecutedSignal(signal, "PropFirmRiskEngine deny");
+            releaseUnexecutedSignal(signal, "PropFirmRiskEngine deny: " + decision.getReason());
         }
+    }
+
+    // ── V5 Agent 01: wiring assertions + runtime gate telemetry ─────────
+
+    /** Throws when the candle path's handler is missing or the bus is not running. */
+    void assertWiredForCandles() {
+        if (eventBus.handlerCount(StrategySignalEvent.class) == 0) {
+            throw new IllegalStateException("LIVE wiring: no StrategySignalEvent handler subscribed before the first candle");
+        }
+        if (!eventBus.isRunning()) {
+            throw new IllegalStateException("LIVE wiring: EventBus not running before the first candle");
+        }
+    }
+
+    /** Records (once) whether the wiring was complete when the first candle arrived. */
+    private void verifyWiringAtFirstCandle(Candle candle) {
+        if (!firstCandleSeen.compareAndSet(false, true)) return;
+        boolean ok = eventBus.handlerCount(StrategySignalEvent.class) > 0 && eventBus.isRunning();
+        wiredBeforeFirstCandle = ok;
+        if (!ok) {
+            com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.wiring",
+                    "first candle " + candle.getSymbol() + " @ " + candle.getTimestamp()
+                            + " arrived before the signal handler / EventBus were ready");
+        }
+    }
+
+    /** True when the first candle found every handler subscribed and the bus running. */
+    boolean wasWiredBeforeFirstCandle() {
+        return wiredBeforeFirstCandle;
+    }
+
+    /**
+     * One GateDecisionEvent per setup TRANSITION for a candle whose symbol
+     * has a live setup: which gate holds it now. numberA = candle close,
+     * numberB = setup raid score.
+     */
+    private void publishSetupDecision(Candle candle) {
+        try {
+            var s = com.topstep.trading.strategy.stdvote.StdvOteRegistry.get(candle.getSymbol());
+            if (s.isEmpty()) return;
+            var ctx = s.get().getSetupContext();
+            String state = ctx.state == null ? "IDLE" : ctx.state.name();
+            String gate = ctx.lastGateFailed;
+            if ("IDLE".equals(state) && gate == null) {
+                lastSetupDecision.remove(candle.getSymbol());
+                return;
+            }
+            String keyNow = state + "|" + gate;
+            if (keyNow.equals(lastSetupDecision.put(candle.getSymbol(), keyNow))) return;
+            com.topstep.trading.event.EngineTelemetry.publish(eventBus,
+                    new com.topstep.trading.event.GateDecisionEvent(candle.getSymbol(),
+                            candle.getTimestamp(), com.topstep.trading.event.EngineTelemetry.sessionOf(candle.getTimestamp()),
+                            state, gate == null ? "SETUP-" + state : "SETUP",
+                            gate == null ? "setup progressing (no gate failed)" : gate,
+                            candle.getClose(), ctx.raidScore));
+        } catch (RuntimeException e) {
+            com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.publishSetupDecision", e);
+        }
+    }
+
+    /**
+     * One GateDecisionEvent per signal outcome (received / warmup drop /
+     * pause / risk deny / approved). numberA = signal R:R, numberB = signal
+     * quantity; the reason carries the deciding component's text.
+     */
+    private void publishSignalDecision(StrategySignalEvent signal, String why) {
+        String w = why == null ? "" : why;
+        String lw = w.toLowerCase(java.util.Locale.ROOT);
+        String gate = lw.startsWith("signal") ? "SIGNAL"
+                : lw.startsWith("approved") ? "RISK-APPROVED"
+                : lw.contains("warm") || lw.contains("stale") ? "WARMUP"
+                : lw.contains("pause") ? "PAUSED"
+                : lw.contains("broker") || lw.contains("submission") || lw.contains("unfilled") ? "EXEC"
+                : "RISK";
+        // AGENT-05: signal events carry the BaseEvent wall-clock stamp (D-01); switch to candle time when it exists.
+        Instant t = signal.getTimestamp();
+        com.topstep.trading.event.EngineTelemetry.publish(eventBus,
+                new com.topstep.trading.event.GateDecisionEvent(signal.getSymbol(), t,
+                        com.topstep.trading.event.EngineTelemetry.sessionOf(t), "SIGNAL", gate, w,
+                        signal.getRiskRewardRatio(), signal.getQuantity()));
     }
 
     /**
@@ -1075,6 +1177,9 @@ public class LiveEngineRunner {
             targetPrice = levels.getFinalTargetPrice();
         }
 
+        // AGENT-05: the early returns below leave a FILLED position without a
+        // bracket (DIAGNOSIS_V5 §5 LiveEngineRunner:1080-1137) — execution-path
+        // safety net (flatten / protective stop + ERROR counter) is Agent 05's.
         if (stopPrice <= 0 || targetPrice <= 0) {
             System.err.println("  ❌ Invalid bracket prices for " + symbol + " (stop=" + stopPrice + ", target=" + targetPrice + ")");
             return;
@@ -1222,6 +1327,7 @@ public class LiveEngineRunner {
                 .notes(reason)
                 .build());
         } catch (Exception e) {
+            com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.journal", e);
             System.err.println("Failed to record live trade for " + bracket.symbol + ": " + e.getMessage());
         }
     }
@@ -1456,7 +1562,8 @@ public class LiveEngineRunner {
             // If discrepancy <= $10, no action needed (likely just unrealized PnL timing)
 
         } catch (Exception e) {
-            // Don't crash on sync failure - just log and continue
+            // Don't crash on sync failure - log at ERROR, count, continue
+            com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.balanceSync", e);
             System.err.println("[BALANCE SYNC] Failed to sync balance: " + e.getMessage());
         }
     }
@@ -1546,6 +1653,7 @@ public class LiveEngineRunner {
                         Long.parseLong(orderId);
                         System.out.println("  ✓ Cancelled on exchange: " + orderId);
                     } catch (NumberFormatException e) {
+                        // not an error: a non-numeric id means a local-only order (logged)
                         System.out.println("  ⚠ Removed from local tracking (no server ID): " + orderId);
                     }
                 } else {
@@ -1556,6 +1664,7 @@ public class LiveEngineRunner {
                 executionEngine.removeOrderById(symbol, orderId);
 
             } catch (Exception e) {
+                com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.cancelStaleOrder", e);
                 System.err.println("  ❌ Failed to cancel stale order: " + e.getMessage());
             }
         }
@@ -1654,6 +1763,7 @@ public class LiveEngineRunner {
                         symbolsToFlatten.add(symbol);
 
                     } catch (Exception e) {
+                        com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.flattenClose", e);
                         System.err.println("  ❌ Failed to close " + symbol + ": " + e.getMessage());
                     }
                 }
@@ -1694,6 +1804,7 @@ public class LiveEngineRunner {
                     System.out.println("  ✓ Cancelled order: " + orderId + " (" + order.getSymbol() + ")");
                 }
             } catch (Exception e) {
+                com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.flattenCancel", e);
                 System.err.println("  ❌ Failed to cancel order " + order.getOrderId() + ": " + e.getMessage());
             }
         }

@@ -45,7 +45,7 @@ public final class SimWarmBoot {
 
     /** Configured depth in days, clamped to [1, 7] (default 3). */
     public static int configuredDays() {
-        return clampDays(Long.getLong(DAYS_PROPERTY, 3L));
+        return clampDays(com.topstep.trading.config.EngineConfig.current().getLong(DAYS_PROPERTY, 3L));
     }
 
     static int clampDays(long days) {
@@ -54,7 +54,7 @@ public final class SimWarmBoot {
 
     /** Configured seed (default 42) — fixed so SIM runs are reproducible. */
     public static long configuredSeed() {
-        return Long.getLong(SEED_PROPERTY, DEFAULT_SEED);
+        return com.topstep.trading.config.EngineConfig.current().getLong(SEED_PROPERTY, DEFAULT_SEED);
     }
 
     /**
@@ -164,7 +164,7 @@ public final class SimWarmBoot {
 
     /** Configured TIER-2 depth in days, clamped to [7, 90] (default 30). */
     public static int configuredHtfDays() {
-        return (int) Math.min(90L, Math.max(7L, Long.getLong(HTF_DAYS_PROPERTY, 30L)));
+        return (int) Math.min(90L, Math.max(7L, com.topstep.trading.config.EngineConfig.current().getLong(HTF_DAYS_PROPERTY, 30L)));
     }
 
     /**
