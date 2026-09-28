@@ -427,7 +427,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
 
     // ── V5 Agent 03: dealing-range bias, session-aware leg, scored sweeps ──
     /** The day's dealing range / impulse leg — the bias anchor (RC-06). */
-    private final DealingRangeTracker dealingRange = new DealingRangeTracker();
+    private final DealingRangeTracker dealingRange;
     /** True once the tracker has been offered the seeded H1 history. */
     private boolean dealingRangeWarmChecked = false;
     /** Current-session candle buffer for the manipulation leg (task 4). */
@@ -463,6 +463,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.smtSymbol = smtSymbol;
         this.spec = TradeableInstrument.of(resolved.get());
         this.eventBus = eventBus;
+        // V5 Agent 05.6: bias.range.window (SESSION_DAY | RTH_FIRST | AUTO)
+        // + bias.range.minLegTicks[.<SYM>] in this instrument's ticks.
+        this.dealingRange = DealingRangeTracker.fromConfig(symbol, spec.tickSize());
 
         this.stopBufferTicks = intProperty(STOP_BUFFER_TICKS_PROPERTY, DEFAULT_STOP_BUFFER_TICKS);
         this.reactionWickTicks = intProperty(REACTION_WICK_TICKS_PROPERTY, DEFAULT_REACTION_WICK_TICKS);

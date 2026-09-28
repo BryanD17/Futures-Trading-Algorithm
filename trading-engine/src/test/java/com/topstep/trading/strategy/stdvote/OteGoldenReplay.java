@@ -99,7 +99,7 @@ final class OteGoldenReplay {
      */
     boolean impulseModel;
     /** Agent 03's dealing range, fed every 1m candle when {@link #impulseModel} (ctx.rangeHigh/Low). */
-    final DealingRangeTracker dealingRange = new DealingRangeTracker();
+    final DealingRangeTracker dealingRange = DealingRangeTracker.fromConfig("MNQ", TICK);
 
     OteGoldenReplay() {
         displacement = new DisplacementDetector(20, OteConfig.displacementAtrMult(),

@@ -80,6 +80,11 @@ class ArmedNeverSilentTapeTest {
 
     @BeforeAll
     static void replay() throws Exception {
+        // V5 Agent 05.6: the 09-25 10:06 LONG exists only on the SESSION_DAY
+        // dealing range (overnight high 30999.50); the default AUTO window
+        // reads that morning BEARISH (RangeWindowTapeTest). Pinned so this
+        // class keeps documenting the 05.4/05.5 mechanics on that setup.
+        System.setProperty("bias.range.window", "SESSION_DAY");
         List<Candle> mnq = load("real_MNQ_1m.json", "MNQ");
         List<Candle> mes = load("real_MES_1m.json", "MES");
         EventBus bus = new EventBus();
@@ -201,6 +206,7 @@ class ArmedNeverSilentTapeTest {
 
     @AfterAll
     static void clear() {
+        System.clearProperty("bias.range.window");
         StdvOteRegistry.unregister("MNQ");
     }
 
