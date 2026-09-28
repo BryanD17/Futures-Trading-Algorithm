@@ -50,8 +50,9 @@ public class RaidDetector {
     private final SilverBulletClock silverBulletClock;
 
     // Active and recent raids
-    private final Map<String, LiquidityRaid> activeRaids = new ConcurrentHashMap<>();
-    private final Map<String, LiquidityRaid> recentRaids = new ConcurrentHashMap<>();
+    // V5 Agent 05.3 (determinism): sorted by raid id, never by hash-table layout.
+    private final Map<String, LiquidityRaid> activeRaids = new java.util.concurrent.ConcurrentSkipListMap<>();
+    private final Map<String, LiquidityRaid> recentRaids = new java.util.concurrent.ConcurrentSkipListMap<>();
 
     // Event listeners
     private final List<Consumer<LiquidityRaid>> raidListeners = new ArrayList<>();
@@ -429,8 +430,20 @@ public class RaidDetector {
     public synchronized Optional<LiquidityRaid> getBestRaidForEntry() {
         return activeRaids.values().stream()
                 .filter(LiquidityRaid::isValidForEntry)
-                .max(Comparator.comparingInt(LiquidityRaid::getQualityScore));
+                .min(BEST_RAID_ORDER);
     }
+
+    /**
+     * V5 Agent 05.3 — the ONE deterministic best-raid order: higher score,
+     * then more recent (fewer bars since the raid, later raid time), then the
+     * higher swept price, then the raid id. Never "first in map order".
+     */
+    static final Comparator<LiquidityRaid> BEST_RAID_ORDER =
+            Comparator.comparingInt(LiquidityRaid::getQualityScore).reversed()
+                    .thenComparingInt(LiquidityRaid::getBarsSinceRaid)
+                    .thenComparing(LiquidityRaid::getRaidTime, Comparator.reverseOrder())
+                    .thenComparing((LiquidityRaid r) -> r.getTargetLevel().getPrice(), Comparator.reverseOrder())
+                    .thenComparing(LiquidityRaid::getId);
 
     /**
      * V5 Agent 03 (RC-07): the most RECENT entry-valid raid in a direction,
@@ -441,8 +454,10 @@ public class RaidDetector {
         return activeRaids.values().stream()
                 .filter(r -> r.getDirection() == direction && r.isValidForEntry())
                 .filter(r -> r.getBarsSinceRaid() <= maxBarsSince)
+                // recency first (the documented contract), then the
+                // deterministic best-raid order (score, time, price, id).
                 .min(Comparator.comparingInt(LiquidityRaid::getBarsSinceRaid)
-                        .thenComparing(Comparator.comparingInt(LiquidityRaid::getQualityScore).reversed()));
+                        .thenComparing(BEST_RAID_ORDER));
     }
 
     /**
@@ -473,7 +488,11 @@ public class RaidDetector {
                     ? candle.getLow() < p - minPenetration && candle.getHigh() >= p - tolerance
                     : candle.getHigh() > p + minPenetration && candle.getLow() <= p + tolerance;
             if (!swept || !checkForRejection(candle, p, direction)) continue;
-            if (best == null || level.getType().getSignificance() > best.getType().getSignificance()) {
+            // V5 Agent 05.3: deterministic tie-break — significance, then the
+            // higher price (levels iterate in LevelType order).
+            if (best == null || level.getType().getSignificance() > best.getType().getSignificance()
+                    || (level.getType().getSignificance() == best.getType().getSignificance()
+                        && level.getPrice() > best.getPrice())) {
                 best = level;
             }
         }
@@ -500,7 +519,7 @@ public class RaidDetector {
     public synchronized Optional<LiquidityRaid> getRaidByDirection(RaidDirection direction) {
         return activeRaids.values().stream()
                 .filter(r -> r.getDirection() == direction && r.isValidForEntry())
-                .max(Comparator.comparingInt(LiquidityRaid::getQualityScore));
+                .min(BEST_RAID_ORDER);
     }
 
     /**

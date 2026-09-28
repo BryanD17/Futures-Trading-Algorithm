@@ -152,9 +152,27 @@ class FunnelAutopsyHarness {
         PropFirmRiskEngine risk = new PropFirmRiskEngine();
         ExecutionEngine exec = new ExecutionEngine(account);
         exec.setEventBus(bus);
+        // V5 Agent 05.3: count fills at the fill itself (a fill + stop inside
+        // one bar used to show fills=0 because the position was sampled at bar close).
+        int[] fillEvents = {0};
+        List<String> barNotes = new ArrayList<>();   // fills this bar (transcript)
+        exec.setExecutionListener(new ExecutionEngine.ExecutionListener() {
+            @Override public void onPositionOpened(String s, com.topstep.trading.domain.OrderSide side, double px, int q) {
+                fillEvents[0]++;
+                barNotes.add("FILL " + side + " " + q + " @ " + px);
+            }
+            @Override public void onPositionClosed(String s, double pnl, boolean win) { }
+        });
         DefaultStrategyContext context = new DefaultStrategyContext(account);
         ConcurrentLinkedQueue<StrategySignalEvent> signals = new ConcurrentLinkedQueue<>();
         bus.subscribe(StrategySignalEvent.class, signals::add);
+        // V5 Agent 05.3: order-lifecycle decisions (setup-end cancels, TTL, flatten) into the log.
+        ConcurrentLinkedQueue<com.topstep.trading.event.GateDecisionEvent> orderGates = new ConcurrentLinkedQueue<>();
+        bus.subscribe(com.topstep.trading.event.GateDecisionEvent.class, g -> {
+            if ("ORDER".equals(g.getGate()) || "ORDER_TTL".equals(g.getGate()) || "FLATTEN".equals(g.getGate())) {
+                orderGates.add(g);
+            }
+        });
         bus.start();
         StdvOteRunnerStrategy runner = new StdvOteRunnerStrategy(symbol, smt, bus);
         runner.initialize();
@@ -209,10 +227,17 @@ class FunnelAutopsyHarness {
                     runner.onCandle(smtBars.get(si++), context);
                 }
                 String sess = session(now);
+                barNotes.clear();
+                int logMark = signalLog.size();
                 SetupState before = ctx.state;
                 context.setCurrentTime(now);
                 exec.onNewCandle(c);          // fills / stops / targets on THIS bar (SimEngineRunner order)
+                // V5 Agent 05.3 (determinism): every handler of the events this
+                // step published (PositionClosedEvent -> strategy latch, ...) has
+                // run before the next step — as it has live, one minute later.
+                bus.awaitIdle(5_000);
                 runner.onCandle(c, context);
+                bus.awaitIdle(5_000);         // SetupCancelledEvent -> ExecutionEngine cancel
                 SetupState after = ctx.state;
 
                 // ── post-signal chain (the SIM handler), synchronous here ──
@@ -239,10 +264,15 @@ class FunnelAutopsyHarness {
                             bus.publish(new PositionClosedEvent(symbol, 0.0, false, now)); // SIM release
                         }
                         signalLog.add(TS.format(now.atZone(ET)) + " ET " + sess + " | " + signalCol + " | " + riskCol);
+                        bus.awaitIdle(5_000);
                     }
                 }
+                for (com.topstep.trading.event.GateDecisionEvent g; (g = orderGates.poll()) != null; ) {
+                    if (!symbol.equals(g.getSymbol())) continue;
+                    signalLog.add(TS.format(now.atZone(ET)) + " ET " + sess + " | " + g.getGate() + " " + g.getReason());
+                }
                 boolean openNow = account.hasPosition(symbol);
-                if (openNow && !hadOpenPosition) { counts.get(sess)[7]++; fillsSeen++; }
+                while (fillsSeen < fillEvents[0]) { counts.get(sess)[7]++; fillsSeen++; }
                 hadOpenPosition = openNow;
                 List<Trade> done = exec.getCompletedTrades();
                 while (completedSeen < done.size()) {
@@ -250,7 +280,7 @@ class FunnelAutopsyHarness {
                     counts.get(sess)[8]++;
                     if (t.isWinner()) counts.get(sess)[9]++; else counts.get(sess)[10]++;
                     signalLog.add(TS.format(now.atZone(ET)) + " ET " + sess + " | CLOSED " + t.getSide()
-                            + " q=" + t.getQuantity() + " in=" + t.getEntryPrice() + " out=" + t.getExitPrice()
+                            + " q=" + t.getQuantity() + " in=" + t.getEntryPrice() + " out=" + fmt(t.getExitPrice())
                             + " pnl=" + fmt(t.getRealizedPnL()) + " R=" + fmt(t.getRMultiple()) + " " + t.getNotes());
                 }
 
@@ -332,6 +362,17 @@ class FunnelAutopsyHarness {
                       .append(java.util.Objects.equals(ctx.impulseLegVerdict, lastImpulseVerdict[0]) ? ""
                               : "\n   entryModel=" + ctx.oteEntryModel + " impulse=" + ctx.impulseLegVerdict)
                       .append(signalCol.isEmpty() ? "" : "\n   SIGNAL " + signalCol + "\n   RISK " + riskCol);
+                    // V5 Agent 05.3: fills, completed trades, order cancels, re-arms on this bar.
+                    for (String n : barNotes) sb.append("\n   ").append(n);
+                    for (int li = logMark; li < signalLog.size(); li++) {
+                        String l = signalLog.get(li);
+                        int cut = l.indexOf(" | ");
+                        String tail = cut < 0 ? l : l.substring(cut + 3);
+                        if (!tail.equals(signalCol + " | " + riskCol)) sb.append("\n   ").append(tail);
+                    }
+                    if (before == SetupState.IN_TRADE && after != SetupState.IN_TRADE && after != SetupState.INVALIDATED) {
+                        sb.append("\n   RE-ARMED after the position closed (IN_TRADE -> ").append(after).append(")");
+                    }
                     lastImpulseVerdict[0] = ctx.impulseLegVerdict;
                     com.topstep.trading.chartstate.ChartStateQueryAPI cs = chartStateOf(runner);
                     java.util.Optional<LiquidityRaid> bestRaid = cs == null ? java.util.Optional.empty() : cs.getBestActiveRaid();

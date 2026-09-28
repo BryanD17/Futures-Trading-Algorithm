@@ -290,6 +290,10 @@ public class LiveEngineRunner {
                                                           unbookedQty, bracket.entrySide);
                         recordLiveTrade(bracket, fillPrice, unbookedQty, unbookedPnl, "Take profit filled");
                         accountState.recordRealizedPnL(unbookedPnl);
+                    } else {
+                        // AGENT-05.3: every level was a partial — the position
+                        // is flat now: journal the ONE merged Trade.
+                        executionEngine.finalizeExternalTrade(bracket.symbol);
                     }
                     // Clear position from account state
                     accountState.closePosition(bracket.symbol);
@@ -309,7 +313,7 @@ public class LiveEngineRunner {
                     System.out.println("  Partial PnL: $" + String.format("%.2f", partialPnl) +
                                       " (" + level.quantity + " contracts at " + level.rMultiple + "R)");
                     recordLiveTrade(bracket, fillPrice, level.quantity, partialPnl,
-                        "Partial take profit (" + level.rMultiple + "R)");
+                        "Partial take profit (" + level.rMultiple + "R)", true);
                     // Update realized PnL but don't close position
                     accountState.recordRealizedPnL(partialPnl);
                     // Update position quantity
@@ -502,6 +506,9 @@ public class LiveEngineRunner {
 
         // Subscribe to strategy signals
         eventBus.subscribe(StrategySignalEvent.class, this::handleStrategySignal);
+        // AGENT-05.3: the setup that emitted an entry ended — cancel the
+        // still-unfilled entry at the broker (order TTL stays the backstop).
+        eventBus.subscribe(com.topstep.trading.event.SetupCancelledEvent.class, this::handleSetupCancelled);
 
         System.out.println("\n" + "!".repeat(60));
         System.out.println("! LIVE ENGINE INITIALIZED - REAL MONEY AT RISK !");
@@ -1233,8 +1240,12 @@ public class LiveEngineRunner {
         if (status == OrderStatus.CANCELED) {
             // Remove cancelled order from ExecutionEngine
             executionEngine.removeOrderById(order.getSymbol(), orderId);
+            // AGENT-05.3: a cancel WE requested because the setup ended —
+            // the strategy already released its latch; releasing again
+            // could invalidate the NEXT setup.
+            boolean setupCancel = orderId != null && setupCancelledOrderIds.remove(orderId);
             // A cancel with zero fill means the entry died unexecuted.
-            if (order.getFilledQuantity() == 0 && signal != null) {
+            if (!setupCancel && order.getFilledQuantity() == 0 && signal != null) {
                 releaseUnexecutedSignal(signal, "entry order CANCELED unfilled");
             }
         }
@@ -1404,11 +1415,21 @@ public class LiveEngineRunner {
      */
     private void recordLiveTrade(BracketOrderManager.BracketOrder bracket, double exitPrice,
                                  int quantity, double pnl, String reason) {
+        recordLiveTrade(bracket, exitPrice, quantity, pnl, reason, false);
+    }
+
+    /**
+     * AGENT-05.3: {@code partial=true} holds the leg until the position is
+     * flat; the closing leg (stop / final TP) merges every held leg into ONE
+     * journaled Trade (quantity sum, VWAP exit, P&amp;L sum, R on the initial risk).
+     */
+    private void recordLiveTrade(BracketOrderManager.BracketOrder bracket, double exitPrice,
+                                 int quantity, double pnl, String reason, boolean partial) {
         try {
             double stopForRisk = bracket.originalStopPrice > 0 ? bracket.originalStopPrice : bracket.stopPrice;
             double riskAmount = Math.abs(calculatePnl(bracket.symbol, bracket.entryPrice,
                 stopForRisk, quantity, bracket.entrySide));
-            executionEngine.recordExternalTrade(com.topstep.trading.domain.Trade.builder()
+            com.topstep.trading.domain.Trade leg = com.topstep.trading.domain.Trade.builder()
                 .symbol(bracket.symbol)
                 .side(bracket.entrySide)
                 .quantity(quantity)
@@ -1420,7 +1441,12 @@ public class LiveEngineRunner {
                 .riskAmount(riskAmount)
                 .tier(bracket.tier)
                 .notes(reason)
-                .build());
+                .build();
+            if (partial) {
+                executionEngine.recordExternalPartial(leg);
+            } else {
+                executionEngine.recordExternalTrade(leg);
+            }
         } catch (Exception e) {
             com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.journal", e);
             System.err.println("Failed to record live trade for " + bracket.symbol + ": " + e.getMessage());
@@ -2086,6 +2112,43 @@ public class LiveEngineRunner {
     }
 
     // === Convex Payoff Optimization getters ===
+    /** Entry order ids cancelled because their setup ended (their CANCELED callback must not release a latch). */
+    private final java.util.Set<String> setupCancelledOrderIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * AGENT-05.3 — cancel every still-unfilled entry order for the symbol
+     * whose setup ended (invalidated / expired / re-armed). Publishes a
+     * GateDecisionEvent "ORDER: cancelled — setup &lt;reason&gt;" per order. The
+     * strategy already released its latch, so the broker's CANCELED callback
+     * for these ids does NOT publish a synthetic PositionClosedEvent.
+     */
+    void handleSetupCancelled(com.topstep.trading.event.SetupCancelledEvent evt) {
+        for (Order order : executionEngine.getActiveOrdersList(evt.getSymbol())) {
+            if (order.getFilledQuantity() > 0) continue; // partially filled: a position exists
+            String orderId = order.getOrderId();
+            String why = "ORDER: cancelled — setup " + evt.getReason();
+            try {
+                if (orderId != null && !orderId.isEmpty()) {
+                    setupCancelledOrderIds.add(orderId);
+                    connector.cancelOrder(orderId);
+                }
+                executionEngine.removeOrderById(evt.getSymbol(), orderId);
+                System.out.println("[LIVE] " + why + " (" + evt.getSymbol() + " " + order.getSide()
+                        + " " + order.getQuantity() + " @ " + order.getLimitPrice() + ", id " + orderId + ")");
+                com.topstep.trading.event.EngineTelemetry.publish(eventBus, new com.topstep.trading.event.GateDecisionEvent(
+                        evt.getSymbol(), evt.getCandleTime(),
+                        com.topstep.trading.event.EngineTelemetry.sessionOf(evt.getCandleTime()),
+                        "ORDER_RESTING", "ORDER", why, order.getQuantity(),
+                        order.getLimitPrice() == null ? Double.NaN : order.getLimitPrice()));
+            } catch (Exception e) {
+                setupCancelledOrderIds.remove(orderId);
+                com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.cancelOnSetupEnd", e);
+                System.err.println("  ❌ Failed to cancel entry for ended setup: " + e.getMessage()
+                        + " (order TTL remains the backstop)");
+            }
+        }
+    }
+
     private void publishGate(StrategySignalEvent signal, String gate, String reason, double a, double b) {
         Instant t = signal.getCandleTime() != null ? signal.getCandleTime() : signal.getTimestamp();
         com.topstep.trading.event.EngineTelemetry.publish(eventBus, new com.topstep.trading.event.GateDecisionEvent(

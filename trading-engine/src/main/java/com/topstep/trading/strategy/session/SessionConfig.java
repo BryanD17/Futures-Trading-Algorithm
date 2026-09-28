@@ -26,6 +26,7 @@ import com.topstep.trading.strategy.stdvote.ScalpConfig;
  *   setup.expiry.mssToOte             PHASED: MSS_CONFIRMED -&gt; OTE_ARMED budget, min default 240
  *   (OTE_ARMED -&gt; emit stays ote.windowBars, owned by Agent 04's runner block)
  *   setup.rearmCooldownBars      feed bars                   default scalp.rearmCooldownBars (5)
+ *   setup.rearmAfterClose        true | false                default true (Agent 05.3)
  * </pre>
  * Read at call time (never cached statically) so harness/test JVMs that set
  * properties before building a runner see them.
@@ -41,6 +42,8 @@ public final class SessionConfig {
     public static final String PRE_SWEEP_EXPIRY_MINUTES = "setup.preSweepExpiryMinutes";
     public static final String EXPIRY_ANCHOR = "setup.expiryAnchor";
     public static final String REARM_COOLDOWN_BARS = "setup.rearmCooldownBars";
+    /** V5 Agent 05.3: re-arm IN_TRADE after the position closes (every target model). */
+    public static final String REARM_AFTER_CLOSE = "setup.rearmAfterClose";
     /** V5 Agent 05.1 (S2): phase-aware budgets, minutes (= 1m feed bars). */
     public static final String EXPIRY_SWEEP_TO_DISPLACEMENT = "setup.expiry.sweepToDisplacement";
     public static final String EXPIRY_DISPLACEMENT_TO_MSS = "setup.expiry.displacementToMss";
@@ -100,6 +103,15 @@ public final class SessionConfig {
     public static int rearmCooldownBars() {
         Integer v = intOrNull(REARM_COOLDOWN_BARS); // alias: scalp.rearmCooldownBars
         return v != null ? Math.max(0, v) : ScalpConfig.rearmCooldownBars();
+    }
+
+    /**
+     * V5 Agent 05.3 — {@code setup.rearmAfterClose} (default true): after an
+     * EXECUTED trade closes, IN_TRADE re-arms after the cooldown in legacy
+     * AND scalp mode. false = the one-trade-per-window discipline (A/B).
+     */
+    public static boolean rearmAfterClose() {
+        return cfg().getBoolean(REARM_AFTER_CLOSE, true);
     }
 
     public static ExpiryAnchor expiryAnchor(SessionGateMode mode) {

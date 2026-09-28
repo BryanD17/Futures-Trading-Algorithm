@@ -1,0 +1,913 @@
+2026-09-28 12:00 ET  bar=7566 o=30522.25 h=30525.75 l=30504.0 c=30511.5
+   state MSS_CONFIRMED -> MSS_CONFIRMED  HOLDING=M7-awaiting-band-touch  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=MSS_CONFIRMED:awaiting-band-touch
+   entryModel=null impulse=sweep 30718.125 not in OTE band [30758.0,30819.75]
+2026-09-28 12:01 ET  bar=7567 o=30511.5 h=30516.5 l=30500.5 c=30506.5
+   state MSS_CONFIRMED -> MSS_CONFIRMED  HOLDING=M7-awaiting-band-touch  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=MSS_CONFIRMED:awaiting-band-touch
+2026-09-28 12:02 ET  bar=7568 o=30507.0 h=30510.5 l=30503.5 c=30508.25
+   state MSS_CONFIRMED -> MSS_CONFIRMED  HOLDING=M7-awaiting-band-touch  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=MSS_CONFIRMED:awaiting-band-touch
+2026-09-28 12:03 ET  bar=7569 o=30508.25 h=30513.0 l=30501.5 c=30506.25
+   state MSS_CONFIRMED -> MSS_CONFIRMED  HOLDING=M7-awaiting-band-touch  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=MSS_CONFIRMED:awaiting-band-touch
+2026-09-28 12:04 ET  bar=7570 o=30506.25 h=30511.75 l=30502.75 c=30509.5
+   state MSS_CONFIRMED -> MSS_CONFIRMED  HOLDING=M7-awaiting-band-touch  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=MSS_CONFIRMED:awaiting-band-touch
+2026-09-28 12:05 ET  bar=7571 o=30508.0 h=30511.5 l=30499.75 c=30503.75
+   state MSS_CONFIRMED -> MSS_CONFIRMED  HOLDING=M7-awaiting-band-touch  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=MSS_CONFIRMED:awaiting-band-touch
+2026-09-28 12:06 ET  bar=7572 o=30503.0 h=30515.75 l=30498.5 c=30513.25
+   state MSS_CONFIRMED -> MSS_CONFIRMED  HOLDING=M7-awaiting-band-touch  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=MSS_CONFIRMED:awaiting-band-touch
+2026-09-28 12:07 ET  bar=7573 o=30513.75 h=30523.75 l=30509.75 c=30518.0
+   state MSS_CONFIRMED -> MSS_CONFIRMED  HOLDING=M7-awaiting-band-touch  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=MSS_CONFIRMED:awaiting-band-touch
+2026-09-28 12:08 ET  bar=7574 o=30518.5 h=30530.25 l=30516.5 c=30522.25
+   state MSS_CONFIRMED -> MSS_CONFIRMED  HOLDING=M7-awaiting-band-touch  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=MSS_CONFIRMED:awaiting-band-touch
+2026-09-28 12:09 ET  bar=7575 o=30522.0 h=30524.75 l=30514.25 c=30523.5
+   state MSS_CONFIRMED -> MSS_CONFIRMED  HOLDING=M7-awaiting-band-touch  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=MSS_CONFIRMED:awaiting-band-touch
+2026-09-28 12:10 ET  bar=7576 o=30523.5 h=30535.0 l=30522.0 c=30529.75
+   state MSS_CONFIRMED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=MSS stale before price reached the OTE band (30 detector bars)  DEATH=MSS stale before price reached the OTE band (# detector bars)
+2026-09-28 12:11 ET  bar=7577 o=30529.75 h=30536.75 l=30525.5 c=30526.75
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=MSS stale before price reached the OTE band (30 detector bars)
+2026-09-28 12:12 ET  bar=7578 o=30526.5 h=30529.25 l=30510.5 c=30516.0
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=MSS stale before price reached the OTE band (30 detector bars)
+2026-09-28 12:13 ET  bar=7579 o=30515.5 h=30517.75 l=30509.5 c=30514.5
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=MSS stale before price reached the OTE band (30 detector bars)
+2026-09-28 12:14 ET  bar=7580 o=30514.0 h=30518.25 l=30512.25 c=30516.5
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=MSS stale before price reached the OTE band (30 detector bars)
+2026-09-28 12:15 ET  bar=7581 o=30515.25 h=30522.75 l=30511.0 c=30519.25
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=MSS stale before price reached the OTE band (30 detector bars)
+2026-09-28 12:16 ET  bar=7582 o=30519.75 h=30582.5 l=30514.0 c=30573.25
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30718.125 raidScore=6 disp=true fvg=30713.0-30722.75 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=MSS stale before price reached the OTE band (30 detector bars)
+2026-09-28 12:17 ET  bar=7583 o=30573.25 h=30591.25 l=30560.0 c=30570.75
+   state INVALIDATED -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30591.25 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+   entryModel=null impulse=sweep 30591.25 not in OTE band [30605.5,30673.0]
+2026-09-28 12:18 ET  bar=7584 o=30571.0 h=30581.25 l=30566.0 c=30566.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30591.25 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 12:19 ET  bar=7585 o=30565.75 h=30575.75 l=30553.25 c=30574.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30591.25 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 12:20 ET  bar=7586 o=30575.25 h=30617.5 l=30565.0 c=30609.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-displacement-wrong-direction  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30591.25 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:displacement-wrong-direction
+2026-09-28 12:21 ET  bar=7587 o=30610.0 h=30627.5 l=30605.75 c=30617.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-displacement-wrong-direction  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30591.25 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:displacement-wrong-direction
+2026-09-28 12:22 ET  bar=7588 o=30617.5 h=30628.5 l=30613.25 c=30621.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-displacement-wrong-direction  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30591.25 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:displacement-wrong-direction
+2026-09-28 12:23 ET  bar=7589 o=30618.25 h=30627.5 l=30603.0 c=30618.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-displacement-wrong-direction  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30591.25 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:displacement-wrong-direction
+2026-09-28 12:24 ET  bar=7590 o=30619.75 h=30642.5 l=30613.5 c=30633.75
+   state SWEEP_DONE -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=OTE_ARMED:impulse-awaiting-rejection
+   entryModel=IMPULSE_LEG impulse=ARMED: sweep 30640.0 in band [30605.5,30673.0] ext 30642.5 | leg 2026-09-28T13:30:00Z..2026-09-28T14:45:00Z | M5 disp 2026-09-28T14:00:00Z range/ATR 1.56>=1.20 body 0.84>=0.50 FVG [30598.25,30626.0]@2026-09-28T14:00:00Z | M6 close 30565.0 < swing 30583.0 @2026-09-28T14:05:00Z
+2026-09-28 12:25 ET  bar=7591 o=30633.75 h=30655.5 l=30630.75 c=30652.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=OTE_ARMED:impulse-awaiting-rejection
+2026-09-28 12:26 ET  bar=7592 o=30652.0 h=30716.5 l=30647.75 c=30704.0
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=OTE_ARMED:impulse-awaiting-rejection
+2026-09-28 12:27 ET  bar=7593 o=30704.25 h=30722.0 l=30693.75 c=30709.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=OTE_ARMED:impulse-awaiting-rejection
+2026-09-28 12:28 ET  bar=7594 o=30709.5 h=30720.25 l=30688.25 c=30694.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=OTE_ARMED:impulse-awaiting-rejection
+2026-09-28 12:29 ET  bar=7595 o=30694.75 h=30706.75 l=30675.25 c=30683.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=OTE_ARMED:impulse-awaiting-rejection
+2026-09-28 12:30 ET  bar=7596 o=30683.5 h=30688.5 l=30658.0 c=30668.0
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=OTE_ARMED:impulse-awaiting-rejection
+2026-09-28 12:31 ET  bar=7597 o=30666.5 h=30672.5 l=30660.0 c=30668.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=OTE_ARMED:impulse-awaiting-rejection
+2026-09-28 12:32 ET  bar=7598 o=30667.5 h=30672.0 l=30624.0 c=30628.0
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:33 ET  bar=7599 o=30628.25 h=30650.0 l=30625.75 c=30645.75
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:34 ET  bar=7600 o=30645.75 h=30658.25 l=30642.25 c=30655.0
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:35 ET  bar=7601 o=30654.5 h=30663.5 l=30649.5 c=30656.25
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:36 ET  bar=7602 o=30656.5 h=30671.0 l=30654.75 c=30668.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:37 ET  bar=7603 o=30668.75 h=30670.5 l=30652.75 c=30662.25
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:38 ET  bar=7604 o=30662.0 h=30663.75 l=30634.75 c=30637.75
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:39 ET  bar=7605 o=30637.5 h=30638.5 l=30628.5 c=30635.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:40 ET  bar=7606 o=30635.25 h=30644.5 l=30626.0 c=30627.75
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:41 ET  bar=7607 o=30627.75 h=30628.75 l=30607.0 c=30608.0
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:42 ET  bar=7608 o=30607.5 h=30611.0 l=30593.75 c=30594.25
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:43 ET  bar=7609 o=30594.5 h=30603.75 l=30589.25 c=30598.25
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:44 ET  bar=7610 o=30598.75 h=30606.75 l=30594.75 c=30600.75
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:45 ET  bar=7611 o=30600.75 h=30624.25 l=30600.75 c=30606.0
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:46 ET  bar=7612 o=30605.75 h=30624.75 l=30599.25 c=30614.0
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:47 ET  bar=7613 o=30613.0 h=30619.0 l=30606.0 c=30610.0
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:48 ET  bar=7614 o=30609.0 h=30609.0 l=30594.0 c=30594.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:49 ET  bar=7615 o=30594.5 h=30605.5 l=30593.0 c=30604.0
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:50 ET  bar=7616 o=30604.0 h=30613.5 l=30597.75 c=30598.75
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:51 ET  bar=7617 o=30598.75 h=30603.0 l=30587.5 c=30598.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:52 ET  bar=7618 o=30597.75 h=30606.5 l=30588.75 c=30602.0
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:53 ET  bar=7619 o=30603.25 h=30606.5 l=30594.5 c=30605.0
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:54 ET  bar=7620 o=30605.0 h=30614.0 l=30604.0 c=30610.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:55 ET  bar=7621 o=30610.5 h=30615.5 l=30605.25 c=30608.25
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:56 ET  bar=7622 o=30609.0 h=30612.25 l=30602.75 c=30607.75
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:57 ET  bar=7623 o=30607.75 h=30609.75 l=30600.0 c=30604.75
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:58 ET  bar=7624 o=30605.0 h=30608.5 l=30600.0 c=30601.25
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 12:59 ET  bar=7625 o=30602.25 h=30607.0 l=30595.25 c=30602.25
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 13:00 ET  bar=7626 o=30602.25 h=30604.0 l=30576.5 c=30581.75
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 13:01 ET  bar=7627 o=30582.25 h=30596.5 l=30577.75 c=30592.0
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 13:02 ET  bar=7628 o=30593.5 h=30595.0 l=30577.25 c=30584.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 13:03 ET  bar=7629 o=30583.5 h=30588.0 l=30580.0 c=30583.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 13:04 ET  bar=7630 o=30584.0 h=30593.0 l=30583.25 c=30588.25
+   state OTE_ARMED -> OTE_ARMED  HOLDING=OTE_ARMED-sizer-standdown-or-tier  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 13:05 ET  bar=7631 o=30589.0 h=30592.0 l=30577.0 c=30578.5
+   state OTE_ARMED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=OTE window expired (40 bars)  DEATH=OTE window expired (# bars)
+2026-09-28 13:06 ET  bar=7632 o=30578.25 h=30584.5 l=30568.25 c=30582.5
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=OTE window expired (40 bars)
+2026-09-28 13:07 ET  bar=7633 o=30581.75 h=30585.75 l=30568.75 c=30570.0
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=OTE window expired (40 bars)
+2026-09-28 13:08 ET  bar=7634 o=30569.75 h=30572.5 l=30564.25 c=30571.0
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=OTE window expired (40 bars)
+2026-09-28 13:09 ET  bar=7635 o=30571.0 h=30576.5 l=30566.0 c=30569.25
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=OTE window expired (40 bars)
+2026-09-28 13:10 ET  bar=7636 o=30569.5 h=30575.0 l=30567.25 c=30571.25
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=OTE window expired (40 bars)
+2026-09-28 13:11 ET  bar=7637 o=30571.5 h=30687.75 l=30570.75 c=30678.75
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30645.0
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=OTE window expired (40 bars)
+2026-09-28 13:12 ET  bar=7638 o=30679.25 h=30694.0 l=30651.25 c=30662.75
+   state INVALIDATED -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30694.0 raidScore=6 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+   entryModel=null impulse=sweep 30694.0 not in OTE band [30605.5,30673.0]
+2026-09-28 13:13 ET  bar=7639 o=30662.25 h=30691.0 l=30658.0 c=30680.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30694.0 raidScore=6 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:14 ET  bar=7640 o=30681.0 h=30692.25 l=30664.5 c=30691.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30694.0 raidScore=6 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:15 ET  bar=7641 o=30691.0 h=30691.0 l=30647.25 c=30675.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-displacement-wrong-direction  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30694.0 raidScore=6 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:displacement-wrong-direction
+2026-09-28 13:16 ET  bar=7642 o=30675.0 h=30681.75 l=30664.25 c=30672.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-displacement-wrong-direction  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30694.0 raidScore=6 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:displacement-wrong-direction
+2026-09-28 13:17 ET  bar=7643 o=30673.25 h=30676.5 l=30633.75 c=30648.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-displacement-wrong-direction  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30694.0 raidScore=6 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:displacement-wrong-direction
+2026-09-28 13:18 ET  bar=7644 o=30648.0 h=30650.75 l=30621.5 c=30623.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+   entryModel=null impulse=retrace extreme 30694.0 outside the OTE band [30605.5,30673.0]
+2026-09-28 13:19 ET  bar=7645 o=30622.75 h=30624.5 l=30606.0 c=30610.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:20 ET  bar=7646 o=30611.0 h=30612.0 l=30598.5 c=30608.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-fvg-link-pending  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:fvg-link-pending
+2026-09-28 13:21 ET  bar=7647 o=30607.75 h=30616.0 l=30605.75 c=30609.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-fvg-link-pending  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:fvg-link-pending
+2026-09-28 13:22 ET  bar=7648 o=30608.75 h=30621.5 l=30607.5 c=30613.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-fvg-link-pending  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:fvg-link-pending
+2026-09-28 13:23 ET  bar=7649 o=30613.25 h=30628.25 l=30612.5 c=30618.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-fvg-link-pending  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:fvg-link-pending
+2026-09-28 13:24 ET  bar=7650 o=30618.5 h=30632.0 l=30617.5 c=30626.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-fvg-link-pending  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:fvg-link-pending
+2026-09-28 13:25 ET  bar=7651 o=30626.75 h=30636.0 l=30623.0 c=30630.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-fvg-link-pending  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:fvg-link-pending
+2026-09-28 13:26 ET  bar=7652 o=30630.5 h=30631.0 l=30603.5 c=30604.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-fvg-link-pending  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:fvg-link-pending
+2026-09-28 13:27 ET  bar=7653 o=30604.5 h=30611.0 l=30601.25 c=30607.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-fvg-link-pending  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:fvg-link-pending
+2026-09-28 13:28 ET  bar=7654 o=30608.25 h=30616.75 l=30608.0 c=30614.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-fvg-link-pending  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:fvg-link-pending
+2026-09-28 13:29 ET  bar=7655 o=30614.5 h=30620.75 l=30610.25 c=30614.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-fvg-link-pending  bias=BEARISH vote=BEARISH(2/2/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:fvg-link-pending
+2026-09-28 13:30 ET  bar=7656 o=30613.5 h=30627.25 l=30613.25 c=30623.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-fvg-link-pending  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:fvg-link-pending
+2026-09-28 13:31 ET  bar=7657 o=30623.0 h=30637.0 l=30621.25 c=30635.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-fvg-link-pending  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:fvg-link-pending
+2026-09-28 13:32 ET  bar=7658 o=30635.25 h=30645.0 l=30634.5 c=30638.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:33 ET  bar=7659 o=30637.5 h=30641.5 l=30627.75 c=30628.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:34 ET  bar=7660 o=30628.25 h=30635.0 l=30620.75 c=30633.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:35 ET  bar=7661 o=30633.0 h=30641.0 l=30629.25 c=30639.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:36 ET  bar=7662 o=30640.0 h=30644.0 l=30633.75 c=30640.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:37 ET  bar=7663 o=30640.75 h=30644.75 l=30616.5 c=30619.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:38 ET  bar=7664 o=30618.75 h=30633.75 l=30617.0 c=30630.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:39 ET  bar=7665 o=30630.75 h=30633.25 l=30627.0 c=30629.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:40 ET  bar=7666 o=30630.0 h=30635.25 l=30626.0 c=30630.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:41 ET  bar=7667 o=30630.75 h=30636.25 l=30626.0 c=30633.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:42 ET  bar=7668 o=30633.25 h=30633.5 l=30615.5 c=30624.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:43 ET  bar=7669 o=30624.0 h=30627.5 l=30621.75 c=30624.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:44 ET  bar=7670 o=30624.5 h=30627.0 l=30619.75 c=30624.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:45 ET  bar=7671 o=30624.75 h=30636.5 l=30622.0 c=30624.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:46 ET  bar=7672 o=30624.5 h=30629.5 l=30621.25 c=30628.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:47 ET  bar=7673 o=30628.5 h=30628.5 l=30619.5 c=30619.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:48 ET  bar=7674 o=30619.5 h=30640.25 l=30618.75 c=30639.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:49 ET  bar=7675 o=30639.5 h=30640.25 l=30625.75 c=30636.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:50 ET  bar=7676 o=30635.0 h=30637.75 l=30629.25 c=30629.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:51 ET  bar=7677 o=30629.25 h=30633.25 l=30622.5 c=30632.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:52 ET  bar=7678 o=30632.75 h=30636.25 l=30627.75 c=30627.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:53 ET  bar=7679 o=30628.25 h=30631.75 l=30626.0 c=30626.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:54 ET  bar=7680 o=30626.0 h=30633.75 l=30626.0 c=30629.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:55 ET  bar=7681 o=30630.25 h=30632.25 l=30611.25 c=30627.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:56 ET  bar=7682 o=30626.25 h=30628.0 l=30620.25 c=30622.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:57 ET  bar=7683 o=30622.0 h=30627.25 l=30620.0 c=30620.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:58 ET  bar=7684 o=30621.25 h=30631.75 l=30618.25 c=30623.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 13:59 ET  bar=7685 o=30624.5 h=30627.25 l=30620.75 c=30625.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:00 ET  bar=7686 o=30625.75 h=30631.75 l=30613.25 c=30616.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:01 ET  bar=7687 o=30616.5 h=30618.75 l=30602.25 c=30614.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:02 ET  bar=7688 o=30613.5 h=30629.5 l=30612.0 c=30628.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:03 ET  bar=7689 o=30627.75 h=30633.25 l=30625.0 c=30630.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:04 ET  bar=7690 o=30629.75 h=30641.0 l=30629.75 c=30638.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:05 ET  bar=7691 o=30638.5 h=30643.25 l=30632.5 c=30639.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=8 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:06 ET  bar=7692 o=30639.25 h=30641.0 l=30628.5 c=30631.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:07 ET  bar=7693 o=30631.5 h=30632.75 l=30622.0 c=30628.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:08 ET  bar=7694 o=30628.0 h=30631.25 l=30623.0 c=30630.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:09 ET  bar=7695 o=30629.75 h=30634.0 l=30626.5 c=30629.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:10 ET  bar=7696 o=30629.5 h=30641.5 l=30629.0 c=30635.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:11 ET  bar=7697 o=30636.0 h=30639.75 l=30631.5 c=30637.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:12 ET  bar=7698 o=30639.5 h=30645.5 l=30633.75 c=30635.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:13 ET  bar=7699 o=30633.75 h=30634.0 l=30628.5 c=30631.75
+   state SWEEP_DONE -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=expired: SWEEP_DONE→DISPLACEMENT 61 > 60 min  DEATH=expired: SWEEP_DONE→DISPLACEMENT # > # min
+2026-09-28 14:14 ET  bar=7700 o=30632.5 h=30640.0 l=30632.0 c=30638.25
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=expired: SWEEP_DONE→DISPLACEMENT 61 > 60 min
+2026-09-28 14:15 ET  bar=7701 o=30639.25 h=30646.25 l=30636.25 c=30639.75
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=expired: SWEEP_DONE→DISPLACEMENT 61 > 60 min
+2026-09-28 14:16 ET  bar=7702 o=30639.5 h=30643.0 l=30636.5 c=30642.5
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=expired: SWEEP_DONE→DISPLACEMENT 61 > 60 min
+2026-09-28 14:17 ET  bar=7703 o=30643.25 h=30645.0 l=30625.75 c=30626.5
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=expired: SWEEP_DONE→DISPLACEMENT 61 > 60 min
+2026-09-28 14:18 ET  bar=7704 o=30626.0 h=30633.0 l=30621.25 c=30628.25
+   state INVALIDATED -> INVALIDATED  HOLDING=INVALIDATED-await-rearm  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=expired: SWEEP_DONE→DISPLACEMENT 61 > 60 min
+2026-09-28 14:19 ET  bar=7705 o=30627.75 h=30629.5 l=30620.25 c=30620.25
+   state INVALIDATED -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+   entryModel=null impulse=null
+2026-09-28 14:20 ET  bar=7706 o=30620.75 h=30626.75 l=30620.75 c=30621.75
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:21 ET  bar=7707 o=30622.0 h=30629.25 l=30621.25 c=30628.75
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:22 ET  bar=7708 o=30627.75 h=30632.5 l=30626.0 c=30629.75
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:23 ET  bar=7709 o=30629.5 h=30630.0 l=30611.75 c=30613.25
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:24 ET  bar=7710 o=30612.5 h=30614.75 l=30605.0 c=30614.25
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:25 ET  bar=7711 o=30614.5 h=30618.5 l=30613.0 c=30617.75
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:26 ET  bar=7712 o=30617.25 h=30623.25 l=30616.5 c=30620.75
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:27 ET  bar=7713 o=30620.5 h=30626.75 l=30619.75 c=30620.0
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:28 ET  bar=7714 o=30621.0 h=30627.0 l=30618.75 c=30621.75
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:29 ET  bar=7715 o=30621.5 h=30622.75 l=30617.75 c=30621.0
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:30 ET  bar=7716 o=30621.0 h=30631.75 l=30610.5 c=30618.75
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:31 ET  bar=7717 o=30618.5 h=30619.0 l=30602.25 c=30609.25
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:32 ET  bar=7718 o=30608.5 h=30609.75 l=30600.75 c=30604.5
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:33 ET  bar=7719 o=30604.5 h=30610.5 l=30603.75 c=30607.5
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:34 ET  bar=7720 o=30607.75 h=30618.0 l=30605.75 c=30614.5
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:35 ET  bar=7721 o=30614.25 h=30616.0 l=30610.25 c=30614.25
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:36 ET  bar=7722 o=30613.75 h=30615.0 l=30606.0 c=30612.0
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:37 ET  bar=7723 o=30612.5 h=30616.0 l=30609.5 c=30610.25
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:38 ET  bar=7724 o=30610.75 h=30612.5 l=30596.75 c=30597.5
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:39 ET  bar=7725 o=30597.0 h=30597.25 l=30578.75 c=30585.0
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:40 ET  bar=7726 o=30585.5 h=30598.75 l=30581.5 c=30598.0
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:41 ET  bar=7727 o=30597.75 h=30608.5 l=30596.75 c=30606.5
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:42 ET  bar=7728 o=30606.5 h=30611.0 l=30599.5 c=30604.5
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:43 ET  bar=7729 o=30604.75 h=30614.75 l=30604.25 c=30614.75
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:44 ET  bar=7730 o=30615.0 h=30627.0 l=30613.0 c=30625.75
+   state MANIP_DONE -> MANIP_DONE  HOLDING=M4-no-sweep  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=none raidScore=0 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null
+2026-09-28 14:45 ET  bar=7731 o=30625.5 h=30627.75 l=30620.0 c=30620.5
+   state MANIP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30627.75 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+   entryModel=null impulse=sweep extreme 30627.75 short of 0.705 (30640.5)
+2026-09-28 14:46 ET  bar=7732 o=30620.75 h=30625.5 l=30616.5 c=30621.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30627.75 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:47 ET  bar=7733 o=30620.75 h=30623.5 l=30610.0 c=30623.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30627.75 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:48 ET  bar=7734 o=30622.75 h=30632.75 l=30611.75 c=30625.75
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30627.75 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+   entryModel=null impulse=sweep extreme 30632.75 short of 0.705 (30640.5)
+2026-09-28 14:49 ET  bar=7735 o=30626.25 h=30638.0 l=30618.25 c=30632.0
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+   entryModel=null impulse=sweep extreme 30638.0 short of 0.705 (30640.5)
+2026-09-28 14:50 ET  bar=7736 o=30632.75 h=30636.75 l=30627.25 c=30630.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:51 ET  bar=7737 o=30629.75 h=30633.25 l=30621.0 c=30633.25
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+2026-09-28 14:52 ET  bar=7738 o=30633.25 h=30640.0 l=30632.0 c=30634.5
+   state SWEEP_DONE -> SWEEP_DONE  HOLDING=M5-no-recent-displacement  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30636.125 raidScore=9 disp=false fvg=none mss=false ote=none pd=none
+   entry=0.0 stop=0.0 rr=0.00 size=0 lastGateFailed=null  stall=SWEEP_DONE:no-recent-displacement
+   entryModel=null impulse=sweep extreme 30640.0 short of 0.705 (30640.5)
+2026-09-28 14:53 ET  bar=7739 o=30634.75 h=30650.0 l=30630.25 c=30633.75
+   state SWEEP_DONE -> OTE_ARMED  HOLDING=GATE-M7  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.62 size=1 lastGateFailed=M7
+   entryModel=IMPULSE_LEG impulse=ARMED: sweep 30640.0 in band [30605.5,30673.0] ext 30650.0 | leg 2026-09-28T13:30:00Z..2026-09-28T14:45:00Z | M5 disp 2026-09-28T14:00:00Z range/ATR 1.56>=1.20 body 0.84>=0.50 FVG [30598.25,30626.0]@2026-09-28T14:00:00Z | M6 close 30565.0 < swing 30583.0 @2026-09-28T14:05:00Z
+2026-09-28 14:54 ET  bar=7740 o=30634.75 h=30640.0 l=30622.5 c=30638.25
+   state OTE_ARMED -> OTE_ARMED  HOLDING=GATE-M7  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.62 size=1 lastGateFailed=M7
+2026-09-28 14:55 ET  bar=7741 o=30638.0 h=30640.75 l=30630.0 c=30638.75
+   state OTE_ARMED -> OTE_ARMED  HOLDING=GATE-M7  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.62 size=1 lastGateFailed=M7
+2026-09-28 14:56 ET  bar=7742 o=30638.75 h=30644.0 l=30636.0 c=30639.25
+   state OTE_ARMED -> OTE_ARMED  HOLDING=GATE-M7  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.62 size=1 lastGateFailed=M7
+2026-09-28 14:57 ET  bar=7743 o=30639.25 h=30643.75 l=30635.5 c=30637.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=GATE-M7  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.62 size=1 lastGateFailed=M7
+2026-09-28 14:58 ET  bar=7744 o=30637.25 h=30649.75 l=30635.75 c=30645.0
+   state OTE_ARMED -> OTE_ARMED  HOLDING=GATE-M7  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.62 size=1 lastGateFailed=M7
+2026-09-28 14:59 ET  bar=7745 o=30644.0 h=30645.5 l=30636.0 c=30637.75
+   state OTE_ARMED -> OTE_ARMED  HOLDING=GATE-M7  bias=BEARISH vote=BEARISH(3/1/0) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.62 size=1 lastGateFailed=M7
+2026-09-28 15:00 ET  bar=7746 o=30639.25 h=30641.25 l=30612.0 c=30616.5
+   state OTE_ARMED -> OTE_ARMED  HOLDING=GATE-M7  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.62 size=1 lastGateFailed=M7
+2026-09-28 15:01 ET  bar=7747 o=30616.25 h=30617.75 l=30606.25 c=30606.5
+   state OTE_ARMED -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+   SIGNAL SHORT_ENTRY e=30634.75 s=30674.0 t=30598.25 rr=0.93 q=1
+   RISK ALLOW qty=1 Approved: 1 contracts (honoured requested 1 (risk-derived max 1)), $78.50 risk ($78.50/micro), budget $150.00 (base $150.00), R:R 0.93:1, DLL room: $1083.50
+2026-09-28 15:02 ET  bar=7748 o=30606.25 h=30609.25 l=30597.25 c=30602.5
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:03 ET  bar=7749 o=30602.75 h=30617.5 l=30599.0 c=30613.25
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:04 ET  bar=7750 o=30613.25 h=30618.0 l=30611.25 c=30615.75
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:05 ET  bar=7751 o=30614.75 h=30620.75 l=30613.5 c=30615.5
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:06 ET  bar=7752 o=30615.75 h=30618.25 l=30597.5 c=30600.0
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:07 ET  bar=7753 o=30600.25 h=30605.0 l=30593.75 c=30599.5
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:08 ET  bar=7754 o=30599.25 h=30602.25 l=30594.75 c=30597.25
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:09 ET  bar=7755 o=30597.0 h=30601.0 l=30593.5 c=30594.5
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:10 ET  bar=7756 o=30594.75 h=30595.25 l=30584.75 c=30591.0
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:11 ET  bar=7757 o=30591.0 h=30595.5 l=30586.0 c=30586.5
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:12 ET  bar=7758 o=30586.0 h=30591.25 l=30583.5 c=30589.0
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:13 ET  bar=7759 o=30589.25 h=30594.25 l=30576.0 c=30578.75
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:14 ET  bar=7760 o=30578.25 h=30580.0 l=30573.5 c=30576.75
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/1/1) agree=false range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:15 ET  bar=7761 o=30576.5 h=30580.75 l=30568.75 c=30578.25
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:16 ET  bar=7762 o=30578.5 h=30591.0 l=30575.75 c=30582.0
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:17 ET  bar=7763 o=30582.0 h=30591.0 l=30579.0 c=30591.0
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:18 ET  bar=7764 o=30591.25 h=30595.0 l=30588.0 c=30591.75
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:19 ET  bar=7765 o=30592.0 h=30593.5 l=30583.0 c=30587.25
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:20 ET  bar=7766 o=30588.25 h=30594.5 l=30586.5 c=30589.25
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:21 ET  bar=7767 o=30589.25 h=30601.5 l=30583.0 c=30597.25
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:22 ET  bar=7768 o=30597.5 h=30598.0 l=30587.75 c=30593.75
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:23 ET  bar=7769 o=30593.5 h=30596.0 l=30587.75 c=30591.75
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:24 ET  bar=7770 o=30592.5 h=30596.75 l=30589.5 c=30596.5
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:25 ET  bar=7771 o=30595.75 h=30605.0 l=30591.25 c=30602.0
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:26 ET  bar=7772 o=30602.0 h=30605.75 l=30597.0 c=30603.25
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:27 ET  bar=7773 o=30603.0 h=30604.0 l=30592.5 c=30596.5
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:28 ET  bar=7774 o=30596.25 h=30602.5 l=30589.75 c=30601.0
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:29 ET  bar=7775 o=30600.5 h=30600.75 l=30589.0 c=30596.25
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:30 ET  bar=7776 o=30595.75 h=30598.5 l=30576.0 c=30576.25
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:31 ET  bar=7777 o=30575.75 h=30584.0 l=30574.5 c=30582.75
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:32 ET  bar=7778 o=30583.5 h=30597.0 l=30573.25 c=30584.75
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:33 ET  bar=7779 o=30585.75 h=30596.75 l=30578.25 c=30584.0
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:34 ET  bar=7780 o=30583.75 h=30592.75 l=30576.5 c=30587.75
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:35 ET  bar=7781 o=30587.75 h=30593.5 l=30579.0 c=30581.75
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:36 ET  bar=7782 o=30582.0 h=30582.0 l=30568.25 c=30570.5
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:37 ET  bar=7783 o=30571.25 h=30572.0 l=30561.0 c=30564.0
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:38 ET  bar=7784 o=30564.0 h=30566.25 l=30553.25 c=30554.25
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:39 ET  bar=7785 o=30553.75 h=30554.5 l=30541.0 c=30545.25
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:40 ET  bar=7786 o=30545.75 h=30553.5 l=30545.75 c=30548.75
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:41 ET  bar=7787 o=30549.0 h=30562.0 l=30548.75 c=30556.75
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:42 ET  bar=7788 o=30556.5 h=30566.5 l=30552.5 c=30563.5
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:43 ET  bar=7789 o=30563.75 h=30566.0 l=30556.75 c=30557.0
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null
+2026-09-28 15:44 ET  bar=7790 o=30557.5 h=30562.25 l=30555.5 c=30560.5
+   state IN_TRADE -> IN_TRADE  HOLDING=IN_TRADE  bias=BEARISH vote=BEARISH(2/2/0) agree=true range:BEARISH[30356.75-30759.25]  kzOpen=true
+   sweep=HIGH@30640.0 raidScore=10 disp=true fvg=30598.25-30626.0 mss=true ote=[30605.5,30673.0] inv=30759.25 pd=30634.75
+   entry=30634.75 stop=30674.0 rr=0.93 size=1 lastGateFailed=null

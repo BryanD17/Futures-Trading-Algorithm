@@ -4,7 +4,7 @@ import com.topstep.trading.domain.Candle;
 
 import java.time.*;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+
 
 /**
  * Computes and manages liquidity levels for a single instrument.
@@ -97,7 +97,13 @@ public class LevelEngine {
     // LEVEL STORAGE
     // ═══════════════════════════════════════════════════════════════════
 
-    private final Map<LevelType, KnownLevel> levels = new ConcurrentHashMap<>();
+    // V5 Agent 05.3 (determinism): an enum-keyed ConcurrentHashMap iterates
+    // in IDENTITY-hash order (enum hashCode is Object's), which changes with
+    // any allocation earlier in the JVM — raid detection order, raid-listener
+    // order and scoreSweep ties flipped between runs (2026-09-24 12:16 two-raid
+    // tie). A ConcurrentSkipListMap keeps the thread safety and iterates in
+    // LevelType ORDINAL order, identical on every run (EnumMap order).
+    private final Map<LevelType, KnownLevel> levels = new java.util.concurrent.ConcurrentSkipListMap<>();
 
     // Zone flip listeners (FIX 3: demand/supply zone flip detection)
     private final List<ZoneFlipListener> zoneFlipListeners = new ArrayList<>();

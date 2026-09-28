@@ -117,6 +117,7 @@ public final class EngineConfig {
         k.add(key("setup.entryTimeoutBars", Type.INT, null, "unfilled-entry timeout in feed bars (default 2 x OTE window)", "stdvOte.entryTimeoutBars"));
         k.add(key("setup.rearmOnInvalidated", Type.BOOL, "true", "legacy re-arm after invalidation", "stdvOte.rearmOnInvalidated"));
         k.add(key("setup.rearmCooldownBars", Type.INT, "5", "re-arm cooldown in feed bars", "scalp.rearmCooldownBars"));
+        k.add(key("setup.rearmAfterClose", Type.BOOL, "true", "re-arm IN_TRADE after the position closes, every target model (false = one trade per window, A/B) (Agent 05.3)"));
         k.add(key("stdvOte.stopBufferTicks", Type.INT, "4", "stop buffer beyond OTE 1.0 (ticks)"));
         k.add(key("stdvOte.reactionWickTicks", Type.INT, "2", "minimum OTE rejection wick (ticks)"));
         // displacement (owner's live flags)
@@ -625,6 +626,9 @@ public final class EngineConfig {
                 + " (minSweepFib " + getDouble("ote.impulseLeg.minSweepFib", 0.705) + ")"
                 + " | ONE RR band legacy [" + getDouble("risk.rrFloor", 1.0) + ", " + getDouble("risk.rrCeiling", 5.0)
                 + "] scalp [" + getDouble("risk.rrFloor.scalp", 0.8) + ", " + getDouble("risk.rrCeiling", 5.0) + "]");
+        out.add("LIFECYCLE (Agent 05.3): setup.rearmAfterClose=" + getBoolean("setup.rearmAfterClose", true)
+                + " rearmCooldownBars=" + getInt("setup.rearmCooldownBars", 5)
+                + " | unfilled entry cancelled when its setup ends (order.ttlBars = backstop)");
         out.add("BACKFILL: 1m " + getInt("backfill.days", 3) + " day(s) [clamped 1..7], HTF "
                 + getInt("htf.backfill.days", 30) + " day(s) [clamped 7..90]");
         out.add("TRADE PROFILE: " + getString("trade.profile", "STRICT"));
