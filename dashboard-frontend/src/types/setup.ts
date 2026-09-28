@@ -207,8 +207,8 @@ export const MANDATORY_GATES: GateDef[] = [
   { id: 'M4', label: 'Liquidity sweep + raid score' },
   { id: 'M5', label: 'Displacement + FVG' },
   { id: 'M6', label: 'Market structure shift / CHoCH' },
-  { id: 'M7', label: 'OTE entry + PD array + RR ≥ 2.0' },
+  { id: 'M7', label: 'OTE entry + PD array + RR in [rrFloor, rrCeiling] (1.0–5.0)' },
   { id: 'M7b', label: '30m OTE confluence' },
-  { id: 'M8', label: 'Size in [5, 20] micros' },
+  { id: 'M8', label: 'Size risk-derived in [1, 20] micros' },
   { id: 'M9', label: 'Risk guardrails clear' },
 ];

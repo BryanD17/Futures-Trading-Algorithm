@@ -29,6 +29,13 @@ refactor and were already present at the baseline commit.
 
 ## Run
 
+> **V5 (2026-09-28):** the proven configuration is the default — see `docs/RUNBOOK_V5.md` for the exact
+> commands, the property table, the A/B switches and the pre-LIVE checklist. The sections below that say
+> "DEFAULT LOG" / "DEFAULT OFF" for M2b, the bias vote and hysteresis describe the V2–V4 state; V5 defaults
+> are `pd.gate.mode=BLOCK`, `bias.vote.mode=VOTE` (ADAPTIVE, dealing-range source), `bias.hysteresis=true`,
+> `session.gateMode=SCORING`, `ote.entryModel=IMPULSE_LEG`.
+
+
 ### ENGINE CONFIGURATION — one source of truth (V5 Agent 01)
 
 Every engine flag is resolved by `EngineConfig` with ONE precedence, in every
