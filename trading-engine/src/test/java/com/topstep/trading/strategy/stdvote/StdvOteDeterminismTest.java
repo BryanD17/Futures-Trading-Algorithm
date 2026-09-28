@@ -47,6 +47,7 @@ class StdvOteDeterminismTest {
 
     @org.junit.jupiter.api.BeforeEach
     void pinDetectorTimeframe() {
+        PreV5BiasCompat.apply(); // V5 Agent 03: pre-V5 bias/sweep inputs
         // The fixtures encode 1m entry anatomy (displacement/FVG/MSS built
         // candle-by-candle at 1m) — pin the detector timeframe so this
         // suite keeps testing the wiring. LIVE default is 5m (field fix
@@ -56,6 +57,7 @@ class StdvOteDeterminismTest {
 
     @AfterEach
     void cleanup() {
+        PreV5BiasCompat.clear();
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
         System.clearProperty("stdvote.detectorTimeframe");
         StdvOteRegistry.unregister(StdvOteGoldenFixture.SYMBOL);

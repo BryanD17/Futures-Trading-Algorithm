@@ -94,7 +94,10 @@ public final class PremiumDiscountEvaluator {
     /** Build from system properties, register for API access, log config. */
     public static PremiumDiscountEvaluator install(String symbol, double tickSize,
                                                    LevelEngine levels) {
-        PdMode mode = parseMode(com.topstep.trading.config.EngineConfig.current().getString(MODE_PROPERTY, "LOG"));
+        // V5 Agent 03 (M2b BLOCKING, Appendix B): DEFAULT BLOCK now that the
+        // governing range is the day's dealing range ("RD" below). LOG/OFF
+        // remain one flag away; ABSTAIN still always passes.
+        PdMode mode = parseMode(com.topstep.trading.config.EngineConfig.current().getString(MODE_PROPERTY, "BLOCK"));
         int eqBand = com.topstep.trading.config.EngineConfig.current().getInt(EQ_BAND_TICKS_PROPERTY, DEFAULT_EQ_BAND_TICKS);
         // Default minRangeTicks = 2x the symbol's chart minLegTicks
         // (chart.minLegTicks.<SYM>, ChartEngine default 40), overridable
@@ -161,6 +164,19 @@ public final class PremiumDiscountEvaluator {
     private volatile java.util.function.Supplier<java.util.List<com.topstep.trading.domain.Candle>>
             d1Source = java.util.List::of;
     private volatile int d1MinBars = DEFAULT_D1_MIN_BARS;
+
+    /**
+     * V5 Agent 03 (RC-06): the day's DEALING RANGE {high, low} — the range
+     * the bias is read from and the OTE model trades (G1: 30759.25 /
+     * 30356.75, EQ 30558.0). When present it GOVERNS ("RD"), ahead of
+     * R0/R1/R2. Default: none (tests / pre-V5 wiring unchanged).
+     */
+    private volatile java.util.function.Supplier<double[]> dealingRangeSource = () -> null;
+
+    /** Wire the dealing-range source (production: the runner). */
+    public void configureDealingRangeSource(java.util.function.Supplier<double[]> source) {
+        if (source != null) this.dealingRangeSource = source;
+    }
 
     /** Wire the D1 ladder for R0 (production: install(); tests: direct). */
     public void configureD1Source(
@@ -272,7 +288,13 @@ public final class PremiumDiscountEvaluator {
         double lo;
         String source;
         double[] d1Range = d1DealingRange();
-        if (d1Range != null) {
+        double[] rd = dealingRangeSource.get();
+        if (rd != null && rd.length == 2 && !Double.isNaN(rd[0]) && !Double.isNaN(rd[1])
+                && rd[0] > rd[1] && (rd[0] - rd[1]) >= minRangeTicks * tickSize) {
+            hi = rd[0];
+            lo = rd[1];
+            source = "RD";
+        } else if (d1Range != null) {
             // R0 (V3 Agent 05): the last ESTABLISHED D1 swing high/low —
             // the dealing range where the methodology starts. Falls through
             // to R1/R2/R3 exactly as before whenever D1 is thin or has no

@@ -70,9 +70,20 @@ public final class BiasVoteEngine {
         }
     }
 
-    /** Full result of one 3-of-4 evaluation. */
+    /**
+     * Full result of one evaluation. {@code finalBias} is what feeds the
+     * seam; {@code voteBias} is the pure V1..V4 aggregation under the
+     * configured {@link BiasConfig.VoteRule}; {@code anchor} names the
+     * decider ("vote" or "range:BEARISH[lo-hi]") — V5 Agent 03.
+     */
     public record BiasVoteResult(MarketBias finalBias, List<BiasVote> votes,
-                                 int alignedBull, int alignedBear, int abstains) {}
+                                 int alignedBull, int alignedBear, int abstains,
+                                 MarketBias voteBias, String anchor) {
+        public BiasVoteResult(MarketBias finalBias, List<BiasVote> votes,
+                              int alignedBull, int alignedBear, int abstains) {
+            this(finalBias, votes, alignedBull, alignedBear, abstains, finalBias, "vote");
+        }
+    }
 
     /** Everything one evaluation needs — assembled by the runner per 15m bar.
      *  The V3-Agent-05 extras (weekly levels for V4 detail, H4 series for
@@ -100,7 +111,10 @@ public final class BiasVoteEngine {
 
     /** Build from system properties, register for API access, log config. */
     public static BiasVoteEngine install(String symbol, double tickSize) {
-        VoteMode mode = parseMode(com.topstep.trading.config.EngineConfig.current().getString(MODE_PROPERTY, "LOG"));
+        // V5 Agent 03: DEFAULT VOTE (was LOG) - the vote + dealing-range
+        // anchor is the bias; LEGACY/LOG remain one flag away.
+        VoteMode mode = parseMode(com.topstep.trading.config.EngineConfig.current().getString(
+                MODE_PROPERTY, BiasConfig.defaultVoteMode()));
         int eqBand = com.topstep.trading.config.EngineConfig.current().getInt(
                 PremiumDiscountEvaluator.EQ_BAND_TICKS_PROPERTY,
                 PremiumDiscountEvaluator.DEFAULT_EQ_BAND_TICKS);
@@ -108,6 +122,7 @@ public final class BiasVoteEngine {
         e.includeH4 = com.topstep.trading.config.EngineConfig.current().getBoolean(INCLUDE_H4_PROPERTY, false);
         REGISTRY.put(symbol, e);
         System.out.println("[VOTE " + symbol + "] config: mode=" + mode
+                + " voteRule=" + e.voteRule + " source=" + e.biasSource
                 + " eqBandTicks=" + eqBand + " v1.includeH4=" + e.includeH4);
         return e;
     }
@@ -134,6 +149,24 @@ public final class BiasVoteEngine {
     private final int eqBandTicks;
     /** {@code bias.v1.includeH4} — set by install(); false in direct ctor. */
     private volatile boolean includeH4;
+    /** {@code bias.voteRule} (V5 Agent 03), read at construction. */
+    private volatile BiasConfig.VoteRule voteRule = BiasConfig.voteRule();
+    /** {@code bias.source} (V5 Agent 03), read at construction. */
+    private volatile BiasConfig.BiasSource biasSource = BiasConfig.biasSource();
+
+    /** Test hook: override the vote rule / bias source. */
+    void configureRule(BiasConfig.VoteRule rule, BiasConfig.BiasSource source) {
+        if (rule != null) this.voteRule = rule;
+        if (source != null) this.biasSource = source;
+    }
+
+    public BiasConfig.VoteRule voteRule() {
+        return voteRule;
+    }
+
+    public BiasConfig.BiasSource biasSource() {
+        return biasSource;
+    }
 
     /** True when V1 should consult the H4 series (runner input hint). */
     public boolean includeH4() {
@@ -260,8 +293,44 @@ public final class BiasVoteEngine {
                 : new BiasVote("V4", VoteDirection.BEAR, "PDL-nearer");
     }
 
-    /** §H1 aggregation: ≥3 aligned ⇒ directional, otherwise NEUTRAL. */
+    /** §H1 aggregation: ≥3 aligned ⇒ directional, otherwise NEUTRAL (STRICT_3OF4). */
     static BiasVoteResult aggregate(List<BiasVote> votes) {
+        return aggregateStrict(votes);
+    }
+
+    /**
+     * Aggregation under a {@link BiasConfig.VoteRule} (V5 Agent 03, PF-08).
+     * <ul>
+     *   <li>STRICT_3OF4 — ≥3 aligned, else NEUTRAL (2+ abstentions ⇒
+     *       NEUTRAL by construction: the pre-V5 deadlock).</li>
+     *   <li>ADAPTIVE — the quorum adapts to how many votes can opine:
+     *       4 voting → 3-of-4; 3 voting (one abstains) → 2-of-3; 2 voting
+     *       (2 abstain) → the warm pair must AGREE; fewer → NEUTRAL.</li>
+     * </ul>
+     */
+    static BiasVoteResult aggregate(List<BiasVote> votes, BiasConfig.VoteRule rule) {
+        if (rule != BiasConfig.VoteRule.ADAPTIVE) {
+            return aggregateStrict(votes);
+        }
+        int bull = 0;
+        int bear = 0;
+        int abstains = 0;
+        for (BiasVote v : votes) {
+            switch (v.direction()) {
+                case BULL -> bull++;
+                case BEAR -> bear++;
+                case ABSTAIN -> abstains++;
+            }
+        }
+        int voting = bull + bear;
+        int quorum = voting >= 4 ? 3 : voting == 3 ? 2 : voting == 2 ? 2 : Integer.MAX_VALUE;
+        MarketBias bias = (bull >= quorum) ? MarketBias.BULLISH
+                : (bear >= quorum) ? MarketBias.BEARISH
+                : MarketBias.NEUTRAL;
+        return new BiasVoteResult(bias, List.copyOf(votes), bull, bear, abstains);
+    }
+
+    private static BiasVoteResult aggregateStrict(List<BiasVote> votes) {
         int bull = 0;
         int bear = 0;
         int abstains = 0;
@@ -301,6 +370,19 @@ public final class BiasVoteEngine {
      * HTF bar when mode != LEGACY.
      */
     public BiasVoteResult evaluate(VoteInputs in, MarketBias legacyBias) {
+        return evaluate(in, legacyBias, DealingRangeTracker.Snapshot.EMPTY);
+    }
+
+    /**
+     * V5 Agent 03 evaluation: the four votes under the configured rule,
+     * then — with {@code bias.source=RANGE} (default) — the dealing-range
+     * impulse direction ANCHORS the final bias whenever it is decisive
+     * (RC-06: the OTE model trades the impulse, not the 15m retrace
+     * structure, which is now just V1). The vote decides only while the
+     * range is not yet decisive (cold start).
+     */
+    public BiasVoteResult evaluate(VoteInputs in, MarketBias legacyBias,
+                                   DealingRangeTracker.Snapshot range) {
         evaluations.incrementAndGet();
         BiasVote v1 = voteV1(in.trendState());
         // Optional H4 consult (V3 Agent 05, DEFAULT OFF): H4 fractal
@@ -328,7 +410,15 @@ public final class BiasVoteEngine {
                 voteV2(in.amdPhase()),
                 voteV3(in.price(), in.trueDayOpen(), tickSize, eqBandTicks),
                 v4);
-        BiasVoteResult result = aggregate(votes);
+        BiasVoteResult voted = aggregate(votes, voteRule);
+        BiasVoteResult result = voted;
+        if (biasSource == BiasConfig.BiasSource.RANGE && range != null
+                && range.decisive() && range.direction() != MarketBias.NEUTRAL) {
+            result = new BiasVoteResult(range.direction(), voted.votes(),
+                    voted.alignedBull(), voted.alignedBear(), voted.abstains(),
+                    voted.finalBias(),
+                    "range:" + range.direction() + "[" + range.low() + "-" + range.high() + "]");
+        }
         boolean agreed = result.finalBias() == legacyBias;
         lastResult = result;
         lastAgree = agreed;
@@ -347,6 +437,9 @@ public final class BiasVoteEngine {
             sb.append(v.token()).append(' ');
         }
         sb.append("-> vote=").append(result.finalBias())
+          .append(" rule=").append(voteRule)
+          .append(" anchor=").append(result.anchor())
+          .append(" votesOnly=").append(result.voteBias())
           .append(" legacy=").append(legacyBias)
           .append(" AGREE=").append(agreed);
         System.out.println(sb);
@@ -370,7 +463,8 @@ public final class BiasVoteEngine {
             return "vote=?";
         }
         return "vote=" + r.finalBias() + "(" + r.alignedBull() + "/"
-                + r.alignedBear() + "/" + r.abstains() + ") agree=" + lastAgree;
+                + r.alignedBear() + "/" + r.abstains() + ") agree=" + lastAgree
+                + (r.anchor().startsWith("range") ? " " + r.anchor() : "");
     }
 
     /** JSON-friendly snapshot for /api/setup (session-scoped counters). */
@@ -383,6 +477,9 @@ public final class BiasVoteEngine {
             m.put("alignedBull", r.alignedBull());
             m.put("alignedBear", r.alignedBear());
             m.put("abstains", r.abstains());
+            m.put("voteRule", voteRule.name());
+            m.put("voteBias", r.voteBias().name());
+            m.put("anchor", r.anchor());
             java.util.List<Map<String, Object>> votes = new java.util.ArrayList<>();
             for (BiasVote v : r.votes()) {
                 Map<String, Object> vm = new LinkedHashMap<>();

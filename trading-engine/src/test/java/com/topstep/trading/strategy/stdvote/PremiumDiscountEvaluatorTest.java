@@ -39,7 +39,7 @@ class PremiumDiscountEvaluatorTest {
      */
     private static LevelEngine levelsWithPdRange(double pdh, double pdl) {
         CandleSeries series = new CandleSeries("MNQ", 1000);
-        LevelEngine levels = new LevelEngine("MNQ", series);
+        LevelEngine levels = com.topstep.trading.chartstate.LenientLevels.of("MNQ", series);
         // Day 1 (Wed 2026-06-24): one candle spanning the full prior-day range.
         levels.processCandle(new Candle("MNQ", et(24, 10, 0),
                 (pdh + pdl) / 2, pdh, pdl, (pdh + pdl) / 2, 100));
@@ -149,7 +149,7 @@ class PremiumDiscountEvaluatorTest {
     void abstainPassesInBlockMode() {
         // Fresh engine with NO candles at all: no PDH/PDL, no developing day.
         CandleSeries series = new CandleSeries("MNQ", 100);
-        LevelEngine levels = new LevelEngine("MNQ", series);
+        LevelEngine levels = com.topstep.trading.chartstate.LenientLevels.of("MNQ", series);
         PremiumDiscountEvaluator pd = evaluator(levels, PdMode.BLOCK);
         GateDecision d = pd.gateCheck(20000.0, true);
         assertThat(d.passed()).isTrue();

@@ -43,6 +43,7 @@ class StdvOteScalpFrequencyIntegrationTest {
 
     @BeforeEach
     void enableScalpMode() {
+        PreV5BiasCompat.apply(); // V5 Agent 03: pre-V5 bias/sweep inputs
         // Default scalp configuration — including the STRICT binary raid
         // gate (scalp.minRaidScore 6, no bypass). Both acts of the fixture
         // raid a real EQUAL_LOW cluster whose raid scores exactly 6, so the
@@ -61,6 +62,7 @@ class StdvOteScalpFrequencyIntegrationTest {
 
     @AfterEach
     void cleanup() {
+        PreV5BiasCompat.clear();
         System.clearProperty(ScalpConfig.ENABLED_PROPERTY);
         System.clearProperty(ScalpConfig.KILLZONE_SIZE_BOOST_PROPERTY);
         System.clearProperty("stdvote.detectorTimeframe");

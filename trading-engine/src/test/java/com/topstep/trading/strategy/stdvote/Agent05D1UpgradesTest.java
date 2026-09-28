@@ -60,7 +60,7 @@ class Agent05D1UpgradesTest {
 
     private static LevelEngine levelsWithPdRange() {
         CandleSeries series = new CandleSeries("MNQ", 1000);
-        LevelEngine levels = new LevelEngine("MNQ", series);
+        LevelEngine levels = com.topstep.trading.chartstate.LenientLevels.of("MNQ", series);
         levels.processCandle(new Candle("MNQ",
                 ZonedDateTime.of(2026, 6, 24, 10, 0, 0, 0, ET).toInstant(),
                 20000, 20100, 19900, 20000, 100));

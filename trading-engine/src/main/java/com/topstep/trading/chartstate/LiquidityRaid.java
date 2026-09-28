@@ -299,8 +299,13 @@ public class LiquidityRaid {
 
     @Override
     public String toString() {
-        return String.format("LiquidityRaid{%s %s @ %s, score=%d (%s), state=%s, bars=%d}",
+        // V5 Agent 03: the level price, raid time, candle extremes and the
+        // scoring factors are part of the evidence — print them.
+        return String.format("LiquidityRaid{%s %s @ %s %.2f at %s, high=%.2f low=%.2f close=%.2f,"
+                        + " penetration=%.0f ticks, wick=%.0f%%, score=%d (%s), state=%s, bars=%d, factors=%s}",
                 instrument, direction.getDisplayName(), targetLevel.getType().getDisplayName(),
-                qualityScore, getQualityClassification(), state.name(), barsSinceRaid);
+                targetLevel.getPrice(), raidTime, raidCandleHigh, raidCandleLow, raidCandleClose,
+                penetrationTicks, wickToBodyRatio * 100, qualityScore, getQualityClassification(),
+                state.name(), barsSinceRaid, qualityFactors);
     }
 }

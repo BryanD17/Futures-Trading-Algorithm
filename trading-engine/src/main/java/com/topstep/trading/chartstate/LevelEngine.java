@@ -25,14 +25,69 @@ public class LevelEngine {
 
     private static final ZoneId NY_ZONE = ZoneId.of("America/New_York");
 
-    // Session time boundaries (in NY time)
-    private static final LocalTime ASIA_START = LocalTime.of(20, 0);    // 8 PM NY (previous day)
-    private static final LocalTime ASIA_END = LocalTime.of(0, 0);       // Midnight
-    private static final LocalTime LONDON_START = LocalTime.of(2, 0);   // 2 AM
-    private static final LocalTime LONDON_END = LocalTime.of(5, 0);     // 5 AM
-    private static final LocalTime NY_START = LocalTime.of(9, 30);      // 9:30 AM
-    private static final LocalTime NY_END = LocalTime.of(16, 0);        // 4 PM
-    private static final LocalTime RTH_CLOSE = LocalTime.of(17, 0);     // 5 PM (new day boundary)
+    // ── Session windows (ET) — V5 Agent 03 (RC-08): configurable, read at
+    // construction via BiasConfig (levels.<session>.start/end, HH:mm), and
+    // DEFAULTED to reproduce the owner's LuxAlgo levels on the real tape:
+    //   ASIA   20:00–00:00  (LuxAlgo default Asia)
+    //   LONDON 04:00–06:00  (the window whose high is the owner's 30640.00
+    //                        on 2026-09-28 — LuxAlgo's 01:00–03:00 London
+    //                        input evaluated in the owner's UTC-7 chart
+    //                        timezone = 04:00–06:00 ET; the classic
+    //                        02:00–05:00 gives 30679.00, see A-03 DECISIONS)
+    //   NY_AM  09:30–12:00  → NY_AM_HIGH/LOW (09-28: 30759.25 / 30356.75)
+    //   NY_PM  13:30–16:00  → NY_PM_HIGH/LOW
+    //   NY     09:30–16:00  → NY_HIGH/LOW (the old inNY started at 09:00)
+    // A window whose end <= start wraps midnight (fixes the dead
+    // "hour < 0" Asia test).
+    static final LocalTime DEFAULT_ASIA_START = LocalTime.of(20, 0);
+    static final LocalTime DEFAULT_ASIA_END = LocalTime.of(0, 0);
+    static final LocalTime DEFAULT_LONDON_START = LocalTime.of(4, 0);
+    static final LocalTime DEFAULT_LONDON_END = LocalTime.of(6, 0);
+    static final LocalTime DEFAULT_NYAM_START = LocalTime.of(9, 30);
+    static final LocalTime DEFAULT_NYAM_END = LocalTime.of(12, 0);
+    static final LocalTime DEFAULT_NYPM_START = LocalTime.of(13, 30);
+    static final LocalTime DEFAULT_NYPM_END = LocalTime.of(16, 0);
+    static final LocalTime DEFAULT_NY_START = LocalTime.of(9, 30);
+    static final LocalTime DEFAULT_NY_END = LocalTime.of(16, 0);
+    /** CME Globex halt 17:00–18:00 ET; the trading day rolls at 18:00. */
+    private static final LocalTime HALT_START = LocalTime.of(17, 0);
+    private static final LocalTime DAY_ROLL = LocalTime.of(18, 0);
+
+    private final LocalTime asiaStart = com.topstep.trading.strategy.stdvote.BiasConfig
+            .levelWindow("asia", "start", DEFAULT_ASIA_START);
+    private final LocalTime asiaEnd = com.topstep.trading.strategy.stdvote.BiasConfig
+            .levelWindow("asia", "end", DEFAULT_ASIA_END);
+    private final LocalTime londonStart = com.topstep.trading.strategy.stdvote.BiasConfig
+            .levelWindow("london", "start", DEFAULT_LONDON_START);
+    private final LocalTime londonEnd = com.topstep.trading.strategy.stdvote.BiasConfig
+            .levelWindow("london", "end", DEFAULT_LONDON_END);
+    private final LocalTime nyAmStart = com.topstep.trading.strategy.stdvote.BiasConfig
+            .levelWindow("nyam", "start", DEFAULT_NYAM_START);
+    private final LocalTime nyAmEnd = com.topstep.trading.strategy.stdvote.BiasConfig
+            .levelWindow("nyam", "end", DEFAULT_NYAM_END);
+    private final LocalTime nyPmStart = com.topstep.trading.strategy.stdvote.BiasConfig
+            .levelWindow("nypm", "start", DEFAULT_NYPM_START);
+    private final LocalTime nyPmEnd = com.topstep.trading.strategy.stdvote.BiasConfig
+            .levelWindow("nypm", "end", DEFAULT_NYPM_END);
+    private final LocalTime nyStart = com.topstep.trading.strategy.stdvote.BiasConfig
+            .levelWindow("ny", "start", DEFAULT_NY_START);
+    private final LocalTime nyEnd = com.topstep.trading.strategy.stdvote.BiasConfig
+            .levelWindow("ny", "end", DEFAULT_NY_END);
+    /** Phantom-day guard (levels.minBarsPerDay, default 60). */
+    private final int minBarsPerDay =
+            com.topstep.trading.strategy.stdvote.BiasConfig.levelsMinBarsPerDay();
+    /** Re-arm distance for raided levels (levels.rearmDistanceTicks). */
+    private final int rearmDistanceTicks =
+            com.topstep.trading.strategy.stdvote.BiasConfig.levelsRearmDistanceTicks();
+
+    /** True when {@code t} is inside [start, end); end <= start wraps midnight. */
+    static boolean inWindow(LocalTime t, LocalTime start, LocalTime end) {
+        if (start.equals(end)) return false;
+        if (start.isBefore(end)) {
+            return !t.isBefore(start) && t.isBefore(end);
+        }
+        return !t.isBefore(start) || t.isBefore(end);
+    }
 
     private final String symbol;
     private final CandleSeries candleSeries;
@@ -52,6 +107,8 @@ public class LevelEngine {
     private double todayHigh = Double.MIN_VALUE;
     private double todayLow = Double.MAX_VALUE;
     private double todayOpen = 0;
+    /** Bars folded into the current trading day (phantom-day guard). */
+    private int todayBars = 0;
 
     // True-day-open tracking (midnight ET calendar date last stamped).
     private LocalDate currentMidnightDate;
@@ -69,6 +126,10 @@ public class LevelEngine {
     private double londonLow = Double.MAX_VALUE;
     private double nyHigh = Double.MIN_VALUE;
     private double nyLow = Double.MAX_VALUE;
+    private double nyAmHigh = Double.MIN_VALUE;
+    private double nyAmLow = Double.MAX_VALUE;
+    private double nyPmHigh = Double.MIN_VALUE;
+    private double nyPmLow = Double.MAX_VALUE;
 
     // Session opens
     private double asiaOpen = 0;
@@ -79,6 +140,8 @@ public class LevelEngine {
     private boolean inAsia = false;
     private boolean inLondon = false;
     private boolean inNY = false;
+    private boolean inNyAm = false;
+    private boolean inNyPm = false;
 
     public LevelEngine(String symbol, CandleSeries candleSeries) {
         this.symbol = symbol;
@@ -99,6 +162,13 @@ public class LevelEngine {
 
         Instant timestamp = candle.getTimestamp();
         ZonedDateTime nyTime = timestamp.atZone(NY_ZONE);
+        // V5 Agent 03 (RC-08): a bar inside the 17:00–18:00 ET Globex halt
+        // is a settlement print (2026-09-25 17:00: one 1-lot bar) — it is
+        // never part of any trading day, session or level.
+        LocalTime clock = nyTime.toLocalTime();
+        if (!clock.isBefore(HALT_START) && clock.isBefore(DAY_ROLL)) {
+            return;
+        }
         LocalDate tradingDay = getTradingDay(nyTime);
         LocalDate weekStart = getWeekStart(tradingDay);
 
@@ -125,7 +195,11 @@ public class LevelEngine {
         // Update session tracking
         updateSessionTracking(nyTime, candle);
 
+        // V5 Agent 03: raided levels re-arm once price has LEFT them.
+        rearmRaidedLevels(candle);
+
         // Update daily extremes
+        todayBars++;
         if (candle.getHigh() > todayHigh) {
             todayHigh = candle.getHigh();
         }
@@ -146,11 +220,20 @@ public class LevelEngine {
      * Handle day change - lock previous day levels.
      */
     private void onDayChange(LocalDate newTradingDay, Candle candle) {
-        // Store previous day as PDH/PDL if we have data
+        // Store previous day as PDH/PDL if we have data — and only if it was
+        // a REAL trading day (V5 Agent 03, RC-08): a "day" of fewer than
+        // levels.minBarsPerDay bars is a phantom (settlement print / feed
+        // stub) and must never overwrite PDH/PDL.
         if (currentTradingDay != null && todayHigh != Double.MIN_VALUE) {
-            registerLevel(LevelType.PDH, todayHigh, candle.getTimestamp());
-            registerLevel(LevelType.PDL, todayLow, candle.getTimestamp());
-            registerLevel(LevelType.DAILY_OPEN, todayOpen, candle.getTimestamp());
+            if (todayBars >= minBarsPerDay) {
+                registerLevel(LevelType.PDH, todayHigh, candle.getTimestamp());
+                registerLevel(LevelType.PDL, todayLow, candle.getTimestamp());
+                registerLevel(LevelType.DAILY_OPEN, todayOpen, candle.getTimestamp());
+            } else {
+                System.out.println("[LEVELS " + symbol + "] phantom trading day "
+                        + currentTradingDay + " (" + todayBars + " bars < "
+                        + minBarsPerDay + ") ignored for PDH/PDL");
+            }
         }
 
         // Reset for new day
@@ -158,6 +241,7 @@ public class LevelEngine {
         todayHigh = candle.getHigh();
         todayLow = candle.getLow();
         todayOpen = candle.getOpen();
+        todayBars = 0;
 
         // Reset session tracking
         asiaHigh = Double.MIN_VALUE;
@@ -166,6 +250,10 @@ public class LevelEngine {
         londonLow = Double.MAX_VALUE;
         nyHigh = Double.MIN_VALUE;
         nyLow = Double.MAX_VALUE;
+        nyAmHigh = Double.MIN_VALUE;
+        nyAmLow = Double.MAX_VALUE;
+        nyPmHigh = Double.MIN_VALUE;
+        nyPmLow = Double.MAX_VALUE;
         asiaOpen = 0;
         londonOpen = 0;
         nyOpen = 0;
@@ -194,21 +282,38 @@ public class LevelEngine {
      */
     private void updateSessionTracking(ZonedDateTime nyTime, Candle candle) {
         LocalTime time = nyTime.toLocalTime();
-        int hour = time.getHour();
 
         // Determine current session
         boolean wasInAsia = inAsia;
         boolean wasInLondon = inLondon;
         boolean wasInNY = inNY;
+        boolean wasInNyAm = inNyAm;
+        boolean wasInNyPm = inNyPm;
 
-        // Asia: 8 PM - 12 AM NY time
-        inAsia = (hour >= 20 || hour < 0);
+        // V5 Agent 03: configurable windows (see the constants above).
+        inAsia = inWindow(time, asiaStart, asiaEnd);
+        inLondon = inWindow(time, londonStart, londonEnd);
+        inNY = inWindow(time, nyStart, nyEnd);
+        inNyAm = inWindow(time, nyAmStart, nyAmEnd);
+        inNyPm = inWindow(time, nyPmStart, nyPmEnd);
 
-        // London: 2 AM - 5 AM NY time
-        inLondon = (hour >= 2 && hour < 5);
-
-        // NY: 9:30 AM - 4 PM NY time
-        inNY = (hour >= 9 && hour < 16) || (hour == 9 && time.getMinute() >= 30);
+        // NY AM / NY PM sub-session extremes lock at their window close.
+        if (!inNyAm && wasInNyAm && nyAmHigh != Double.MIN_VALUE) {
+            registerLevel(LevelType.NY_AM_HIGH, nyAmHigh, candle.getTimestamp());
+            registerLevel(LevelType.NY_AM_LOW, nyAmLow, candle.getTimestamp());
+        }
+        if (!inNyPm && wasInNyPm && nyPmHigh != Double.MIN_VALUE) {
+            registerLevel(LevelType.NY_PM_HIGH, nyPmHigh, candle.getTimestamp());
+            registerLevel(LevelType.NY_PM_LOW, nyPmLow, candle.getTimestamp());
+        }
+        if (inNyAm) {
+            if (candle.getHigh() > nyAmHigh) nyAmHigh = candle.getHigh();
+            if (candle.getLow() < nyAmLow) nyAmLow = candle.getLow();
+        }
+        if (inNyPm) {
+            if (candle.getHigh() > nyPmHigh) nyPmHigh = candle.getHigh();
+            if (candle.getLow() < nyPmLow) nyPmLow = candle.getLow();
+        }
 
         // Handle session transitions
         if (inAsia && !wasInAsia) {
@@ -263,11 +368,34 @@ public class LevelEngine {
         if (price <= 0 || price == Double.MIN_VALUE || price == Double.MAX_VALUE) {
             return;
         }
+        // V5 Agent 03: every registration is a NEW session/day level and
+        // replaces the old object. The pre-V5 "keep the existing one when
+        // within tolerance" rule kept yesterday's RAIDED object alive when
+        // today's extreme printed within a tick of it — a fresh level that
+        // could never be raided.
+        levels.put(type, new KnownLevel(type, price, timestamp));
+    }
 
-        KnownLevel existing = levels.get(type);
-        if (existing == null || Math.abs(existing.getPrice() - price) > config.getTolerancePrice()) {
-            // New level or significantly different price
-            levels.put(type, new KnownLevel(type, price, timestamp));
+    /**
+     * V5 Agent 03 (RC-07/RC-08): a raided HIGH level re-arms once a whole
+     * candle trades at least {@code levels.rearmDistanceTicks} BELOW it
+     * (price has left the level; fresh buy stops rest above it again) —
+     * mirrored for LOW levels. This is how the 2026-09-28 London high
+     * 30640.00, first traded at 07:00, is again the liquidity the 14:52
+     * retrace raids after the 30356.75 low. Opening prices never re-arm.
+     */
+    private void rearmRaidedLevels(Candle candle) {
+        double dist = rearmDistanceTicks * config.getTickSize();
+        if (dist <= 0) return;
+        for (KnownLevel level : levels.values()) {
+            if (!level.isRaided()) continue;
+            if (level.getType().name().contains("OPEN")) continue;
+            boolean left = level.getType().isHigh()
+                    ? candle.getHigh() < level.getPrice() - dist
+                    : candle.getLow() > level.getPrice() + dist;
+            if (left) {
+                level.rearm();
+            }
         }
     }
 
@@ -458,11 +586,12 @@ public class LevelEngine {
      * Trading day changes at 5 PM NY time (RTH close).
      */
     private LocalDate getTradingDay(ZonedDateTime nyTime) {
-        // If before 5 PM, it's still the previous trading day
-        if (nyTime.getHour() < 17) {
+        // V5 Agent 03 (RC-08): the CME Globex day rolls at 18:00 ET (the
+        // reopen), not 17:00 — the 17:00 roll made the lone Friday 17:00
+        // settlement print a whole "trading day" that became PDH/PDL.
+        if (nyTime.getHour() < 18) {
             return nyTime.toLocalDate();
         }
-        // After 5 PM, it's the next trading day
         return nyTime.toLocalDate().plusDays(1);
     }
 

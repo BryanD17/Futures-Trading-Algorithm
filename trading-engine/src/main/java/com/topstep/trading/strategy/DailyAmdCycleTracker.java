@@ -96,16 +96,15 @@ public class DailyAmdCycleTracker {
         if (candle == null) return;
 
         ZonedDateTime nyTime = candle.getTimestamp().atZone(NY_ZONE);
+        // V5 Agent 03 (RC-08 sibling): a 17:00–18:00 ET halt print is a
+        // settlement tick, not a trading day — never let it reset the cycle.
+        if (nyTime.getHour() == 17) return;
         LocalDate tradingDay = getTradingDay(nyTime);
 
         // Check for day change — reset to ACCUMULATION
         if (currentTradingDay == null || !tradingDay.equals(currentTradingDay)) {
             resetForNewDay(tradingDay, candle);
         }
-
-        // Update session extremes
-        if (candle.getHigh() > sessionHigh) sessionHigh = candle.getHigh();
-        if (candle.getLow() < sessionLow) sessionLow = candle.getLow();
 
         // Update Asia levels from LevelEngine
         levelEngine.getLevel(LevelType.ASIA_HIGH).ifPresent(l -> asiaHigh = l.getPrice());
@@ -114,8 +113,16 @@ public class DailyAmdCycleTracker {
         // Calculate average range for displacement threshold
         double candleRange = candle.getHigh() - candle.getLow();
 
-        // Process phase transitions
+        // V5 Agent 03 (PF-08 / RC-05): process the phase transition against
+        // the PRE-CANDLE references FIRST. The old order folded this candle
+        // into sessionHigh/sessionLow before testing "close < lowRef", which
+        // is impossible by construction (close >= low >= the updated session
+        // low) — V2 could never leave ACCUMULATION and never voted.
         processPhaseTransition(candle, levelEngine, lastDisplacement, candleRange);
+
+        // Update session extremes AFTER the transition test.
+        if (candle.getHigh() > sessionHigh) sessionHigh = candle.getHigh();
+        if (candle.getLow() < sessionLow) sessionLow = candle.getLow();
     }
 
     /**
@@ -373,10 +380,12 @@ public class DailyAmdCycleTracker {
     }
 
     /**
-     * Get trading day from NY time. Trading day changes at 5 PM (RTH close).
+     * Get trading day from NY time. V5 Agent 03: the CME Globex day rolls at
+     * 18:00 ET (the 17:00 roll turned a lone 17:00 settlement print into a
+     * whole "day").
      */
     private LocalDate getTradingDay(ZonedDateTime nyTime) {
-        if (nyTime.getHour() < 17) {
+        if (nyTime.getHour() < 18) {
             return nyTime.toLocalDate();
         }
         return nyTime.toLocalDate().plusDays(1);

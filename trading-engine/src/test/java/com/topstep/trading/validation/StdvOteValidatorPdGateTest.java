@@ -44,7 +44,7 @@ class StdvOteValidatorPdGateTest {
     /** LevelEngine with PDH/PDL locked at the given prior-day extremes. */
     private static LevelEngine levels(double pdh, double pdl) {
         CandleSeries series = new CandleSeries("MNQ", 1000);
-        LevelEngine engine = new LevelEngine("MNQ", series);
+        LevelEngine engine = com.topstep.trading.chartstate.LenientLevels.of("MNQ", series);
         engine.processCandle(new Candle("MNQ", et(24, 10),
                 (pdh + pdl) / 2, pdh, pdl, (pdh + pdl) / 2, 100));
         engine.processCandle(new Candle("MNQ", et(25, 9),
@@ -121,7 +121,7 @@ class StdvOteValidatorPdGateTest {
     @DisplayName("BLOCK + no range data: ABSTAIN passes (doctrine)")
     void abstainPassesThroughValidator() {
         MandatoryConfluenceValidator v = newValidator();
-        LevelEngine empty = new LevelEngine("MNQ", new CandleSeries("MNQ", 10));
+        LevelEngine empty = com.topstep.trading.chartstate.LenientLevels.of("MNQ", new CandleSeries("MNQ", 10));
         v.setPremiumDiscountEvaluator(pd(empty, PremiumDiscountEvaluator.PdMode.BLOCK));
         ValidationResult r = v.validateStdvOte(happyMnqBullish());
         assertThat(r.passed()).as("failures: %s", r.getFailures()).isTrue();

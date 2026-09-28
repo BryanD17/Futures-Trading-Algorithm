@@ -89,6 +89,9 @@ public class HtfTrendAnalyzer {
     private final List<Double> candleBodies15m = new ArrayList<>();
     private static final int MOMENTUM_LOOKBACK = 8;
 
+    /** Candle time of the HTF bar being evaluated (V5 Agent 03, D-01). */
+    private Instant lastEvaluatedAt;
+
     // Pullback depth tracking
     private double lastImpulseHigh = Double.MIN_VALUE;
     private double lastImpulseLow = Double.MAX_VALUE;
@@ -124,8 +127,10 @@ public class HtfTrendAnalyzer {
             displacement30m.update(candle30m);
         }
 
-        // Re-evaluate trend state on any HTF candle close
+        // Re-evaluate trend state on any HTF candle close. V5 Agent 03
+        // (D-01): stamp state changes with CANDLE time, never the wall clock.
         if (candle15m != null || candle30m != null) {
+            lastEvaluatedAt = (candle15m != null ? candle15m : candle30m).getTimestamp();
             evaluateTrendState();
         }
     }
@@ -232,7 +237,7 @@ public class HtfTrendAnalyzer {
         if (newState != currentState) {
             previousState = currentState;
             currentState = newState;
-            lastStateChangeTime = Instant.now();
+            lastStateChangeTime = lastEvaluatedAt;
 
             System.out.println("[" + symbol + "] HTF TREND STATE: " + previousState.getDisplayName() +
                     " → " + currentState.getDisplayName());

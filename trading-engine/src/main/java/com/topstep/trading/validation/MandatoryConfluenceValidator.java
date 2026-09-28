@@ -485,7 +485,17 @@ public class MandatoryConfluenceValidator {
             return ValidationResult.fail(
                     java.util.List.of("M2: trade direction mismatches HTF bias"), "M2");
         }
-        confirmations.add("M2: bias=" + ctx.htfBias);
+        // V5 Agent 03 — the M2 truth table: a LOW sweep primes a LONG and
+        // requires BULLISH; a HIGH sweep primes a SHORT and requires
+        // BEARISH (LiquiditySweep.isBullish() == low swept). Any other
+        // pairing is a counter-bias setup and fails M2.
+        if (ctx.sweep != null && ctx.sweep.isBullish() != biasBullish) {
+            return ValidationResult.fail(
+                    java.util.List.of("M2: " + (ctx.sweep.isBullish() ? "LOW" : "HIGH")
+                            + " sweep (" + (ctx.sweep.isBullish() ? "long" : "short")
+                            + ") vs HTF bias " + ctx.htfBias), "M2");
+        }
+        confirmations.add("M2: bias=" + ctx.htfBias + " epoch=" + ctx.biasEpoch);
 
         // M2b — premium/discount: the proposed ENTRY price (a resting limit,
         // never the current tick) must sit at a DISCOUNT for longs / a
@@ -546,7 +556,9 @@ public class MandatoryConfluenceValidator {
                     java.util.List.of("M4: raid score " + ctx.raidScore
                             + " < instrument minimum " + spec.raidMinQuality()), "M4");
         }
-        confirmations.add("M4: raid score " + ctx.raidScore);
+        confirmations.add("M4: " + (ctx.sweep.isBullish() ? "LOW" : "HIGH") + " sweep of "
+                + ctx.sweep.getSweptLevel() + ", raid score " + ctx.raidScore
+                + " >= " + spec.raidMinQuality());
 
         // M5 — displacement + FVG.
         if (!ctx.displacement || ctx.fvg == null) {

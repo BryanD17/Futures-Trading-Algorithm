@@ -405,6 +405,24 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private final List<Candle> killzoneCandles = new ArrayList<>();
     private boolean killzoneActive = false;
 
+    // ── V5 Agent 03: dealing-range bias, session-aware leg, scored sweeps ──
+    /** The day's dealing range / impulse leg — the bias anchor (RC-06). */
+    private final DealingRangeTracker dealingRange = new DealingRangeTracker();
+    /** True once the tracker has been offered the seeded H1 history. */
+    private boolean dealingRangeWarmChecked = false;
+    /** Current-session candle buffer for the manipulation leg (task 4). */
+    private final SessionLegLocator sessionLegs = new SessionLegLocator();
+    /** Scoring context of the latest raid-pipeline pass (reused to score
+     *  swing sweeps with the SAME facts). */
+    private RaidDetector.RaidDetectionContext lastRaidContext = RaidDetector.RaidDetectionContext.empty();
+    /** Identity of the last LEVEL raid consumed as a sweep. */
+    private String lastConsumedRaidId;
+    /** Sweeps that could not be scored at all (documented fallback, task 7). */
+    private long starvedSweeps = 0;
+    /** Rollback switches (read once at construction). */
+    private final boolean legacySweepMode = BiasConfig.legacySweepMode();
+    private final boolean legacyManipLegMode = BiasConfig.legacyManipLegMode();
+
     /**
      * Construct a runner-ready STDV+OTE strategy for the given symbol.
      *
@@ -488,6 +506,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.pdEvaluator = PremiumDiscountEvaluator.install(
                 symbol, spec.tickSize(), levelEngine);
         validator.setPremiumDiscountEvaluator(pdEvaluator);
+        // V5 Agent 03: M2b judges the entry against the day's DEALING RANGE
+        // (the same range the bias is read from), ahead of R0/R1/R2.
+        pdEvaluator.configureDealingRangeSource(() -> {
+            DealingRangeTracker.Snapshot r = dealingRange.snapshot();
+            return r.decisive() ? new double[] {r.high(), r.low()} : null;
+        });
         // 3-of-4 bias vote (V3 Agent 03): V2's AMD tracker joins the live
         // path (it previously fed only the legacy strategy); default mode
         // LOG — the vote runs and counts agreement, legacy still decides.
@@ -544,6 +568,11 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.allSessions = ScalpConfig.allSessions();
         this.killzoneSizeBoost = ScalpConfig.killzoneSizeBoost();
         this.sizerSafetyCushion = ScalpConfig.sizerSafetyCushion();
+        if (!scalpMode && !BiasConfig.legacySweepMode()) {
+            // V5 Agent 03 (RC-07): legacy mode applies M4's own number at
+            // sweep time too — one floor, checked where the sweep is taken.
+            core.setLegacyMinRaidScore(spec.raidMinQuality());
+        }
         if (scalpMode) {
             core.enableScalpMode(ScalpConfig.targetCalculator(), ScalpConfig.minRaidScore());
             // Re-arm trigger (SA4): observe the position-close funnels via
@@ -683,13 +712,38 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // at the instrument base).
         boolean hasSmt = smtSymbol != null
                 && correlationTracker.hasSMTDivergence(symbol, smtSymbol, 20);
-        Boolean htfBullish = (lastBias == MarketBias.BULLISH) ? Boolean.TRUE
-                : (lastBias == MarketBias.BEARISH) ? Boolean.FALSE : null;
-        boolean displacementEntry = lastBias != MarketBias.NEUTRAL
-                && displacementDetector.hasLayer3EntryTrigger(5, lastBias == MarketBias.BULLISH);
-        raidDetector.processCandle(candle, RaidDetector.RaidDetectionContext.fullWithCascade(
+        // V5 Agent 03 (RC-06/RC-07): the dealing range advances on every 1m
+        // bar (warm-booted once from the seeded H1 ladder when present) and
+        // is published for M2b / Agent 04 BEFORE the raid pass so the
+        // premium/discount factor reads this bar's range.
+        if (!dealingRangeWarmChecked) {
+            dealingRangeWarmChecked = true;
+            List<Candle> seededH1 = barManager.getCandlesSnapshot(Timeframe.H1, 500);
+            if (seededH1 != null && !seededH1.isEmpty() && !dealingRange.hasData()) {
+                dealingRange.warm(seededH1);
+                System.out.println("[BIAS " + symbol + "] dealing range warm-booted from "
+                        + seededH1.size() + " seeded H1 bars -> " + dealingRange.snapshot());
+            }
+        }
+        dealingRange.onCandle(candle);
+        sessionLegs.onCandle(candle);
+        DealingRangeTracker.Snapshot range = dealingRange.snapshot();
+        SetupContext rangeCtx = core.getSetupContext();
+        rangeCtx.rangeHigh = range.high();
+        rangeCtx.rangeLow = range.low();
+        rangeCtx.rangeEq = range.equilibrium();
+        // The HTF-opposes penalty uses the SAME bias M2 judges: the setup's
+        // direction while one is live, else the latest evaluation.
+        MarketBias scoringBias = (rangeCtx.htfBias != MarketBias.NEUTRAL) ? rangeCtx.htfBias : lastBias;
+        Boolean htfBullish = (scoringBias == MarketBias.BULLISH) ? Boolean.TRUE
+                : (scoringBias == MarketBias.BEARISH) ? Boolean.FALSE : null;
+        boolean displacementEntry = scoringBias != MarketBias.NEUTRAL
+                && displacementDetector.hasLayer3EntryTrigger(5, scoringBias == MarketBias.BULLISH);
+        lastRaidContext = RaidDetector.RaidDetectionContext.fullWithCascade(
                 hasSmt, htfBullish, htfTrend.getTrendState().isStrong(),
-                /* zoneConfluenceScore */ 0, displacementEntry, /* targetAlignmentBonus */ 0));
+                /* zoneConfluenceScore */ 0, displacementEntry, /* targetAlignmentBonus */ 0)
+                .withRangeEquilibrium(range.decisive() ? range.equilibrium() : Double.NaN);
+        raidDetector.processCandle(candle, lastRaidContext);
 
         // 4. Post-sweep extremes + post-MSS impulse tracking.
         if (!Double.isNaN(lowSinceSweep)) {
@@ -781,7 +835,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                                 biasVoteEngine.includeH4()
                                         ? barManager.getCandlesSnapshot(Timeframe.H4, 120)
                                         : java.util.List.of()),
-                        legacyBias);
+                        legacyBias,
+                        // V5 Agent 03 (RC-06): the dealing-range anchor.
+                        dealingRange.snapshot());
             }
             MarketBias bias = BiasVoteEngine.effectiveBias(
                     biasVoteEngine.mode(), legacyBias, voteResult);
@@ -891,9 +947,15 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             tryRecordManipulationLeg(ctx);
         }
 
-        // 9. From MANIP_DONE, look for the sweep.
+        // 9. From MANIP_DONE, look for the sweep. V5 Agent 03: from
+        // SWEEP_DONE (no displacement yet) a NEWER raid of a KNOWN level in
+        // the same direction replaces a weaker sweep — the latest liquidity
+        // grab before displacement is the one the model trades (G1: the
+        // 14:52 raid of the 30640 London high).
         if (ctx.state == SetupState.MANIP_DONE) {
             tryRecordSweep(candle);
+        } else if (ctx.state == SetupState.SWEEP_DONE && !legacySweepMode) {
+            tryRefreshSweep(candle);
         }
 
         // 10. From SWEEP_DONE, look for displacement + FVG in bias direction.
@@ -1211,6 +1273,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         barManager.reset();
         htfTrend = new HtfTrendAnalyzer(symbol, barManager);
         amdTracker = new com.topstep.trading.strategy.DailyAmdCycleTracker(symbol);
+        dealingRange.reset();
+        dealingRangeWarmChecked = false;
+        sessionLegs.reset();
         resetTransientState();
         lastPrimaryTimestamp = null;
         lastSmtTimestamp = null;
@@ -1258,6 +1323,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         impulseTracker.reset();
         killzoneCandles.clear();
         killzoneActive = false;
+        lastConsumedRaidId = null;
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -1387,15 +1453,42 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
      */
     private void tryRecordManipulationLeg(SetupContext ctx) {
         boolean biasBullish = (ctx.htfBias == MarketBias.BULLISH);
-        if (killzoneActive && !killzoneCandles.isEmpty()) {
-            Optional<ManipulationLegDetector.Leg> leg = ManipulationLegDetector.detect(
-                    killzoneCandles, biasBullish, spec.tickSize(),
-                    StdvProjectionEngine.DEFAULT_MIN_LEG_TICKS);
-            leg.ifPresent(l -> core.recordManipulationLeg(
-                    l.legLow(), l.legHigh(), spec.tickSize(), MANIP_SNAP_TOL_TICKS));
+        if (legacyManipLegMode) {
+            // Rollback (manip.legMode=KILLZONE): the pre-V5 behaviour.
+            if (killzoneActive && !killzoneCandles.isEmpty()) {
+                Optional<ManipulationLegDetector.Leg> kzLeg = ManipulationLegDetector.detect(
+                        killzoneCandles, biasBullish, spec.tickSize(),
+                        StdvProjectionEngine.DEFAULT_MIN_LEG_TICKS);
+                kzLeg.ifPresent(l -> core.recordManipulationLeg(
+                        l.legLow(), l.legHigh(), spec.tickSize(), MANIP_SNAP_TOL_TICKS));
+                return;
+            }
+            Double sh = structureDetector.getLastSwingHigh();
+            Double sl = structureDetector.getLastSwingLow();
+            if (sh == null || sl == null || !(sh > sl)) return;
+            core.recordManipulationLeg(sl, sh, spec.tickSize(), MANIP_SNAP_TOL_TICKS);
             return;
         }
-        // Fallback (no killzone anchor available): most recent swing pair.
+        // V5 Agent 03 (task 4): with SCORING there is ALWAYS a session. The
+        // leg = the counter-bias excursion of the CURRENT session window
+        // (Judas off the session open, else the excursion that took a known
+        // level); otherwise the most-recent swing pair IMMEDIATELY — the
+        // pre-V5 killzone buffer waited with no fallback (cfg B:
+        // MANIP-no-leg 195–232 bars per session).
+        Optional<SessionLegLocator.Located> leg = sessionLegs.locate(
+                biasBullish, levelEngine.getAllLevels(), spec.tickSize(),
+                StdvProjectionEngine.DEFAULT_MIN_LEG_TICKS);
+        if (leg.isPresent()) {
+            core.recordManipulationLeg(leg.get().legLow(), leg.get().legHigh(),
+                    spec.tickSize(), MANIP_SNAP_TOL_TICKS);
+            if (ctx.state == SetupState.MANIP_DONE) {
+                System.out.println("[" + symbol + "] MANIP leg (" + leg.get().kind() + ", session "
+                        + sessionLegs.currentSession() + "): " + leg.get().legLow()
+                        + " - " + leg.get().legHigh());
+                return;
+            }
+        }
+        // Fallback: most recent swing pair.
         Double swingHigh = structureDetector.getLastSwingHigh();
         Double swingLow = structureDetector.getLastSwingLow();
         if (swingHigh == null || swingLow == null) return;
@@ -1403,50 +1496,189 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         core.recordManipulationLeg(swingLow, swingHigh, spec.tickSize(), MANIP_SNAP_TOL_TICKS);
     }
 
+    /** A sweep resolved for the setup: the event, its pipeline score and
+     *  the scored raid behind it (null only on the starved fallback). */
+    private record ResolvedSweep(LiquiditySweep sweep, int score, LiquidityRaid raid,
+                                 String raidId, Instant swingTs) { }
+
+    /** Bars a raid / swing sweep stays consumable after it printed. */
+    private static final int SWEEP_RECENCY_BARS = 3;
+
     private void tryRecordSweep(Candle candle) {
+        if (legacySweepMode) {
+            tryRecordSweepLegacy(candle);
+            return;
+        }
+        SetupContext ctx = core.getSetupContext();
+        // Direction from the SETUP's bias (the one M2 judges): a bullish
+        // setup wants a sellside (LOW) sweep = LiquiditySweep.isBullish().
+        if (ctx.htfBias == MarketBias.NEUTRAL) return;
+        boolean wantLow = (ctx.htfBias == MarketBias.BULLISH);
+        ResolvedSweep r = resolveSweep(wantLow, false);
+        if (r == null) return;
+        // One floor per mode, enforced in the core (scalp.minRaidScore in
+        // scalp mode, the instrument minimum in legacy): a sub-floor sweep
+        // keeps the machine in MANIP_DONE for a better one.
+        core.recordSweep(r.sweep(), r.score());
+        if (ctx.state == SetupState.SWEEP_DONE) {
+            markConsumed(r);
+            // Begin tracking the reversal-leg origin from the swept extreme.
+            lowSinceSweep = Math.min(r.sweep().getSweptLevel(), candle.getLow());
+            highSinceSweep = Math.max(r.sweep().getSweptLevel(), candle.getHigh());
+            System.out.println("[" + symbol + "] SWEEP recorded: "
+                    + (r.raid() != null ? r.raid() : "starved-fallback score " + r.score()));
+        }
+    }
+
+    /**
+     * V5 Agent 03: in SWEEP_DONE (before any displacement) a NEWER raid of
+     * a KNOWN level in the setup's direction scoring at least the recorded
+     * sweep replaces it. Only level raids refresh (a swing sweep never
+     * displaces a level sweep); the floor still applies.
+     */
+    private void tryRefreshSweep(Candle candle) {
+        SetupContext ctx = core.getSetupContext();
+        if (ctx.htfBias == MarketBias.NEUTRAL || ctx.sweep == null || ctx.displacement) return;
+        boolean wantLow = (ctx.htfBias == MarketBias.BULLISH);
+        ResolvedSweep r = resolveSweep(wantLow, true);
+        if (r == null || r.raid() == null) return;
+        int floor = scalpMode ? ScalpConfig.minRaidScore() : spec.raidMinQuality();
+        if (r.score() < floor || r.score() < ctx.raidScore) return;
+        if (ctx.sweep.getTimestamp() != null && r.sweep().getTimestamp() != null
+                && !r.sweep().getTimestamp().isAfter(ctx.sweep.getTimestamp())) return;
+        ctx.sweep = r.sweep();
+        ctx.raidScore = r.score();
+        markConsumed(r);
+        lowSinceSweep = Math.min(r.sweep().getSweptLevel(), candle.getLow());
+        highSinceSweep = Math.max(r.sweep().getSweptLevel(), candle.getHigh());
+        System.out.println("[" + symbol + "] SWEEP refreshed (newer level raid): " + r.raid());
+    }
+
+    /** Rollback (raid.sweepMode=LEGACY): the pre-V5 sweep path, verbatim. */
+    private void tryRecordSweepLegacy(Candle candle) {
         if (!liquidityDetector.hasRecentSweep(3)) return;
         LiquiditySweep sweep = liquidityDetector.getLastSweep();
         if (sweep == null) return;
-
-        // Idempotency: never consume the same sweep event twice.
         if (sweep.getTimestamp() != null && sweep.getTimestamp().equals(lastConsumedSweepTs)) {
             return;
         }
-
-        // Bias-direction match: bullish setup wants a sellside (low) sweep,
-        // which LiquiditySweep encodes with isBullish() == true.
         boolean wantBullishSweep = (lastBias == MarketBias.BULLISH);
         if (sweep.isBullish() != wantBullishSweep) return;
-
-        // SA5 STRICT binary gate: the score passed to the core is subject to
-        // scalp.minRaidScore in scalp mode regardless of provenance. When
-        // the raid pipeline has no tracked raid the fallback score is the
-        // instrument base (5 for MNQ/MES, 6 for MGC) — in scalp mode with
-        // the default floor 6 that fallback is REJECTED for the index
-        // instruments: a score that cannot be shown >= the floor does not
-        // trade. The core keeps the machine in MANIP_DONE so a later,
-        // pipeline-scored >= floor sweep can still arm inside the window.
-        int score = currentRaidScore(sweep);
+        RaidDirection want = sweep.isBullish() ? RaidDirection.LOW_SWEEP : RaidDirection.HIGH_SWEEP;
+        int score = raidDetector.getActiveRaidByDirection(want)
+                .map(LiquidityRaid::getQualityScore).orElse(spec.raidMinQuality());
         core.recordSweep(sweep, score);
         if (core.getSetupContext().state == SetupState.SWEEP_DONE) {
             lastConsumedSweepTs = sweep.getTimestamp();
-            // Begin tracking the reversal-leg origin from the swept extreme.
             lowSinceSweep = Math.min(sweep.getSweptLevel(), candle.getLow());
             highSinceSweep = Math.max(sweep.getSweptLevel(), candle.getHigh());
         }
     }
 
+    private void markConsumed(ResolvedSweep r) {
+        if (r.raidId() != null) lastConsumedRaidId = r.raidId();
+        if (r.swingTs() != null) lastConsumedSweepTs = r.swingTs();
+    }
+
     /**
-     * Raid quality for the M4 gate: the real 1–10 score of the
-     * direction-matched active raid when the raid pipeline has one;
-     * otherwise the instrument base (keeps M4 satisfiable exactly at the
-     * floor when the pipeline is starved of known levels, matching the
-     * pre-wiring fallback behaviour).
+     * V5 Agent 03 (RC-07): EVERY sweep is scored by the raid pipeline —
+     * the pre-V5 silent fallback to the instrument base (5 = the floor, so
+     * M4 "passed" by coincidence; scalp floor 6 rejected 2,031 sweeps) is
+     * gone. Sources, best score wins:
+     * <ol>
+     *   <li>a LEVEL raid — {@link RaidDetector#getRecentRaid}: a known level
+     *       (PDH/PDL, session high/low, equal level) swept with rejection in
+     *       the last {@link #SWEEP_RECENCY_BARS} bars;</li>
+     *   <li>the LiquidityDetector SWING sweep — the sweep candle scored via
+     *       {@link RaidDetector#scoreSweep} against every level it took (or
+     *       the prior swing extreme it took).</li>
+     * </ol>
      */
-    private int currentRaidScore(LiquiditySweep sweep) {
-        RaidDirection want = sweep.isBullish() ? RaidDirection.LOW_SWEEP : RaidDirection.HIGH_SWEEP;
-        Optional<LiquidityRaid> raid = raidDetector.getActiveRaidByDirection(want);
-        return raid.map(LiquidityRaid::getQualityScore).orElse(spec.raidMinQuality());
+    private ResolvedSweep resolveSweep(boolean wantLow, boolean levelOnly) {
+        RaidDirection want = wantLow ? RaidDirection.LOW_SWEEP : RaidDirection.HIGH_SWEEP;
+        ResolvedSweep best = null;
+        Optional<LiquidityRaid> raid = raidDetector.getRecentRaid(want, SWEEP_RECENCY_BARS);
+        if (raid.isPresent() && !raid.get().getId().equals(lastConsumedRaidId)) {
+            LiquidityRaid lr = raid.get();
+            best = new ResolvedSweep(
+                    new LiquiditySweep(wantLow, lr.getTargetLevel().getPrice(), lr.getRaidTime(),
+                            "DIVERGENT".equals(core.getSetupContext().smtState)),
+                    lr.getQualityScore(), lr, lr.getId(), null);
+        }
+        if (levelOnly) return best;
+        if (liquidityDetector.hasRecentSweep(SWEEP_RECENCY_BARS)) {
+            LiquiditySweep sweep = liquidityDetector.getLastSweep();
+            if (sweep != null && sweep.isBullish() == wantLow
+                    && !(sweep.getTimestamp() != null && sweep.getTimestamp().equals(lastConsumedSweepTs))) {
+                ResolvedSweep swing = scoreSwingSweep(sweep);
+                if (swing != null && (best == null || swing.score() > best.score())) best = swing;
+            }
+        }
+        return best;
+    }
+
+    /** Score a LiquidityDetector sweep through the pipeline (task 6/7);
+     *  null when the event is not a sweep at all (see currentRaidScore). */
+    private ResolvedSweep scoreSwingSweep(LiquiditySweep sweep) {
+        int score = currentRaidScore(sweep);
+        if (score == NOT_A_SWEEP) return null;
+        LiquidityRaid scored = lastScoredSwingRaid;
+        return new ResolvedSweep(sweep, score, scored, null, sweep.getTimestamp());
+    }
+
+    /** currentRaidScore result: the event did not take the prior extreme
+     *  with a rejection — a breakdown/breakout, not a liquidity sweep. */
+    private static final int NOT_A_SWEEP = Integer.MIN_VALUE;
+
+    /** The raid object behind the last {@link #currentRaidScore} (null = starved). */
+    private LiquidityRaid lastScoredSwingRaid;
+
+    /**
+     * Raid quality for the M4 gate — V5 Agent 03: the sweep candle is
+     * scored by {@link RaidDetector#scoreSweep} (known levels it took, else
+     * the prior swing extreme). An event that did not take the prior
+     * extreme with a rejection returns {@link #NOT_A_SWEEP} (ignored). ONLY
+     * when the pipeline cannot score it at all (sweep candle no longer in
+     * the candle series) does the DOCUMENTED starved fallback apply:
+     * {@code raid.starvedScore}, default instrument floor − 1 — an
+     * unscoreable sweep never passes M4. Counted and logged, never silent.
+     */
+    int currentRaidScore(LiquiditySweep sweep) {
+        lastScoredSwingRaid = null;
+        boolean lowSweep = sweep.isBullish();
+        // CandleSeries.getLast is NEWEST-first; walk it oldest-first.
+        List<Candle> recent = new ArrayList<>(candleSeries.getLast(SWEEP_RECENCY_BARS + 12));
+        java.util.Collections.reverse(recent);
+        int at = -1;
+        for (int i = recent.size() - 1; i >= 0; i--) {
+            if (recent.get(i).getTimestamp().equals(sweep.getTimestamp())) {
+                at = i;
+                break;
+            }
+        }
+        if (at >= 1) {
+            double prior = lowSweep ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
+            for (int i = Math.max(0, at - 9); i < at; i++) {
+                prior = lowSweep ? Math.min(prior, recent.get(i).getLow())
+                        : Math.max(prior, recent.get(i).getHigh());
+            }
+            Optional<LiquidityRaid> scored = raidDetector.scoreSweep(
+                    recent.get(at), prior, lowSweep, lastRaidContext);
+            if (scored.isPresent()) {
+                lastScoredSwingRaid = scored.get();
+                return scored.get().getQualityScore();
+            }
+            // The candle is in the series but did not take the prior
+            // extreme with a rejection: LiquidityDetector's "<=" test fires
+            // on equal lows and on closes below — not a sweep. Ignored.
+            return NOT_A_SWEEP;
+        }
+        starvedSweeps++;
+        int fallback = BiasConfig.starvedScore(spec.raidMinQuality());
+        System.out.println("[" + symbol + "] RAID starved-pipeline fallback: sweep @ "
+                + sweep.getSweptLevel() + " could not be scored -> documented base "
+                + fallback + " (raid.starvedScore; count=" + starvedSweeps + ")");
+        return fallback;
     }
 
     private void tryRecordDisplacement() {

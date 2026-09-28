@@ -189,13 +189,25 @@ public final class StdvOteStrategy implements TradingStrategy {
     // entries STILL require the CURRENT bias evaluation to be non-NEUTRAL
     // and aligned — grace preserves PROGRESS, never entry permission.
 
-    /** {@code bias.hysteresis.enabled} — DEFAULT false (counterfactual-log-only). */
-    private boolean biasHysteresisEnabled =
-            com.topstep.trading.config.EngineConfig.current().getBoolean("bias.hysteresis.enabled", false);
+    /** {@code bias.hysteresis} (alias {@code bias.hysteresis.enabled}) —
+     *  V5 Agent 03 (RC-04): DEFAULT true. One NEUTRAL 15m read killed 8
+     *  cfg-A setups on the real tape ("HTF bias became NEUTRAL"). */
+    private boolean biasHysteresisEnabled = BiasConfig.hysteresis();
     /** {@code bias.neutralGraceBars} — consecutive NEUTRAL 15m evaluations
-     *  an in-flight setup survives; default 2, clamped [1,4]. */
-    private int neutralGraceBars = clampGraceBars(
-            com.topstep.trading.config.EngineConfig.current().getInt("bias.neutralGraceBars", 2));
+     *  an in-flight setup survives; V5 default 3, clamped [1,4]. */
+    private int neutralGraceBars = clampGraceBars(BiasConfig.neutralGraceBars());
+    /** Legacy-mode sweep floor (V5 Agent 03); 0 = disabled (unit tests). */
+    private int legacyMinRaidScore = 0;
+
+    /** Runner hook: install the legacy-mode sweep floor (instrument minimum). */
+    void setLegacyMinRaidScore(int floor) {
+        this.legacyMinRaidScore = Math.max(0, floor);
+    }
+
+    /** Last NON-NEUTRAL bias recorded — the reference for biasEpoch. */
+    private MarketBias lastDirectionalBias = MarketBias.NEUTRAL;
+    /** Monotonic count of REAL bias flips (see {@link #recordHtfBias}). */
+    private long biasEpoch = 0L;
     /** Consecutive NEUTRAL evaluations seen while holding the setup. */
     private int neutralGraceCount = 0;
     /** The most recent bias EVALUATION (as opposed to the setup's stored
@@ -365,6 +377,20 @@ public final class StdvOteStrategy implements TradingStrategy {
     void recordHtfBias(MarketBias bias) {
         if (bias == null) bias = MarketBias.NEUTRAL;
         lastRecordedBias = bias;
+        // V5 Agent 03 (RC-04): biasEpoch increments on every REAL flip —
+        // a new NON-NEUTRAL direction different from the last non-NEUTRAL
+        // one. NEUTRAL wobbles (held by hysteresis) and repeated same-bias
+        // records never move it, so consumers (Agent 04's anchors, the M2
+        // check) can tell "same thesis" from "new thesis" idempotently.
+        if (bias != MarketBias.NEUTRAL && bias != lastDirectionalBias) {
+            if (lastDirectionalBias != MarketBias.NEUTRAL) {
+                biasEpoch++;
+            } else if (biasEpoch == 0L) {
+                biasEpoch = 1L; // first directional read opens epoch 1
+            }
+            lastDirectionalBias = bias;
+        }
+        setup.biasEpoch = biasEpoch;
         // OPPOSITE flip = CONTRADICTION: dies immediately, hysteresis or
         // not (behavior unchanged from pre-V2).
         if (setup.htfBias != MarketBias.NEUTRAL
@@ -450,10 +476,17 @@ public final class StdvOteStrategy implements TradingStrategy {
         // sets up the long. LiquiditySweep.isBullish() == true means sweep
         // of lows (per the existing class semantics).
         if (sweep.isBullish() != biasBullish) return;
-        if (isScalpMode() && scalpMinRaidScore > 0
-                && raidScore < scalpMinRaidScore) {
-            System.out.println("[" + symbol + "] SCALP raid-score gate: sweep rejected"
-                    + " (score " + raidScore + " < floor " + scalpMinRaidScore + ")");
+        // V5 Agent 03 (RC-07): ONE floor per mode, applied at sweep time so
+        // a sub-floor sweep never advances only to die at M4 on emission.
+        // Scalp: scalp.minRaidScore (default 6). Legacy: the instrument's
+        // raid minimum (M4's own number), installed by the runner; 0 = off.
+        int floor = isScalpMode() ? scalpMinRaidScore : legacyMinRaidScore;
+        if (floor > 0 && raidScore < floor) {
+            System.out.println("[" + symbol + "] " + (isScalpMode() ? "SCALP " : "")
+                    + "raid-score gate: sweep rejected"
+                    + " (score " + raidScore + " < floor " + floor + ") "
+                    + (sweep.isBullish() ? "LOW@" : "HIGH@") + sweep.getSweptLevel()
+                    + " " + sweep.getTimestamp());
             return;
         }
         setup.sweep = sweep;

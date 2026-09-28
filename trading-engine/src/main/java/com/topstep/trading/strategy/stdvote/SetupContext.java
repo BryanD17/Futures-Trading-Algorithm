@@ -159,4 +159,17 @@ public final class SetupContext {
     public String sessionWindow;
     /** True inside a prime killzone (London 02-05, NY AM 09:45-11, NY PM 13:45-15:45 ET). */
     public boolean primeKillzone;
+
+    // AGENT-03 fields (V5). Market CONTEXT, not per-setup state:
+    // resetForNextWindow() deliberately leaves them untouched.
+
+    /** Count of REAL HTF bias flips (non-NEUTRAL direction changes). */
+    public long biasEpoch;
+
+    /** The day's dealing range (impulse leg) the bias is read from —
+     *  Agent 04's OTE anchor. NaN until the range exists. G1 2026-09-28
+     *  after 10:48 ET: 30759.25 / 30356.75 / EQ 30558.0. */
+    public double rangeHigh = Double.NaN;
+    public double rangeLow = Double.NaN;
+    public double rangeEq = Double.NaN;
 }
