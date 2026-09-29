@@ -171,7 +171,9 @@ class FunnelAutopsyHarness {
         bus.subscribe(com.topstep.trading.event.GateDecisionEvent.class, g -> {
             // V5 Agent 05.4: plus the armed-but-not-emitted reasons (one per reason per episode).
             if (java.util.Set.of("ORDER", "ORDER_TTL", "FLATTEN", "SIZE", "ALARM", "NO_ENTRY",
-                    "POSITION", "TIER", "EMIT", "BIAS").contains(g.getGate())) {
+                    "POSITION", "TIER", "EMIT", "BIAS",
+                    // V5 Agent 05.8: counter-trend scalp decisions (only published with entry.counterTrendScalp=true).
+                    CounterTrendScalp.GATE).contains(g.getGate())) {
                 orderGates.add(g);
             }
         });
@@ -266,9 +268,16 @@ class FunnelAutopsyHarness {
                             exec.submitOrder(o, sig.getStopPrice(), sig.getTargetPrice());
                             counts.get(sess)[6]++;
                             riskCol = "ALLOW qty=" + o.getQuantity() + " " + d.getReason();
+                            // V5 Agent 05.8: mark every counter-trend scalp in the trade log.
+                            if (sig.getReason() != null && sig.getReason().startsWith(CounterTrendScalp.REASON_PREFIX)) {
+                                riskCol += " [CT " + CounterTrendScalp.REASON_PREFIX + "]";
+                            }
                         } else {
                             counts.get(sess)[5]++;
                             riskCol = "DENY " + d.getReason();
+                            if (sig.getReason() != null && sig.getReason().startsWith(CounterTrendScalp.REASON_PREFIX)) {
+                                riskCol += " [CT " + CounterTrendScalp.REASON_PREFIX + "]";
+                            }
                             riskDenials.merge(d.getReason().replaceAll("[0-9.]+", "#"), 1L, Long::sum);
                             bus.publish(new PositionClosedEvent(symbol, 0.0, false, now)); // SIM release
                         }

@@ -74,6 +74,11 @@ setup.expiry.sweepToDisplacement=60
 setup.expiry.displacementToMss=60
 setup.expiry.mssToOte=240
 setup.rearmAfterClose=true
+entry.counterTrendScalp=false
+entry.counterTrend.sessions=ASIA,LONDON,PRE_NY
+entry.counterTrend.minRangeTicks=400
+entry.counterTrend.maxRiskFraction=0.5
+entry.counterTrend.maxPerDay=2
 ```
 
 `scalp.enabled` stays at its code default `false` (legacy target model: T1 = 0.5 of the dealing range, T2 = 0.382, T3 = range extreme). The Topstep envelope (DLL $1,000, MLL $2,000, max 5 contracts / 10 total on the 50K legacy profile, 14:45–17:00 CT no-entry + 15:10 CT flatten) is not configurable.
@@ -102,6 +107,7 @@ setup.rearmAfterClose=true
 | setup.expiry.* | phase budgets after the sweep (60 / 60 / 240 min); `setup.expiryAnchor=SWEEP_DONE_TOTAL` restores the old single 60-min budget |
 | setup.rearmAfterClose | re-arm after the position closes in every target model (false = one trade per window) |
 | news.blockWithoutCalendar | no calendar ≠ blackout |
+| entry.counterTrendScalp (+ entry.counterTrend.*) | OPT-IN, default false (= byte-identical engine). true: short a HIGH sweep inside the PREMIUM OTE band (0.618–0.786 from the low) of a BULLISH dealing range back to equilibrium (T1) / the top of the discount band (final), mirror for longs; IMPULSE_LEG trigger (PD array at the sweep + rejection close); only in `sessions` (NO_ENTRY/WEEKEND never), range ≥ `minRangeTicks`, $ risk = budget × `maxRiskFraction`, ≤ `maxPerDay`, one position per symbol (a with-trend setup may arm while it is open, emits once it is flat). Signals carry `STDV_OTE_CT:`; decisions are GateDecisionEvent gate `CT`. Tape: A-05.8 |
 | strategy.legacyFallback | a non-{MNQ,MES,MGC} symbol fails fast instead of silently running the legacy strategy |
 
 ## 5. Reading the boot table and the gate histogram
@@ -132,6 +138,7 @@ AUTOPSY_PROPS="bias.range.window=SESSION_DAY"                   # pre-05.6 range
 AUTOPSY_PROPS="ote.pdArraySource=SWEEP_BAR"                      # pre-05.5 PD-array rule
 AUTOPSY_PROPS="scalp.enabled=true"                               # scalp target model (1R cap)
 AUTOPSY_PROPS="stdvOte.enabled=false"                            # legacy IctHighConfluence strategy
+AUTOPSY_PROPS="entry.counterTrendScalp=true"                     # opt-in counter-trend scalp (A-05.8)
 ```
 
 ## 8. Results on the proven tape (final matrix v5, Main 55994e6)

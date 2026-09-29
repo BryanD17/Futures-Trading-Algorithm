@@ -481,21 +481,59 @@ public class MandatoryConfluenceValidator {
                     java.util.List.of("M2: HTF bias is NEUTRAL"), "M2");
         }
         boolean biasBullish = (ctx.htfBias == com.topstep.trading.strategy.MarketBias.BULLISH);
-        if (ctx.ote != null && ctx.ote.bullish() != biasBullish) {
-            return ValidationResult.fail(
-                    java.util.List.of("M2: trade direction mismatches HTF bias"), "M2");
+        // V5 Agent 05.8 — the opt-in COUNTER-TREND SCALP (entry.counterTrendScalp)
+        // is the ONE entry kind that trades AGAINST the bias. Every gate below
+        // is evaluated in the TRADE's direction (dirBullish); for every
+        // with-trend setup dirBullish == biasBullish and the chain is unchanged.
+        boolean counterTrend = com.topstep.trading.strategy.stdvote.CounterTrendScalp.ENTRY_KIND
+                .equals(ctx.entryKind);
+        boolean dirBullish = counterTrend ? !biasBullish : biasBullish;
+        if (counterTrend) {
+            // M2 is satisfied by the counter-trend RULE, re-checked here with
+            // its recorded numbers: the trade opposes the bias, the sweep primes
+            // that trade, the range is at least entry.counterTrend.minRangeTicks
+            // and the swept level sits in the bias's premium (short) / discount
+            // (long) half AND inside that half's OTE band.
+            if (ctx.ote == null || ctx.ote.bullish() != dirBullish) {
+                return ValidationResult.fail(java.util.List.of(
+                        "M2: CT trade direction must oppose HTF bias " + ctx.htfBias), "M2");
+            }
+            if (ctx.sweep != null && ctx.sweep.isBullish() != dirBullish) {
+                return ValidationResult.fail(java.util.List.of(
+                        "M2: CT " + (ctx.sweep.isBullish() ? "LOW" : "HIGH") + " sweep does not prime a "
+                                + (dirBullish ? "long" : "short")), "M2");
+            }
+            if (!(ctx.ctRangeTicks >= ctx.ctMinRangeTicks)) {
+                return ValidationResult.fail(java.util.List.of(
+                        "M2: CT range " + ctx.ctRangeTicks + " ticks < min " + ctx.ctMinRangeTicks), "M2");
+            }
+            double eq = (ctx.ote.legHigh() + ctx.ote.legLow()) / 2.0;
+            boolean rightHalf = dirBullish ? ctx.ctSweptLevel < eq : ctx.ctSweptLevel > eq;
+            if (!rightHalf || !(ctx.ctSweptLevel >= ctx.ctBandLo - 1e-6 && ctx.ctSweptLevel <= ctx.ctBandHi + 1e-6)) {
+                return ValidationResult.fail(java.util.List.of(
+                        "M2: CT sweep " + ctx.ctSweptLevel + " not in the " + (dirBullish ? "discount" : "premium")
+                                + " OTE band [" + ctx.ctBandLo + "," + ctx.ctBandHi + "] (eq " + eq + ")"), "M2");
+            }
+            confirmations.add("M2: COUNTER_TREND_SCALP " + (dirBullish ? "long" : "short") + " vs bias="
+                    + ctx.htfBias + " range " + ctx.ctRangeTicks + " >= " + ctx.ctMinRangeTicks
+                    + " ticks, sweep " + ctx.ctSweptLevel + " in [" + ctx.ctBandLo + "," + ctx.ctBandHi + "]");
+        } else {
+            if (ctx.ote != null && ctx.ote.bullish() != biasBullish) {
+                return ValidationResult.fail(
+                        java.util.List.of("M2: trade direction mismatches HTF bias"), "M2");
+            }
+            // V5 Agent 03 — the M2 truth table: a LOW sweep primes a LONG and
+            // requires BULLISH; a HIGH sweep primes a SHORT and requires
+            // BEARISH (LiquiditySweep.isBullish() == low swept). Any other
+            // pairing is a counter-bias setup and fails M2.
+            if (ctx.sweep != null && ctx.sweep.isBullish() != biasBullish) {
+                return ValidationResult.fail(
+                        java.util.List.of("M2: " + (ctx.sweep.isBullish() ? "LOW" : "HIGH")
+                                + " sweep (" + (ctx.sweep.isBullish() ? "long" : "short")
+                                + ") vs HTF bias " + ctx.htfBias), "M2");
+            }
+            confirmations.add("M2: bias=" + ctx.htfBias + " epoch=" + ctx.biasEpoch);
         }
-        // V5 Agent 03 — the M2 truth table: a LOW sweep primes a LONG and
-        // requires BULLISH; a HIGH sweep primes a SHORT and requires
-        // BEARISH (LiquiditySweep.isBullish() == low swept). Any other
-        // pairing is a counter-bias setup and fails M2.
-        if (ctx.sweep != null && ctx.sweep.isBullish() != biasBullish) {
-            return ValidationResult.fail(
-                    java.util.List.of("M2: " + (ctx.sweep.isBullish() ? "LOW" : "HIGH")
-                            + " sweep (" + (ctx.sweep.isBullish() ? "long" : "short")
-                            + ") vs HTF bias " + ctx.htfBias), "M2");
-        }
-        confirmations.add("M2: bias=" + ctx.htfBias + " epoch=" + ctx.biasEpoch);
 
         // M2b — premium/discount: the proposed ENTRY price (a resting limit,
         // never the current tick) must sit at a DISCOUNT for longs / a
@@ -505,7 +543,7 @@ public class MandatoryConfluenceValidator {
         com.topstep.trading.strategy.stdvote.PremiumDiscountEvaluator pd = pdEvaluator;
         if (pd != null) {
             com.topstep.trading.strategy.stdvote.PremiumDiscountEvaluator.GateDecision d =
-                    pd.gateCheck(ctx.entry, biasBullish);
+                    pd.gateCheck(ctx.entry, dirBullish);   // AGENT-05.8: the trade's direction
             if (!d.passed()) {
                 return ValidationResult.fail(
                         java.util.List.of("M2b: " + d.reason()), "M2b");
@@ -567,10 +605,24 @@ public class MandatoryConfluenceValidator {
             return ValidationResult.fail(
                     java.util.List.of("M5: displacement candle / FVG absent"), "M5");
         }
-        if (ctx.fvg.isBullish() != biasBullish) {
+        if (ctx.fvg.isBullish() != dirBullish) {
             return ValidationResult.fail(
                     java.util.List.of("M5: linked " + (ctx.m5LinkKind == null ? "FVG" : ctx.m5LinkKind)
                             + " direction mismatches bias"), "M5");
+        }
+        // V5 Agent 05.8 — COUNTER_TREND_SCALP: M5's facts are the sweep's PD
+        // array (ctx.fvg, in the trade direction) and the REJECTION bar that
+        // fired the alarm: a close back beyond the swept level with a close in
+        // the trade direction (short: close < swept level, down-close).
+        if (counterTrend) {
+            boolean rejected = dirBullish
+                    ? ctx.ctRejectionClose > ctx.ctSweptLevel && ctx.ctRejectionClose > ctx.ctRejectionOpen
+                    : ctx.ctRejectionClose < ctx.ctSweptLevel && ctx.ctRejectionClose < ctx.ctRejectionOpen;
+            if (!rejected) {
+                return ValidationResult.fail(java.util.List.of(
+                        "M5: CT rejection not proven (open " + ctx.ctRejectionOpen + " close " + ctx.ctRejectionClose
+                                + " vs swept " + ctx.ctSweptLevel + ")"), "M5");
+            }
         }
         // V5 Agent 05.2 — IMPULSE_LEG entry model: M5 is proven on the dealing
         // range's impulse leg. Re-check the recorded numbers with the SAME
@@ -616,7 +668,7 @@ public class MandatoryConfluenceValidator {
         if (impulseLeg) {
             // V5 Agent 05.2: the leg's own structure break — the close beyond
             // the last opposing swing, on a leg bar.
-            boolean broke = biasBullish ? ctx.impulseMssClose > ctx.impulseMssSwing
+            boolean broke = dirBullish ? ctx.impulseMssClose > ctx.impulseMssSwing
                                         : ctx.impulseMssClose < ctx.impulseMssSwing;
             if (!broke || ctx.mssAt == null || ctx.mssAt.isBefore(ctx.impulseLegStart)
                     || ctx.mssAt.isAfter(ctx.impulseLegEnd)) {
@@ -643,6 +695,11 @@ public class MandatoryConfluenceValidator {
                     java.util.List.of("M7: planned entry " + ctx.entry
                             + " not in OTE band [" + ctx.ote.f79() + "," + ctx.ote.f62() + "]"),
                     "M7");
+        }
+        if (counterTrend && !(ctx.ctSweptLevel >= Math.min(ctx.ote.f62(), ctx.ote.f79()) - 1e-6
+                && ctx.ctSweptLevel <= Math.max(ctx.ote.f62(), ctx.ote.f79()) + 1e-6)) {
+            return ValidationResult.fail(java.util.List.of(
+                    "M7: CT sweep " + ctx.ctSweptLevel + " not inside the OTE band"), "M7");
         }
         if (impulseLeg && !(ctx.impulseSweptLevel >= Math.min(ctx.ote.f62(), ctx.ote.f79()) - 1e-6
                 && ctx.impulseSweptLevel <= Math.max(ctx.ote.f62(), ctx.ote.f79()) + 1e-6)) {
@@ -681,7 +738,7 @@ public class MandatoryConfluenceValidator {
         com.topstep.trading.strategy.stdvote.Ote30mConfluenceGate m7b = ote30mGate;
         if (m7b != null) {
             com.topstep.trading.strategy.stdvote.Ote30mConfluenceGate.Decision d =
-                    m7b.gateCheck(biasBullish);
+                    m7b.gateCheck(dirBullish);
             if (!d.passed()) {
                 return ValidationResult.fail(
                         java.util.List.of("M7b: " + d.reason()), "M7b");

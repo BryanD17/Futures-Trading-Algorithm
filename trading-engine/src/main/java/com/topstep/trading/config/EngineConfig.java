@@ -138,6 +138,12 @@ public final class EngineConfig {
         k.add(key("risk.rrFloor", Type.DOUBLE, "1.0", "ONE RR band: floor vs T1, legacy profile (Agent 04; risk engine: Agent 05)"));
         k.add(key("risk.rrFloor.scalp", Type.DOUBLE, "0.8", "ONE RR band: floor vs T1, scalp profile (Agent 04)"));
         k.add(key("risk.rrCeiling", Type.DOUBLE, "5.0", "ONE RR band: ceiling vs final target, both profiles (Agent 04)"));
+        // V5 Agent 05.8: opt-in counter-trend scalp (premium sweep -> equilibrium), default OFF
+        k.add(key("entry.counterTrendScalp", Type.BOOL, "false", "opt-in COUNTER-TREND SCALP: short a premium-OTE-band sweep of a BULLISH range to equilibrium (long a discount-band sweep of a BEARISH range); false = byte-identical pre-05.8 engine (Agent 05.8)"));
+        k.add(key("entry.counterTrend.sessions", Type.CSV, "ASIA,LONDON,PRE_NY", "session windows the counter-trend scalp may enter in (NO_ENTRY / WEEKEND are never allowed; NY_AM,NY_LUNCH,NY_PM opt-in) (Agent 05.8)"));
+        k.add(key("entry.counterTrend.minRangeTicks", Type.INT, "400", "minimum dealing range (ticks) for a counter-trend scalp: a move to equilibrium must be worth >= 1R (MNQ 400 = 100 pt) (Agent 05.8)"));
+        k.add(key("entry.counterTrend.maxRiskFraction", Type.DOUBLE, "0.5", "counter-trend scalp $ risk = the normal risk-derived budget x this fraction (clamped 0..1) (Agent 05.8)"));
+        k.add(key("entry.counterTrend.maxPerDay", Type.INT, "2", "maximum counter-trend scalp emissions per CME trading day (18:00 ET roll) (Agent 05.8)"));
         // bias
         k.add(key("bias.vote.mode", Type.ENUM, "VOTE", "LEGACY | LOG | VOTE - which bias feeds recordHtfBias (V5 Agent 03: VOTE)"));
         k.add(key("bias.voteRule", Type.ENUM, "ADAPTIVE", "STRICT_3OF4 | ADAPTIVE vote aggregation (Agent 03)"));
@@ -634,6 +640,12 @@ public final class EngineConfig {
                 + " obLookbackBars=" + getInt("ote.obLookbackBars", 5)
                 + " | ONE RR band legacy [" + getDouble("risk.rrFloor", 1.0) + ", " + getDouble("risk.rrCeiling", 5.0)
                 + "] scalp [" + getDouble("risk.rrFloor.scalp", 0.8) + ", " + getDouble("risk.rrCeiling", 5.0) + "]");
+        out.add("COUNTER-TREND SCALP (Agent 05.8): " + (getBoolean("entry.counterTrendScalp", false)
+                ? "ON sessions=" + getString("entry.counterTrend.sessions", "ASIA,LONDON,PRE_NY")
+                        + " minRangeTicks=" + getInt("entry.counterTrend.minRangeTicks", 400)
+                        + " maxRiskFraction=" + getDouble("entry.counterTrend.maxRiskFraction", 0.5)
+                        + " maxPerDay=" + getInt("entry.counterTrend.maxPerDay", 2)
+                : "OFF (entry.counterTrendScalp=false)"));
         out.add("LIFECYCLE (Agent 05.3): setup.rearmAfterClose=" + getBoolean("setup.rearmAfterClose", true)
                 + " rearmCooldownBars=" + getInt("setup.rearmCooldownBars", 5)
                 + " | unfilled entry cancelled when its setup ends (order.ttlBars = backstop)");
