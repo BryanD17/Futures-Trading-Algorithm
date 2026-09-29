@@ -38,6 +38,7 @@ class BracketProtectionTest {
     void setUp() {
         connector = mock(TopstepConnector.class);
         manager = new BracketOrderManager(connector);
+        manager.setRetryBackoffMs(0);
         manager.setListener(new BracketOrderManager.BracketListener() {
             @Override public void onStopLossFilled(BracketOrderManager.BracketOrder b, double px) { protectiveExit.set(px); }
             @Override public void onTakeProfitFilled(BracketOrderManager.BracketOrder b, double px) {}
@@ -104,7 +105,9 @@ class BracketProtectionTest {
         manager.checkPriceBreakevenTrigger("MNQ", 20006.0, 0.25);
 
         verify(connector).cancelOrder("SL-1");
-        verify(connector, times(1 + 2 * BracketOrderManager.PROTECTIVE_RETRIES))
+        // AGENT-05.11: place-then-cancel adds phase A (new level alongside the old
+        // stop, 3x) before cancel-then-place (new level 3x, old level 3x).
+        verify(connector, times(1 + 3 * BracketOrderManager.PROTECTIVE_RETRIES))
                 .submitStopOrder(anyString(), any(), anyInt(), anyDouble(), any());
         verify(connector).submitOrder(any(), any());
         assertThat(manager.hasBracket("MNQ")).isFalse();

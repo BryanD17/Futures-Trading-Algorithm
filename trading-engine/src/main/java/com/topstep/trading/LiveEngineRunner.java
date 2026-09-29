@@ -343,6 +343,27 @@ public class LiveEngineRunner {
                 public void onBracketCanceled(BracketOrderManager.BracketOrder bracket, String reason) {
                     System.out.println("[BRACKET] Bracket canceled for " + bracket.symbol + ": " + reason);
                 }
+
+                @Override
+                public void onPositionAdopted(BracketOrderManager.BracketOrder bracket) {
+                    // AGENT-05.11: an untracked broker position was adopted
+                    // (restart). Register it so the entry gates see the
+                    // symbol as IN POSITION (no second entry) and its exit
+                    // books P&L through the normal bracket funnel.
+                    if (!accountState.hasPosition(bracket.symbol)) {
+                        int signed = bracket.isLong() ? bracket.totalQuantity : -bracket.totalQuantity;
+                        accountState.addPosition(new Position(bracket.symbol, signed, bracket.entryPrice));
+                    }
+                    System.err.println("[LIVE] ADOPTED broker position registered: " + bracket.symbol + " "
+                            + (bracket.isLong() ? "LONG " : "SHORT ") + bracket.totalQuantity + " @ " + bracket.entryPrice
+                            + " (stop " + bracket.stopOrderId + " @ " + bracket.stopPrice + ")");
+                }
+            });
+            // AGENT-05.11: the stop protects the POSITION's size, never a
+            // bookkeeping counter (LIVE 2026-09-29: qty 0 after a partial).
+            this.bracketManager.setPositionQuantityProvider(sym -> {
+                Position p = accountState.getPosition(sym);
+                return p == null ? 0 : Math.abs(p.getQuantity());
             });
         } else {
             this.bracketManager = null;
@@ -631,6 +652,19 @@ public class LiveEngineRunner {
             eventBus.start();
             System.out.println("✓ EventBus started");
 
+            // AGENT-05.11: restart safety — adopt any broker position the
+            // engine does not track (protective stop verified / placed at
+            // breakeven) BEFORE any signal can trade.
+            if (bracketManager != null) {
+                try {
+                    bracketManager.reconcileOnStartup();
+                } catch (Exception e) {
+                    com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.reconcileOnStartup", e);
+                    System.err.println("❌ ERROR startup broker reconciliation failed: " + e.getMessage()
+                            + " — periodic reconciliation will retry");
+                }
+            }
+
             // Register with facade
             EngineFacade.getInstance().initialize(
                 EngineFacade.Mode.LIVE,
@@ -729,6 +763,21 @@ public class LiveEngineRunner {
                 this::checkStaleOrders,
                 30, 30, TimeUnit.SECONDS
             );
+
+            // AGENT-05.11: broker-verified bracket reconciliation (every 30 s):
+            // position without a stop -> re-place; stop size != position ->
+            // fix; untracked broker position -> adopt.
+            if (bracketManager != null) {
+                scheduler.scheduleAtFixedRate(() -> {
+                    try {
+                        bracketManager.reconcileWithBroker();
+                    } catch (Exception e) {
+                        com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.reconcileBrackets", e);
+                        System.err.println("❌ ERROR bracket reconciliation failed: " + e.getMessage());
+                    }
+                }, 30, 30, TimeUnit.SECONDS);
+                System.out.println("✓ Bracket broker reconciliation scheduled (every 30s)");
+            }
 
             // Schedule account balance sync with Topstep (every 5 minutes)
             // Ensures local state stays aligned with actual account balance
