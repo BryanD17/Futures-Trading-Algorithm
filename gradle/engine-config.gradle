@@ -28,7 +28,9 @@ ext.engineConfigPrefixes = [
         // reserved for Agents 02-05 (V5 Appendix C keys)
         'warmup.', 'size.', 'risk.', 'news.', 'order.',
         // Agent 04 (M5 FVG linkage)
-        'fvg.'
+        'fvg.',
+        // Agent 05.8 (opt-in counter-trend scalp)
+        'entry.'
 ]
 
 /** System properties of THIS gradle JVM that belong to the engine. */

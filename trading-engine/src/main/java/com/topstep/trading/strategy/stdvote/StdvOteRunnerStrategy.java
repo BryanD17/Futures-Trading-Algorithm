@@ -262,6 +262,14 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
      * thread-confined, so all state mutation happens flag-and-apply style.
      */
     private final AtomicBoolean pendingPositionClosed = new AtomicBoolean(false);
+
+    // AGENT-05.8: the opt-in counter-trend scalp (entry.counterTrendScalp).
+    // NULL when the flag is off - nothing below runs and the engine is
+    // byte-identical to the pre-05.8 runner. A PositionClosedEvent that
+    // arrives while the scalp owns the symbol's order/position is routed
+    // HERE, never to the with-trend latch (one position per symbol).
+    private final CounterTrendScalp counterTrend;
+    private final AtomicBoolean ctPendingClosed = new AtomicBoolean(false);
     /** True from signal emission until a PositionClosedEvent for this symbol. */
     private volatile boolean positionOpen = false;
     /** AGENT-05 (RC-16): account trade count / day at emission — a release
@@ -616,10 +624,22 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // PositionClosedEvent) left the machine IN_TRADE for 200 minutes.
         // The handler only flips a flag — all state mutation happens on the
         // candle thread (SetupContext is thread-confined).
+        this.counterTrend = CounterTrendScalp.Config.enabledInConfig()
+                ? new CounterTrendScalp(symbol, CounterTrendScalp.Config.fromEngineConfig(), spec.tickSize())
+                : null;
+        if (counterTrend != null) {
+            System.out.println("[StdvOteRunnerStrategy] " + symbol + " COUNTER-TREND SCALP ON ("
+                    + counterTrend.config().describe() + ")");
+        }
         if (eventBus != null) {
             eventBus.subscribe(PositionClosedEvent.class, evt -> {
                 if (this.symbol.equals(evt.getSymbol())) {
-                    pendingPositionClosed.set(true);
+                    CounterTrendScalp ct = this.counterTrend;
+                    if (ct != null && ct.ownsPosition()) {
+                        ctPendingClosed.set(true);          // AGENT-05.8: the scalp's close / release
+                    } else {
+                        pendingPositionClosed.set(true);
+                    }
                 }
             });
         }
@@ -637,6 +657,16 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** Read-only access to the underlying setup context (used by the API + tests). */
     public SetupContext getSetupContext() {
         return core.getSetupContext();
+    }
+
+    /** AGENT-05.8: the counter-trend scalp's own SetupContext (null when entry.counterTrendScalp=false). */
+    public SetupContext getCounterTrendContext() {
+        return counterTrend == null ? null : counterTrend.context();
+    }
+
+    /** AGENT-05.8 test hook: the scalp (null when the flag is off). */
+    CounterTrendScalp counterTrendForTest() {
+        return counterTrend;
     }
 
     // Test hooks for the entry-fill timeout (2026-07-27 no-trade fix).
@@ -1087,6 +1117,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // AGENT-05.4: a new OTE_ARMED episode republishes its diagnostics.
         if (ctx.state != SetupState.OTE_ARMED) lastArmedDiagnostic = null;
 
+        // AGENT-05.8: the opt-in counter-trend scalp runs AFTER the with-trend
+        // machine (the with-trend setup has priority on a shared bar).
+        if (counterTrend != null) {
+            stepCounterTrend(candle, context, range);
+        }
+
         // Remember the state for INVALIDATED-transition detection (SA4).
         lastSeenState = ctx.state;
     }
@@ -1393,7 +1429,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // NO-OVERLAP: never arm a new setup while a position is open on this
         // symbol — the event-tracked flag plus the live account map.
         if (positionOpen) return false;
-        if (context != null && context.hasPosition(symbol)) return false;
+        // AGENT-05.8: the counter-trend scalp's position blocks with-trend
+        // EMISSION (tryEmitOrder), not the with-trend hunt - it may arm.
+        if (context != null && context.hasPosition(symbol)
+                && !(counterTrend != null && counterTrend.ownsPosition())) return false;
         // Mirror the PropFirmRiskEngine frequency gates (3b in evaluate()):
         // arming a setup the engine would block is pointless and would burn
         // the killzone window.
@@ -1501,6 +1540,10 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         emittedSetupActive = false;      // AGENT-05.3
         lastSeenState = SetupState.IDLE;
         rearmBiasGuard.reset();          // AGENT-02
+        if (counterTrend != null) {      // AGENT-05.8
+            counterTrend.reset();
+            ctPendingClosed.set(false);
+        }
         sessionWindowNow = null;         // AGENT-02
         lastSessionWindow = null;        // AGENT-02
         core.resetForNextWindow();
@@ -1810,10 +1853,16 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
      * </ol>
      */
     private ResolvedSweep resolveSweep(boolean wantLow, boolean levelOnly) {
+        return resolveSweep(wantLow, levelOnly, lastConsumedRaidId, lastConsumedSweepTs);
+    }
+
+    /** AGENT-05.8: the same resolution against a caller's own consumption markers. */
+    private ResolvedSweep resolveSweep(boolean wantLow, boolean levelOnly,
+                                       String consumedRaidId, Instant consumedSweepTs) {
         RaidDirection want = wantLow ? RaidDirection.LOW_SWEEP : RaidDirection.HIGH_SWEEP;
         ResolvedSweep best = null;
         Optional<LiquidityRaid> raid = raidDetector.getRecentRaid(want, SWEEP_RECENCY_BARS);
-        if (raid.isPresent() && !raid.get().getId().equals(lastConsumedRaidId)) {
+        if (raid.isPresent() && !raid.get().getId().equals(consumedRaidId)) {
             LiquidityRaid lr = raid.get();
             best = new ResolvedSweep(
                     new LiquiditySweep(wantLow, lr.getTargetLevel().getPrice(), lr.getRaidTime(),
@@ -1824,7 +1873,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         if (liquidityDetector.hasRecentSweep(SWEEP_RECENCY_BARS)) {
             LiquiditySweep sweep = liquidityDetector.getLastSweep();
             if (sweep != null && sweep.isBullish() == wantLow
-                    && !(sweep.getTimestamp() != null && sweep.getTimestamp().equals(lastConsumedSweepTs))) {
+                    && !(sweep.getTimestamp() != null && sweep.getTimestamp().equals(consumedSweepTs))) {
                 ResolvedSweep swing = scoreSwingSweep(sweep);
                 if (swing != null && (best == null || swing.score() > best.score())) best = swing;
             }
@@ -1933,6 +1982,346 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         }
     }
 
+    // ======================================================================
+    // AGENT-05.8 - OPT-IN COUNTER-TREND SCALP (entry.counterTrendScalp)
+    // A premium-OTE-band sweep of a BULLISH range is shorted back to the
+    // range equilibrium (T1) / the top of the discount band (final); mirror
+    // for longs in a BEARISH range. Its own SetupContext, its own sweep
+    // consumption, the same validator (M2 = the counter-trend rule, every
+    // other gate in the trade's direction), half the $ budget, maxPerDay,
+    // bounded sessions, one position per symbol. Every refusal writes the
+    // scalp context's lastGateFailed and ONE GateDecisionEvent "CT".
+    // ======================================================================
+
+    private void stepCounterTrend(Candle candle, StrategyContext context, DealingRangeTracker.Snapshot range) {
+        CounterTrendScalp ct = counterTrend;
+        ct.onFeedCandle(candle);
+        SetupContext cctx = ct.context();
+        Instant now = candle.getTimestamp();
+        cctx.sessionWindow = sessionWindowNow == null ? null : sessionWindowNow.name();
+        cctx.primeKillzone = primeKillzoneNow;
+        cctx.killzoneOpen = killzoneActive;
+        cctx.rangeHigh = range.high();
+        cctx.rangeLow = range.low();
+        cctx.rangeEq = range.equilibrium();
+        boolean accountPos = context != null && context.hasPosition(symbol);
+
+        // 1. Lifecycle of an emitted scalp: close / release -> flat -> hunt.
+        if (ctPendingClosed.compareAndSet(true, false) && ct.ownsPosition()) {
+            ct.onFlat();
+            ctDecision(ct, "CT: scalp flat (closed / released) - back to hunting the with-trend setup",
+                    candle.getClose(), Double.NaN);
+        }
+        if (ct.phase() == CounterTrendScalp.Phase.WORKING) {
+            if (accountPos) {
+                ct.onFilled();
+            } else {
+                CounterTrendScalp.Plan p = ct.plan();
+                String why = null;
+                double a = Double.NaN;
+                double b = Double.NaN;
+                if (entryTimeoutBars > 0 && ct.workingBars() > entryTimeoutBars) {
+                    why = "CT: entry not filled within " + entryTimeoutBars + " bars";
+                    a = ct.workingBars();
+                    b = entryTimeoutBars;
+                } else if (p != null && ct.workingBars() > 0
+                        && (p.tradeBullish() ? candle.getHigh() >= p.t1() : candle.getLow() <= p.t1())) {
+                    why = "CT: equilibrium " + p.t1() + " traded before the entry " + p.entry() + " filled";
+                    a = p.t1();
+                    b = p.entry();
+                } else if (SessionClassifier.blocksEntry(now)) {
+                    why = "CT: " + sessionWindowNow + " - resting scalp entry cancelled";
+                }
+                if (why != null) {
+                    System.out.println("[" + symbol + "] " + why + " - cancelling the resting scalp entry");
+                    if (eventBus != null) {
+                        eventBus.publish(new com.topstep.trading.event.SetupCancelledEvent(symbol, why, now));
+                    }
+                    ct.onFlat();
+                    ctDecision(ct, why, a, b);
+                }
+            }
+        }
+        if (ct.ownsPosition()) return;   // one position per symbol: nothing to hunt while it is open
+
+        // 2. ARMED episode housekeeping.
+        if (ct.phase() == CounterTrendScalp.Phase.ARMED) {
+            OteZone z = ct.zone();
+            boolean tradeBullish = z.bullish();
+            MarketBias armedRangeDir = tradeBullish ? MarketBias.BEARISH : MarketBias.BULLISH;
+            if (tradeBullish ? candle.getClose() < z.one00() : candle.getClose() > z.one00()) {
+                ctDisarm(ct, "CT: close " + candle.getClose() + " beyond the range 1.0 " + z.one00(),
+                        candle.getClose(), z.one00());
+            } else if (ct.barsArmed() > maxBarsInOte) {
+                ctDisarm(ct, "CT: armed window expired (" + maxBarsInOte + " bars)", ct.barsArmed(), maxBarsInOte);
+            } else if (!range.decisive() || range.direction() != armedRangeDir) {
+                ctDisarm(ct, "CT: range now " + range.direction() + " (armed against " + armedRangeDir + ")",
+                        range.high(), range.low());
+            }
+        }
+
+        // 3. HUNT: a fresh sweep in the scalp's direction (its own consumption markers).
+        if (range.decisive() && range.direction() != MarketBias.NEUTRAL) {
+            boolean wantLow = range.direction() == MarketBias.BEARISH;   // long scalp in a bearish range
+            ResolvedSweep r = resolveSweep(wantLow, false, ct.consumedRaidId(), ct.consumedSweepTs());
+            if (r != null) {
+                ct.markConsumed(r.raidId(), r.swingTs());
+                double level = r.sweep().getSweptLevel();
+                double ext = extremeSince(r.sweep().getTimestamp(), !wantLow, level, candle);
+                int floor = scalpMode ? ScalpConfig.minRaidScore() : spec.raidMinQuality();
+                // M4 for the scalp: the SAME pipeline and the SAME floor, scored
+                // HTF-NEUTRAL - the scorer's "opposing HTF trend -4" (and the
+                // +2/+3 alignment bonus) is the with-trend rule M2 already
+                // adjudicates; for a counter-trend entry M2 is the CT rule, so
+                // the HTF term is excluded instead of counted twice.
+                int ctScore = ctNeutralScore(r.sweep(), wantLow, r.score());
+                CounterTrendScalp.Verdict v = CounterTrendScalp.qualify(ct.config(), spec.tickSize(),
+                        range.high(), range.low(), range.direction(), range.decisive(), lastBias,
+                        r.sweep(), ctScore, floor, ext, OteConfig.impulseMinSweepFib(),
+                        sessionWindowNow, candle.getClose());
+                if (v.armed()) {
+                    ct.arm(v, r.sweep(), ctScore, candle, now);
+                    OteZone z = v.zone();
+                    cctx.htfBias = range.direction();
+                    cctx.ctRangeTicks = Math.round((range.high() - range.low()) / spec.tickSize() * 1e6) / 1e6;
+                    cctx.ctMinRangeTicks = ct.config().minRangeTicks();
+                    cctx.ctSweptLevel = level;
+                    cctx.ctBandLo = Math.min(z.f62(), z.f79());
+                    cctx.ctBandHi = Math.max(z.f62(), z.f79());
+                    cctx.ctRejectionOpen = Double.NaN;
+                    cctx.ctRejectionClose = Double.NaN;
+                    ctDecision(ct, "CT: ARMED " + (z.bullish() ? "long" : "short") + " vs " + range.direction()
+                            + " range [" + range.low() + "," + range.high() + "] sweep " + level + " ext " + ext
+                            + " score " + ctScore + " (HTF-neutral; with-trend context " + r.score() + ")"
+                            + " in band [" + cctx.ctBandLo + "," + cctx.ctBandHi + "]",
+                            level, ext);
+                } else if (ct.phase() != CounterTrendScalp.Phase.ARMED) {
+                    ctDecision(ct, v.reason(), v.a(), v.b());
+                    if (v.reason().startsWith("CT: raid score")) {
+                        // Evidence: the M4 scoring factors of an in-band scalp sweep below the floor.
+                        System.out.println("[" + symbol + "] CT sweep scored " + ctScore + " HTF-neutral; with-trend context: "
+                                + (r.raid() != null ? r.raid() : "starved-fallback " + r.score()));
+                    }
+                }
+            }
+        }
+
+        // 4. ALARM (PD array at the sweep + rejection close) and emission.
+        if (ct.phase() != CounterTrendScalp.Phase.ARMED) return;
+        OteZone z = ct.zone();
+        boolean tradeBullish = z.bullish();
+        double level = ct.sweep().getSweptLevel();
+        if (!ct.alarmed()) {
+            Optional<PdArrayLocator.PdArray> sweepBarOb = Optional.empty();
+            Instant sweepTs = ct.sweep().getTimestamp();
+            PdArrayLocator pd = oteDriver.pdArrays();
+            if (sweepTs != null) {
+                long secs = detectorTimeframe.getMinutes() * 60L;
+                Instant barStart = Instant.ofEpochSecond(Math.floorDiv(sweepTs.getEpochSecond(), secs) * secs);
+                long idx = pd.indexOf(barStart);
+                if (idx >= 0) sweepBarOb = pd.sweepOrderBlock(idx, tradeBullish, level);
+            }
+            List<PdArrayLocator.PdArray> cands = CounterTrendScalp.candidates(tradeBullish, level,
+                    ct.sweepBar(), ct.sweepPrior(), sweepBarOb, pd.candidates(tradeBullish));
+            Optional<PdArrayLocator.PdArray> best = PdArrayLocator.bestInBand(cands, z);
+            double lo = Math.min(z.f62(), z.f79());
+            double hi = Math.max(z.f62(), z.f79());
+            if (best.isEmpty()) {
+                ctDecision(ct, "CT: no PD array at the sweep " + level + " overlaps the band [" + lo + "," + hi + "]",
+                        level, lo);
+                return;
+            }
+            String reaction = OteSetupDriver.impulseReaction(z, candle, level);
+            if (reaction == null) {
+                ctDecision(ct, "CT: awaiting the rejection close back " + (tradeBullish ? "above" : "below")
+                        + " swept " + level, level, candle.getClose());
+                return;
+            }
+            CounterTrendScalp.Plan p = CounterTrendScalp.plan(z, best.get(), ct.sweepExtreme(),
+                    spec.tickSize(), stopBufferTicks, OteConfig.rrCeiling());
+            ct.markAlarmed(p, now);
+            cctx.ctRejectionOpen = candle.getOpen();
+            cctx.ctRejectionClose = candle.getClose();
+            ctDecision(ct, "CT: ALARM " + reaction + " | pd " + best.get().kind() + " [" + best.get().bottom()
+                    + "," + best.get().top() + "] entry " + p.entry() + " stop " + p.stop()
+                    + " T1(eq) " + p.t1() + " final " + p.finalTarget(), p.entry(), p.stop());
+        }
+        tryEmitCounterTrend(ct, candle, context, accountPos);
+    }
+
+    /** Emission attempt of an alarmed scalp: every refusal is reasoned + published. */
+    private void tryEmitCounterTrend(CounterTrendScalp ct, Candle candle, StrategyContext context,
+                                     boolean accountPos) {
+        SetupContext cctx = ct.context();
+        CounterTrendScalp.Plan p = ct.plan();
+        OteZone z = ct.zone();
+        Instant now = candle.getTimestamp();
+        MarketBias rangeDir = z.bullish() ? MarketBias.BEARISH : MarketBias.BULLISH;
+        if (!ct.config().sessionAllowed(sessionWindowNow)) {
+            ctDecision(ct, "CT: session " + sessionWindowNow + " not in entry.counterTrend.sessions "
+                    + ct.config().sessions(), Double.NaN, Double.NaN);
+            return;
+        }
+        if (!ct.quotaLeft(now)) {
+            ctDecision(ct, "CT: entry.counterTrend.maxPerDay " + ct.config().maxPerDay() + " reached ("
+                    + ct.emitsOn(now) + " today)", ct.emitsOn(now), ct.config().maxPerDay());
+            return;
+        }
+        if (lastBias != rangeDir) {
+            ctDecision(ct, "CT: bias now " + lastBias + " (scalp armed against " + rangeDir + ")",
+                    Double.NaN, Double.NaN);
+            return;
+        }
+        if (positionOpen || accountPos) {
+            ctDecision(ct, "CT: " + symbol + " not flat (with-trend latch=" + positionOpen + ", account="
+                    + accountPos + ") - one position per symbol", positionOpen ? 1 : 0, accountPos ? 1 : 0);
+            return;
+        }
+        double rrFloor = OteConfig.rrFloor(scalpMode);
+        if (p.rrT1() < rrFloor - 1e-9) {
+            ctDecision(ct, "CT: RR to equilibrium " + String.format("%.2f", p.rrT1()) + " < floor " + rrFloor
+                    + " (entry " + p.entry() + " stop " + p.stop() + " T1 " + p.t1() + ")", p.rrT1(), rrFloor);
+            return;
+        }
+        // Size: the SAME risk-derived sizer on budget x maxRiskFraction.
+        int cap = Math.min(Math.min(com.topstep.trading.risk.RiskConfig.maxMicros(), spec.maxMicros()),
+                activeRiskLimits.getMaxContracts());
+        double dllRoom = Double.NaN;
+        double mllRoom = Double.NaN;
+        AccountState account = (context != null) ? context.getAccountState() : null;
+        if (account != null) {
+            dllRoom = activeRiskLimits.getMaxDailyLoss() + account.getNetDailyPnl();
+            mllRoom = activeRiskLimits.getMaxLossLimit()
+                    - (account.getHighestEndOfDayBalance() - account.getEquity());
+        }
+        double budget = StdvOteSizer.riskBudget(activeRiskLimits.getRiskPerTrade(), dllRoom, mllRoom);
+        double ctBudget = CounterTrendScalp.scaledBudget(budget, ct.config().maxRiskFraction());
+        StdvOteSizer.RiskSize rs = StdvOteSizer.riskDerived(ctBudget, p.entry(), p.stop(),
+                spec.tickSize(), spec.tickValue(), com.topstep.trading.risk.RiskConfig.minMicros(), cap);
+        if (rs.denied()) {
+            ctDecision(ct, "CT: " + rs.reason() + " [x" + ct.config().maxRiskFraction() + " budget]",
+                    rs.needDollars(), rs.haveDollars());
+            return;
+        }
+        int size = rs.contracts();
+        // The validator: M2 = the counter-trend rule, every other gate in the trade's direction.
+        cctx.state = SetupState.OTE_ARMED;
+        cctx.htfBias = rangeDir;
+        cctx.biasEpoch = core.getSetupContext().biasEpoch;
+        cctx.displacement = true;
+        cctx.fvg = p.pd().asFairValueGap();
+        cctx.m5LinkKind = "CT_REJECTION+" + p.pd().kind();
+        cctx.displacementAt = ct.sweep().getTimestamp();
+        cctx.mss = true;
+        cctx.mssAt = ct.context().oteAlarmAt;
+        cctx.ote = z;
+        cctx.oteAnchorMode = OteAnchorMode.DEALING_RANGE.name();
+        cctx.oteAnchorSource = "COUNTER_TREND";
+        cctx.pdArrayInOte = p.entry();
+        cctx.pdArrayKind = p.pd().kind();
+        cctx.pdArrayFarEdge = p.pd().farEdge();
+        cctx.sweepExtreme = ct.sweepExtreme();
+        cctx.entry = p.entry();
+        cctx.stop = p.stop();
+        cctx.t1 = p.t1();
+        cctx.t2 = p.finalTarget();
+        cctx.t3 = 0.0;
+        cctx.finalTarget = p.target();
+        cctx.rr = p.rrFinal();
+        cctx.rrT1 = p.rrT1();
+        cctx.scalpProfile = scalpMode;
+        cctx.tier = TradeTier.TIER_1;
+        cctx.sizeRequest = size;
+        cctx.ctRiskFraction = ct.config().maxRiskFraction();
+        cctx.lastGateFailed = null;
+        com.topstep.trading.validation.ValidationResult res = validator.validateStdvOte(cctx);
+        if (!res.passed()) {
+            ctDecision(ct, "CT: validator " + (res.getFailures().isEmpty() ? res.getSummary()
+                    : String.join("; ", res.getFailures())), p.entry(), p.stop());
+            return;
+        }
+        boolean bullish = z.bullish();
+        double[][] ladder = (p.target() == p.t1())
+                ? new double[][] {{ p.rrT1(), 1.0 }}
+                : new double[][] {{ p.rrT1(), 0.5 }, { p.rrFinal(), 0.5 }};
+        com.topstep.trading.event.StrategySignalEvent signal = new com.topstep.trading.event.StrategySignalEvent(
+                bullish ? com.topstep.trading.event.StrategySignalEvent.SignalType.LONG_ENTRY
+                        : com.topstep.trading.event.StrategySignalEvent.SignalType.SHORT_ENTRY,
+                symbol,
+                bullish ? com.topstep.trading.domain.OrderSide.BUY : com.topstep.trading.domain.OrderSide.SELL,
+                p.entry(), p.stop(), p.target(),
+                CounterTrendScalp.REASON_PREFIX + " " + (bullish ? "long" : "short") + " vs " + rangeDir
+                        + " range [" + z.legLow() + "," + z.legHigh() + "] sweep " + ct.sweep().getSweptLevel()
+                        + " pd=" + p.pd().kind() + " size=" + size + " (risk x" + ct.config().maxRiskFraction() + ")"
+                        + " T1(eq)=" + p.t1() + " final=" + p.finalTarget()
+                        + " RR(T1)=" + String.format("%.2f", p.rrT1())
+                        + " RR=" + String.format("%.2f", p.rrFinal()),
+                TradeTier.TIER_1, size, p.rrFinal(), ladder, false, lastCandleInstant);
+        if (eventBus != null) {
+            eventBus.publish(signal);
+        }
+        ct.onEmitted(now);
+        cctx.sizeFilled = size;
+        ctDecision(ct, "CT: EMITTED " + signal.getReason(), p.entry(), p.stop());
+    }
+
+    /**
+     * AGENT-05.8: the scalp sweep's M4 score through THE pipeline
+     * ({@link RaidDetector#scoreSweep}, pure: registers nothing) with the HTF
+     * term neutral (htfBullish = null: no alignment bonus, no opposing-trend
+     * penalty), no displacement-entry bonus, this bar's SMT flag and range
+     * equilibrium. Falls back to the with-trend-context score when the raid
+     * candle has left the series or the pipeline cannot score it.
+     */
+    private int ctNeutralScore(LiquiditySweep sweep, boolean lowSweep, int fallback) {
+        if (sweep == null || sweep.getTimestamp() == null) return fallback;
+        List<Candle> recent = new ArrayList<>(candleSeries.getLast(SWEEP_RECENCY_BARS + 12));
+        java.util.Collections.reverse(recent);
+        int at = -1;
+        for (int i = recent.size() - 1; i >= 0; i--) {
+            if (sweep.getTimestamp().equals(recent.get(i).getTimestamp())) { at = i; break; }
+        }
+        if (at < 1) return fallback;
+        double prior = lowSweep ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
+        for (int i = Math.max(0, at - 9); i < at; i++) {
+            prior = lowSweep ? Math.min(prior, recent.get(i).getLow()) : Math.max(prior, recent.get(i).getHigh());
+        }
+        RaidDetector.RaidDetectionContext neutral = RaidDetector.RaidDetectionContext.fullWithCascade(
+                lastRaidContext.hasSmtDivergence(), null, false, 0, false, 0)
+                .withRangeEquilibrium(lastRaidContext.getRangeEquilibrium());
+        Optional<LiquidityRaid> scored = raidDetector.scoreSweep(recent.get(at), prior, lowSweep, neutral);
+        return scored.map(LiquidityRaid::getQualityScore).orElse(fallback);
+    }
+
+    /** Retrace extreme since the sweep (short: highest high incl. the swept level). */
+    private double extremeSince(Instant sweepTs, boolean wantHigh, double level, Candle current) {
+        double ext = wantHigh ? Math.max(level, current.getHigh()) : Math.min(level, current.getLow());
+        if (sweepTs == null) return ext;
+        for (Candle c : candleSeries.getLast(SWEEP_RECENCY_BARS + 2)) {
+            if (c.getTimestamp() == null || c.getTimestamp().isBefore(sweepTs)) continue;
+            ext = wantHigh ? Math.max(ext, c.getHigh()) : Math.min(ext, c.getLow());
+        }
+        return ext;
+    }
+
+    private void ctDisarm(CounterTrendScalp ct, String reason, double a, double b) {
+        ct.disarm();
+        ctDecision(ct, reason, a, b);
+    }
+
+    /** Write the scalp's lastGateFailed and publish ONE GateDecisionEvent "CT" per distinct reason. */
+    private void ctDecision(CounterTrendScalp ct, String reason, double a, double b) {
+        if (!ct.decide(reason)) return;
+        System.out.println("[" + symbol + "] " + reason);
+        if (eventBus != null) {
+            com.topstep.trading.event.EngineTelemetry.publish(eventBus,
+                    new com.topstep.trading.event.GateDecisionEvent(symbol, lastCandleInstant,
+                            lastCandleInstant == null ? null
+                                    : com.topstep.trading.event.EngineTelemetry.sessionOf(lastCandleInstant),
+                            String.valueOf(ct.phase()), CounterTrendScalp.GATE, reason, a, b));
+        }
+    }
+
     private void tryEmitOrder(StrategyContext context) {
         SetupContext ctx = core.getSetupContext();
         TradeTier tier = computeTier(ctx);
@@ -1953,6 +2342,15 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // diagnostic left by an earlier bar must never veto this bar's
         // attempt (D-06); every early return below writes its own reason.
         ctx.lastGateFailed = null;
+        // AGENT-05.8: one position per symbol - a with-trend setup may ARM
+        // while the counter-trend scalp's order / position is open, but it
+        // emits only once the scalp is flat.
+        if (counterTrend != null && counterTrend.ownsPosition()) {
+            armedDiagnostic("POSITION", "POSITION: " + symbol + " counter-trend scalp "
+                    + counterTrend.phase() + " (one position per symbol; with-trend emits once it is flat)",
+                    1, Double.NaN);
+            return;
+        }
         // NO-OVERLAP (scalp): never emit while a position is open on this
         // symbol. Legacy is single-shot by construction (IN_TRADE terminal).
         boolean accountPosition = context != null && context.hasPosition(symbol);

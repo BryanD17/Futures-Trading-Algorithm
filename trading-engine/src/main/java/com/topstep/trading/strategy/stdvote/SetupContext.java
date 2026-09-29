@@ -228,6 +228,26 @@ public final class SetupContext {
     /** The swept level (IMPULSE_LEG: inside the OTE band of the dealing range). */
     public double impulseSweptLevel = Double.NaN;
 
+    // AGENT-05.8 fields (V5: opt-in counter-trend scalp, entry.counterTrendScalp).
+    // Written ONLY on the counter-trend scalp's own SetupContext (the runner
+    // keeps one per symbol next to the with-trend setup); null / NaN on every
+    // with-trend setup, so the validator's M2 branch never applies to it.
+
+    /** {@code CounterTrendScalp.ENTRY_KIND} ("COUNTER_TREND_SCALP") or null (with-trend). */
+    public String entryKind;
+    /** M2 numbers: the dealing range in ticks and the configured minimum. */
+    public double ctRangeTicks = Double.NaN;
+    public double ctMinRangeTicks = Double.NaN;
+    /** The swept level and the OPPOSITE OTE band it must sit in (short: premium band). */
+    public double ctSweptLevel = Double.NaN;
+    public double ctBandLo = Double.NaN;
+    public double ctBandHi = Double.NaN;
+    /** M5/M6 facts: the rejection bar (close back beyond the swept level, trade-direction close). */
+    public double ctRejectionOpen = Double.NaN;
+    public double ctRejectionClose = Double.NaN;
+    /** Share of the normal $ risk budget the scalp was sized with. */
+    public double ctRiskFraction = Double.NaN;
+
     /** Reset only the AGENT-04 fields (called from {@link #resetForNextWindow}). */
     void resetAgent04Fields() {
         oteAnchorMode = null;
