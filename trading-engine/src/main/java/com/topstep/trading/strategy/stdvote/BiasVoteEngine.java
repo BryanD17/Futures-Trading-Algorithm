@@ -111,6 +111,11 @@ public final class BiasVoteEngine {
 
     /** Build from system properties, register for API access, log config. */
     public static BiasVoteEngine install(String symbol, double tickSize) {
+        return install(symbol, tickSize, true);
+    }
+
+    /** AGENT-05.9: {@code register=false} = an unregistered engine (the LTF machine never votes). */
+    public static BiasVoteEngine install(String symbol, double tickSize, boolean register) {
         // V5 Agent 03: DEFAULT VOTE (was LOG) - the vote + dealing-range
         // anchor is the bias; LEGACY/LOG remain one flag away.
         VoteMode mode = parseMode(com.topstep.trading.config.EngineConfig.current().getString(
@@ -120,8 +125,8 @@ public final class BiasVoteEngine {
                 PremiumDiscountEvaluator.DEFAULT_EQ_BAND_TICKS);
         BiasVoteEngine e = new BiasVoteEngine(symbol, tickSize, mode, eqBand);
         e.includeH4 = com.topstep.trading.config.EngineConfig.current().getBoolean(INCLUDE_H4_PROPERTY, false);
-        REGISTRY.put(symbol, e);
-        System.out.println("[VOTE " + symbol + "] config: mode=" + mode
+        if (register) REGISTRY.put(symbol, e);
+        System.out.println("[VOTE " + symbol + (register ? "" : "/LTF") + "] config: mode=" + mode
                 + " voteRule=" + e.voteRule + " source=" + e.biasSource
                 + " eqBandTicks=" + eqBand + " v1.includeH4=" + e.includeH4);
         return e;

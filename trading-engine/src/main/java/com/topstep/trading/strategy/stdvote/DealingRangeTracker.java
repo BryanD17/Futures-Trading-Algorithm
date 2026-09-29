@@ -91,7 +91,10 @@ public final class DealingRangeTracker {
 
     /** Which part of the trading day the dealing range is taken from
      *  ({@code bias.range.window}). */
-    public enum Window { SESSION_DAY, RTH_FIRST, AUTO }
+    public enum Window { SESSION_DAY, RTH_FIRST, AUTO,
+        /** V5 Agent 05.9 - the LTF machine's range: the most recent confirmed
+         *  5m fractal swing leg of at least minLegPrice (see {@link SwingRange}). */
+        INTRADAY_SWINGS }
 
     /** Immutable view published to SetupContext / M2b / the vote. */
     public record Snapshot(MarketBias direction, double high, double low,
@@ -133,6 +136,10 @@ public final class DealingRangeTracker {
     /** The new session's impulse leg that ends the carry once decisive. */
     private Leg sessionLeg;
 
+    // -- V5 Agent 05.9: the LTF machine's intraday-swing range --
+    /** Non-null only for {@link Window#INTRADAY_SWINGS}; every call delegates to it. */
+    private final SwingRange swings;
+
     /** SESSION_DAY tracker (Agent 03 constructor, kept for tests / A/B). */
     public DealingRangeTracker() {
         this(BiasConfig.rangeMinPct(), BiasConfig.rangeReanchorFraction());
@@ -167,6 +174,22 @@ public final class DealingRangeTracker {
         this.reanchorFraction = Math.min(1.0, Math.max(0.0, reanchorFraction));
         this.window = window == null ? Window.SESSION_DAY : window;
         this.minLegPrice = Math.max(0.0, minLegPrice);
+        this.swings = this.window == Window.INTRADAY_SWINGS
+                ? new SwingRange(this.minLegPrice, LtfRangeConfig.SWING_STRENGTH) : null;
+    }
+
+    /**
+     * V5 Agent 05.9: the LTF machine's tracker - {@link Window#INTRADAY_SWINGS}
+     * with {@code range.ltf.minLegTicks x tick} as the minimum leg.
+     */
+    public static DealingRangeTracker intradaySwings(double minLegPrice) {
+        return new DealingRangeTracker(BiasConfig.rangeMinPct(), BiasConfig.rangeReanchorFraction(),
+                Window.INTRADAY_SWINGS, minLegPrice, false);
+    }
+
+    /** V5 Agent 05.9: the intraday-swing state (null unless INTRADAY_SWINGS). */
+    public SwingRange swingRange() {
+        return swings;
     }
 
     /** The runner's tracker: every parameter read from {@link BiasConfig}. */
@@ -197,6 +220,7 @@ public final class DealingRangeTracker {
 
     /** True once any bar has been processed. */
     public boolean hasData() {
+        if (swings != null) return swings.hasData();
         return !Double.isNaN(hi);
     }
 
@@ -206,6 +230,10 @@ public final class DealingRangeTracker {
         LocalTime t = et.toLocalTime();
         if (!t.isBefore(HALT_START) && t.isBefore(DAY_ROLL)) {
             return; // settlement print inside the daily halt
+        }
+        if (swings != null) {
+            swings.onCandle(c);
+            return;
         }
         LocalDate day = t.isBefore(DAY_ROLL) ? et.toLocalDate() : et.toLocalDate().plusDays(1);
         double h = c.getHigh();
@@ -321,6 +349,7 @@ public final class DealingRangeTracker {
     /** Effective direction: the governing leg, else the session day's
      *  leg, else the carried direction. */
     public MarketBias direction() {
+        if (swings != null) return swings.snapshot().direction();
         if (rthGoverns() && rth.dir != 0) {
             return rth.dir > 0 ? MarketBias.BULLISH : MarketBias.BEARISH;
         }
@@ -335,10 +364,12 @@ public final class DealingRangeTracker {
 
     /** True when today's range itself is decisive (not a carried direction). */
     public boolean decisiveToday() {
+        if (swings != null) return swings.snapshot().decisive();
         return dir != 0;
     }
 
     public Snapshot snapshot() {
+        if (swings != null) return swings.snapshot();
         if (!hasData()) return Snapshot.EMPTY;
         if (carried != null && !(rthGoverns() && rth.dir != 0)) {
             // V5 Agent 05.7: the previous session's range still governs
@@ -378,6 +409,7 @@ public final class DealingRangeTracker {
         rth = null;
         carried = null;
         sessionLeg = null;
+        if (swings != null) swings.reset();
     }
 
     /** The previous session's governing range, carried across the reopen. */
@@ -464,6 +496,229 @@ public final class DealingRangeTracker {
                     pullback = Double.isNaN(pullback) ? l : Math.min(pullback, l);
                 }
             }
+        }
+    }
+    /**
+     * V5 Agent 05.9 - the LOWER-TIMEFRAME dealing range: the HTF rules at the
+     * intraday-swing scale. Pure function of the 1m candle sequence (the daily
+     * 17:00-18:00 ET halt is filtered by the caller).
+     * <ol>
+     *   <li>1m bars are aggregated into 5m bars (epoch-aligned buckets; a bar is
+     *       final when the first 1m bar of the next bucket arrives - the same
+     *       moment the runner's detector timeframe completes it).</li>
+     *   <li>A 5m bar is a swing high (low) when its high (low) is strictly beyond
+     *       the {@code strength} bars on EACH side ({@link FractalSwings}' formula,
+     *       strength 2): it is CONFIRMED {@code strength} bars later.</li>
+     *   <li>On every confirmed swing the candidate leg is built: a swing HIGH H
+     *       ends a bullish leg from the lowest 5m low since the previous confirmed
+     *       swing high (the origin L); a swing LOW mirrors it (origin = highest
+     *       high since the previous swing low). A candidate of at least
+     *       {@code minLegPrice} REBUILDS the range to that leg: range = [L, H],
+     *       direction = the leg's (this is also how the direction FLIPS on a
+     *       swing - only on an opposite leg of the minimum size). A smaller
+     *       candidate changes nothing (a pullback inside the range). A leg whose
+     *       later bars already CLOSED back beyond its origin is not taken.</li>
+     *   <li>Between swings (every 1m bar, the HTF tracker's rules): a new extreme
+     *       beyond the leg terminus EXTENDS it; a wick beyond the origin with the
+     *       close back inside extends the origin (a sweep); a 1m CLOSE beyond the
+     *       origin FLIPS the direction (range = [new extreme, terminus]) - by
+     *       construction an opposite move of at least the range size, itself
+     *       at least minLegPrice.</li>
+     *   <li>Carry: the swing history is not reset at the 18:00 ET roll - the
+     *       LTF range carries across the reopen until a new qualifying leg
+     *       replaces it (the HTF carry rule at the smaller scale).</li>
+     * </ol>
+     */
+    public static final class SwingRange {
+        private static final long BUCKET_SECONDS = 300L;
+        private static final int MAX_BARS = 600;
+        /** Bars walked back for a leg origin when no previous swing exists. */
+        private static final int ORIGIN_LOOKBACK = 48;
+
+        private final double minLeg;
+        private final int strength;
+        /** Finalized 5m bars: {bucketStartEpochSec, high, low, close}. */
+        private final java.util.ArrayList<double[]> bars = new java.util.ArrayList<>();
+        /** Absolute index of bars.get(0). */
+        private long base = 0;
+        private long curBucket = Long.MIN_VALUE;
+        private double curH = Double.NaN;
+        private double curL = Double.NaN;
+        private double curC = Double.NaN;
+        private long lastSwingHighIdx = -1;
+        private long lastSwingLowIdx = -1;
+        private int dir;
+        private double hi = Double.NaN;
+        private double lo = Double.NaN;
+        private java.time.Instant legLowAt;
+        private java.time.Instant legHighAt;
+        private boolean data;
+        private long rebuilds;
+        private long flips;
+        private String lastEvent;
+
+        SwingRange(double minLeg, int strength) {
+            this.minLeg = Math.max(0.0, minLeg);
+            this.strength = Math.max(1, strength);
+        }
+
+        public double minLeg() { return minLeg; }
+        public boolean hasData() { return data; }
+        public long rebuilds() { return rebuilds; }
+        public long flips() { return flips; }
+        /** 5m bar that set the range low / high (null = extended by a 1m bar). */
+        public java.time.Instant legLowAt() { return legLowAt; }
+        public java.time.Instant legHighAt() { return legHighAt; }
+        /** The last rebuild / flip, human-readable (null before the first). */
+        public String lastEvent() { return lastEvent; }
+
+        public Snapshot snapshot() {
+            if (dir == 0 || Double.isNaN(hi) || Double.isNaN(lo)) return Snapshot.EMPTY;
+            return new Snapshot(dir > 0 ? MarketBias.BULLISH : MarketBias.BEARISH, hi, lo,
+                    com.topstep.trading.strategy.HtfTrendAnalyzer.equilibriumOf(hi, lo), true);
+        }
+
+        void onCandle(Candle c) {
+            data = true;
+            long bucket = Math.floorDiv(c.getTimestamp().getEpochSecond(), BUCKET_SECONDS);
+            if (curBucket != Long.MIN_VALUE && bucket != curBucket) {
+                finalizeBar();
+            }
+            if (bucket != curBucket) {
+                curBucket = bucket;
+                curH = c.getHigh();
+                curL = c.getLow();
+            } else {
+                curH = Math.max(curH, c.getHigh());
+                curL = Math.min(curL, c.getLow());
+            }
+            curC = c.getClose();
+            onMinute(c.getHigh(), c.getLow(), c.getClose());
+        }
+
+        /** The between-swings rules on one 1m bar (HTF tracker semantics). */
+        private void onMinute(double h, double l, double close) {
+            if (dir == 0) return;
+            if (dir > 0) {
+                if (close < lo) {
+                    dir = -1;
+                    lo = l;
+                    legLowAt = null;
+                    flips++;
+                    lastEvent = "FLIP BEARISH on a 1m close " + close + " below the origin -> [" + lo + "," + hi + "]";
+                } else if (h > hi) {
+                    hi = h;
+                    legHighAt = null;
+                } else if (l < lo) {
+                    lo = l;
+                }
+            } else {
+                if (close > hi) {
+                    dir = 1;
+                    hi = h;
+                    legHighAt = null;
+                    flips++;
+                    lastEvent = "FLIP BULLISH on a 1m close " + close + " above the origin -> [" + lo + "," + hi + "]";
+                } else if (l < lo) {
+                    lo = l;
+                    legLowAt = null;
+                } else if (h > hi) {
+                    hi = h;
+                }
+            }
+        }
+
+        private void finalizeBar() {
+            bars.add(new double[] {curBucket * BUCKET_SECONDS, curH, curL, curC});
+            while (bars.size() > MAX_BARS) {
+                bars.remove(0);
+                base++;
+            }
+            long n = base + bars.size() - 1;      // absolute index of the newest bar
+            long i = n - strength;                // the bar this one confirms
+            if (i - strength < base) return;
+            if (isSwing(i, true)) onSwing(i, true, n);
+            if (isSwing(i, false)) onSwing(i, false, n);
+        }
+
+        private double[] bar(long idx) {
+            return bars.get((int) (idx - base));
+        }
+
+        private boolean isSwing(long i, boolean high) {
+            int f = high ? 1 : 2;
+            double v = bar(i)[f];
+            for (int j = 1; j <= strength; j++) {
+                double a = bar(i - j)[f];
+                double b = bar(i + j)[f];
+                if (high ? !(v > a && v > b) : !(v < a && v < b)) return false;
+            }
+            return true;
+        }
+
+        /** A confirmed swing at absolute index i (n = newest finalized bar). */
+        private void onSwing(long i, boolean high, long n) {
+            long prev = high ? lastSwingHighIdx : lastSwingLowIdx;
+            if (high) lastSwingHighIdx = i; else lastSwingLowIdx = i;
+            long from = prev >= base ? prev + 1 : Math.max(base, i - ORIGIN_LOOKBACK);
+            long originIdx = -1;
+            double origin = high ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
+            for (long k = from; k < i; k++) {
+                double v = bar(k)[high ? 2 : 1];
+                if (high ? v < origin : v > origin) { origin = v; originIdx = k; }
+            }
+            if (originIdx < 0) return;
+            double terminus = bar(i)[high ? 1 : 2];
+            double size = high ? terminus - origin : origin - terminus;
+            if (size < minLeg - 1e-9) return;
+            // The bars after the swing (confirmation bars + the bar in progress)
+            // must not have CLOSED back beyond the origin - that leg already failed.
+            double postHi = curH;
+            double postLo = curL;
+            for (long k = i + 1; k <= n; k++) {
+                double[] b = bar(k);
+                if (high ? b[3] < origin : b[3] > origin) return;
+                postHi = Math.max(postHi, b[1]);
+                postLo = Math.min(postLo, b[2]);
+            }
+            if (high ? curC < origin : curC > origin) return;
+            int newDir = high ? 1 : -1;
+            boolean flip = dir != 0 && dir != newDir;
+            dir = newDir;
+            java.time.Instant originAt = java.time.Instant.ofEpochSecond((long) bar(originIdx)[0]);
+            java.time.Instant termAt = java.time.Instant.ofEpochSecond((long) bar(i)[0]);
+            if (high) {
+                lo = Math.min(origin, postLo);
+                hi = Math.max(terminus, postHi);
+                legLowAt = originAt;
+                legHighAt = termAt;
+            } else {
+                hi = Math.max(origin, postHi);
+                lo = Math.min(terminus, postLo);
+                legHighAt = originAt;
+                legLowAt = termAt;
+            }
+            rebuilds++;
+            if (flip) flips++;
+            lastEvent = (flip ? "FLIP " : "REBUILD ") + (high ? "BULLISH" : "BEARISH")
+                    + " [" + lo + "," + hi + "] leg "
+                    + (high ? "low " + origin + "@" + originAt + " -> high " + terminus + "@" + termAt
+                            : "high " + origin + "@" + originAt + " -> low " + terminus + "@" + termAt)
+                    + String.format(" (%.2f >= %.2f)", size, minLeg);
+        }
+
+        void reset() {
+            bars.clear();
+            base = 0;
+            curBucket = Long.MIN_VALUE;
+            curH = curL = curC = Double.NaN;
+            lastSwingHighIdx = lastSwingLowIdx = -1;
+            dir = 0;
+            hi = lo = Double.NaN;
+            legLowAt = legHighAt = null;
+            data = false;
+            rebuilds = flips = 0;
+            lastEvent = null;
         }
     }
 }

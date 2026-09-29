@@ -248,6 +248,27 @@ public final class SetupContext {
     /** Share of the normal $ risk budget the scalp was sized with. */
     public double ctRiskFraction = Double.NaN;
 
+    // AGENT-05.9 fields (V5: the opt-in independent LTF dealing-range machine,
+    // range.ltf.enabled). Machine CONTEXT, not per-setup state:
+    // resetForNextWindow() leaves them untouched. On the HTF machine machine =
+    // "HTF" and every ltf* number stays NaN / null, so the validator's LTF
+    // branches never apply to it.
+
+    /** Which setup machine owns this context: "HTF" (the dealing-range machine) | "LTF" (range.ltf). */
+    public String machine = "HTF";
+    /** LTF only: {@code range.ltf.gating} (INDEPENDENT | HTF_ALIGNED). */
+    public String ltfGating;
+    /** LTF only: the LTF range span in ticks and the configured minimum ({@code range.ltf.minLegTicks}). */
+    public double ltfRangeTicks = Double.NaN;
+    public double ltfMinLegTicks = Double.NaN;
+    /** LTF only: the HTF machine's bias and dealing range at this bar (HTF_ALIGNED comparison numbers). */
+    public MarketBias ltfHtfBias;
+    public double ltfHtfRangeHigh = Double.NaN;
+    public double ltfHtfRangeLow = Double.NaN;
+    public double ltfHtfEq = Double.NaN;
+    /** LTF only: share of the normal $ risk budget the LTF entry is sized with ({@code range.ltf.riskFraction}). */
+    public double ltfRiskFraction = Double.NaN;
+
     /** Reset only the AGENT-04 fields (called from {@link #resetForNextWindow}). */
     void resetAgent04Fields() {
         oteAnchorMode = null;

@@ -173,7 +173,13 @@ class FunnelAutopsyHarness {
             if (java.util.Set.of("ORDER", "ORDER_TTL", "FLATTEN", "SIZE", "ALARM", "NO_ENTRY",
                     "POSITION", "TIER", "EMIT", "BIAS",
                     // V5 Agent 05.8: counter-trend scalp decisions (only published with entry.counterTrendScalp=true).
-                    CounterTrendScalp.GATE).contains(g.getGate())) {
+                    CounterTrendScalp.GATE).contains(g.getGate())
+                    // V5 Agent 05.9: the LTF machine's own gates (range.ltf.enabled=true only).
+                    || "LTF".equals(g.getGate())) {
+                // V5 Agent 05.9: of the LTF machine's armed refusals keep the ones that
+                // explain a trade decision (one position per symbol, sessions, quota, size).
+                if (g.getReason() != null && g.getReason().startsWith(LtfRangeConfig.REASON_PREFIX)
+                        && !java.util.Set.of("POSITION", "LTF", "SIZE").contains(g.getGate())) return;
                 orderGates.add(g);
             }
         });
@@ -182,6 +188,16 @@ class FunnelAutopsyHarness {
         runner.initialize();
         SetupContext ctx = runner.getSetupContext();
         FunnelTelemetry funnel = FunnelTelemetry.forSymbol(symbol);
+        // V5 Agent 05.9: the LTF machine's context (null = range.ltf.enabled=false:
+        // no LTF column, no LTF section - the output is byte-identical to pre-05.9).
+        SetupContext lctx = runner.getLtfContext();
+        List<String[]> ltfTrades = new ArrayList<>();      // {signal line, close line}
+        List<String> ltfRangeLog = new ArrayList<>();
+        List<double[]> closedR = new ArrayList<>();          // {machine 0=HTF 1=LTF, R, pnl}
+        // {signal time, machine, LTF log line}: a close belongs to the last ALLOW at/before its FILL
+        // (a close printed on the same bar as the next signal is logged after it).
+        List<Object[]> allows = new ArrayList<>();
+        String lastLtfRangeKey = null;
 
         System.out.println("[AUTOPSY] riskLimits: DLL=" + limits.getMaxDailyLoss()
                 + " MLL=" + limits.getMaxLossLimit() + " maxContracts=" + limits.getMaxContracts()
@@ -222,7 +238,10 @@ class FunnelAutopsyHarness {
             csv.println("bar,ts_ET,session,state_before,state_after,holding_gate,bias,vote,kzOpen,sweep,raidScore,"
                     + "disp,fvg,mss,ote62,ote79,ote100,pdArrayInOte,entry,stop,rr,sizeReq,lastGateFailed,"
                     + "stall,death,signal,risk,orders,positions,closedTrades,close,"
-                    + "entryModel,impulseLeg,impDispRangeAtr,impDispBody,impMssSwing,impMssClose,impulseVerdict");
+                    + "entryModel,impulseLeg,impDispRangeAtr,impDispBody,impMssSwing,impMssClose,impulseVerdict"
+                    // V5 Agent 05.9: LTF columns, ONLY with range.ltf.enabled=true.
+                    + (lctx == null ? "" : ",machine_ltf_state,ltf_holding,ltf_bias,ltf_rangeLo,ltf_rangeHi,ltf_eq,"
+                            + "ltf_ote62,ltf_ote79,ltf_entry,ltf_stop,ltf_t1,ltf_lastGateFailed"));
             int si = 0;
             for (int bar = 0; bar < primary.size(); bar++) {
                 Candle c = primary.get(bar);
@@ -272,11 +291,28 @@ class FunnelAutopsyHarness {
                             if (sig.getReason() != null && sig.getReason().startsWith(CounterTrendScalp.REASON_PREFIX)) {
                                 riskCol += " [CT " + CounterTrendScalp.REASON_PREFIX + "]";
                             }
+                            // V5 Agent 05.9: mark every LTF-machine trade with its LTF range and ladder.
+                            boolean ltfSig = sig.getReason() != null && sig.getReason().startsWith(LtfRangeConfig.REASON_PREFIX);
+                            if (ltfSig && lctx != null) {
+                                // The LTF range the setup was planned on (its OTE leg), the ladder,
+                                // the LTF range now, and the HTF machine's bias + range at emission.
+                                riskCol += " [LTF " + lctx.htfBias + " range=[" + (lctx.ote == null ? "?" : lctx.ote.legLow() + ","
+                                        + lctx.ote.legHigh()) + "] eq=" + (lctx.ote == null ? "?" : lctx.ote.eq50())
+                                        + " T1=" + lctx.t1 + " T2=" + lctx.t2 + " size=" + lctx.sizeRequest
+                                        + " model=" + lctx.oteEntryModel
+                                        + " | LTF now [" + lctx.rangeLow + "," + lctx.rangeHigh + "]"
+                                        + " | HTF " + lctx.ltfHtfBias + " [" + lctx.ltfHtfRangeLow + "," + lctx.ltfHtfRangeHigh + "]]";
+                            }
+                            allows.add(new Object[] {now, ltfSig, ltfSig ? TS.format(now.atZone(ET)) + " ET " + sess
+                                    + " | " + signalCol + " | " + riskCol : null});
                         } else {
                             counts.get(sess)[5]++;
                             riskCol = "DENY " + d.getReason();
                             if (sig.getReason() != null && sig.getReason().startsWith(CounterTrendScalp.REASON_PREFIX)) {
                                 riskCol += " [CT " + CounterTrendScalp.REASON_PREFIX + "]";
+                            }
+                            if (sig.getReason() != null && sig.getReason().startsWith(LtfRangeConfig.REASON_PREFIX)) {
+                                riskCol += " [LTF " + LtfRangeConfig.REASON_PREFIX + "]";
                             }
                             riskDenials.merge(d.getReason().replaceAll("[0-9.]+", "#"), 1L, Long::sum);
                             bus.publish(new PositionClosedEvent(symbol, 0.0, false, now)); // SIM release
@@ -300,6 +336,30 @@ class FunnelAutopsyHarness {
                     signalLog.add(TS.format(now.atZone(ET)) + " ET " + sess + " | CLOSED " + t.getSide()
                             + " q=" + t.getQuantity() + " in=" + t.getEntryPrice() + " out=" + fmt(t.getExitPrice())
                             + " pnl=" + fmt(t.getRealizedPnL()) + " R=" + fmt(t.getRMultiple()) + " " + t.getNotes());
+                    if (lctx != null) {
+                        // V5 Agent 05.9: one position per symbol -> the close belongs to the last ALLOW at/before its fill.
+                        Object[] owner = null;
+                        for (Object[] a : allows) {
+                            // strictly before the fill: a signal fills at the earliest on the NEXT bar, so an
+                            // ALLOW printed on the fill bar belongs to the next trade.
+                            if (t.getEntryTime() == null || ((Instant) a[0]).isBefore(t.getEntryTime())) owner = a;
+                        }
+                        boolean isLtf = owner != null && (Boolean) owner[1];
+                        closedR.add(new double[] {isLtf ? 1 : 0, t.getRMultiple(), t.getRealizedPnL()});
+                        if (isLtf) ltfTrades.add(new String[] {(String) owner[2], signalLog.get(signalLog.size() - 1)});
+                    }
+                }
+                if (lctx != null) {
+                    DealingRangeTracker.Snapshot lr = runner.getLtfRange();
+                    // One line per rebuild / flip (extensions of the same leg are not listed).
+                    String key = lr.direction() + " | " + runner.getLtfRangeEvent();
+                    if (!key.equals(lastLtfRangeKey)) {
+                        lastLtfRangeKey = key;
+                        ltfRangeLog.add(TS.format(now.atZone(ET)) + " ET " + sess + " | LTF " + lr.direction() + " [" + lr.low() + ","
+                                + lr.high() + "] eq=" + lr.equilibrium()
+                                + " | " + runner.getLtfRangeEvent() + " | HTF " + ctx.htfBias + " [" + ctx.rangeLow + ","
+                                + ctx.rangeHigh + "]");
+                    }
                 }
 
                 // ── per-bar facts ──
@@ -354,6 +414,16 @@ class FunnelAutopsyHarness {
                         + (Double.isNaN(ctx.impulseMssSwing) ? "" : ctx.impulseMssSwing) + ","
                         + (Double.isNaN(ctx.impulseMssClose) ? "" : ctx.impulseMssClose) + ","
                         + q(ctx.impulseLegVerdict);
+                if (lctx != null) {
+                    // V5 Agent 05.9: the LTF machine on the same bar.
+                    row += "," + lctx.state + "," + holdingGate(lctx.state, lctx, "") + "," + lctx.htfBias + ","
+                            + (Double.isNaN(lctx.rangeLow) ? "" : lctx.rangeLow) + ","
+                            + (Double.isNaN(lctx.rangeHigh) ? "" : lctx.rangeHigh) + ","
+                            + (Double.isNaN(lctx.rangeEq) ? "" : lctx.rangeEq) + ","
+                            + (lctx.ote == null ? "," : lctx.ote.f62() + "," + lctx.ote.f79()) + ","
+                            + (lctx.entry == 0 ? "" : lctx.entry) + "," + (lctx.stop == 0 ? "" : lctx.stop) + ","
+                            + (lctx.t1 == 0 ? "" : lctx.t1) + "," + q(lctx.lastGateFailed);
+                }
                 csv.println(row);
 
                 if (transcript != null && !now.isBefore(transcript[0]) && now.isBefore(transcript[1])) {
@@ -496,10 +566,51 @@ class FunnelAutopsyHarness {
             for (String l : signalLog) md.println("- " + l);
             md.println();
             md.println("## FunnelTelemetry (current session): " + funnel.logLine());
+            if (lctx != null) writeLtfSection(md, ltfTrades, closedR, ltfRangeLog);
+        }
+        if (lctx != null) {
+            Files.write(out.resolve("ltf_ranges.txt"), ltfRangeLog);
         }
         System.out.println(Files.readString(out.resolve("summary.md")));
         runner.shutdown();
         bus.stop();
+    }
+
+    /** V5 Agent 05.9: the LTF machine's trades and the HTF / LTF / combined split. */
+    private static void writeLtfSection(PrintWriter md, List<String[]> ltfTrades, List<double[]> closedR,
+                                        List<String> ltfRangeLog) {
+        md.println();
+        md.println("## LTF machine (range.ltf.enabled=true)");
+        md.println();
+        md.println("LTF range changes: " + ltfRangeLog.size() + " (full list in ltf_ranges.txt)");
+        md.println();
+        md.println("### LTF trades (signal | close)");
+        md.println();
+        // "- [LTF] ..." (never "- 20..."): tools/autopsy_risk_report.py parses "- 20..." lines as the trade log.
+        for (String[] t : ltfTrades) {
+            md.println("- [LTF] " + t[0]);
+            md.println("  - [LTF] " + t[1]);
+        }
+        md.println();
+        md.println("### Split by machine (closed trades, in close order)");
+        md.println();
+        md.println("| machine | closed | W/L | sum R | pnl$ | max drawdown $ | max drawdown R |");
+        md.println("|---|---|---|---|---|---|---|");
+        for (int m = 0; m <= 2; m++) {
+            int n = 0, w = 0, l = 0;
+            double r = 0, pnl = 0, eq = 0, peak = 0, dd = 0, eqR = 0, peakR = 0, ddR = 0;
+            for (double[] c : closedR) {
+                if (m < 2 && (int) c[0] != m) continue;
+                n++;
+                if (c[2] > 0) w++; else l++;
+                r += c[1];
+                pnl += c[2];
+                eq += c[2]; peak = Math.max(peak, eq); dd = Math.max(dd, peak - eq);
+                eqR += c[1]; peakR = Math.max(peakR, eqR); ddR = Math.max(ddR, peakR - eqR);
+            }
+            md.println("| " + (m == 0 ? "HTF" : m == 1 ? "LTF" : "combined") + " | " + n + " | " + w + "/" + l + " | "
+                    + fmt(r) + " | " + fmt(pnl) + " | " + fmt(dd) + " | " + fmt(ddR) + " |");
+        }
     }
 
     /** Which gate is holding the machine on this bar (one label per candle). */

@@ -94,6 +94,16 @@ public final class PremiumDiscountEvaluator {
     /** Build from system properties, register for API access, log config. */
     public static PremiumDiscountEvaluator install(String symbol, double tickSize,
                                                    LevelEngine levels) {
+        return install(symbol, tickSize, levels, true);
+    }
+
+    /**
+     * AGENT-05.9: {@code register=false} builds the SAME evaluator (same keys)
+     * without replacing the symbol's registered one - the LTF machine's M2b
+     * reads its own (LTF) dealing range while the API keeps the HTF evaluator.
+     */
+    public static PremiumDiscountEvaluator install(String symbol, double tickSize,
+                                                   LevelEngine levels, boolean register) {
         // V5 Agent 03 (M2b BLOCKING, Appendix B): DEFAULT BLOCK now that the
         // governing range is the day's dealing range ("RD" below). LOG/OFF
         // remain one flag away; ABSTAIN still always passes.
@@ -117,8 +127,8 @@ public final class PremiumDiscountEvaluator {
                 .map(m -> m.getCandlesSnapshot(
                         com.topstep.trading.strategy.BarAggregationManager.Timeframe.D1, 200))
                 .orElse(java.util.List.of()), d1MinBars);
-        REGISTRY.put(symbol, e);
-        System.out.println("[PD " + symbol + "] config: mode=" + mode
+        if (register) REGISTRY.put(symbol, e);
+        System.out.println("[PD " + symbol + (register ? "" : "/LTF") + "] config: mode=" + mode
                 + " eqBandTicks=" + eqBand + " minRangeTicks=" + minRange
                 + " d1MinBars=" + d1MinBars);
         return e;

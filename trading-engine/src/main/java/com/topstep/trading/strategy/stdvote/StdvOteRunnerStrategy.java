@@ -270,6 +270,29 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     // HERE, never to the with-trend latch (one position per symbol).
     private final CounterTrendScalp counterTrend;
     private final AtomicBoolean ctPendingClosed = new AtomicBoolean(false);
+
+    // AGENT-05.9: the opt-in INDEPENDENT LTF dealing-range machine
+    // (range.ltf.enabled). The HTF runner (the one the engine registers) builds
+    // a second, complete runner in LTF mode and feeds it every candle after its
+    // own step: own detectors, own StdvOteStrategy core + SetupContext, own
+    // DealingRangeTracker (INTRADAY_SWINGS), own M2b evaluator, the same
+    // validator chain. NULL when the flag is off - nothing below runs and the
+    // engine is byte-identical to the pre-05.9 runner. One position per symbol:
+    // whichever machine emits first holds it (the other may arm, never emit).
+    /** "HTF" (the dealing-range machine) | "LTF" (the child). */
+    private final String machine;
+    private final boolean ltfMachine;
+    /** LTF machine only: the HTF runner that owns and feeds it. */
+    private final StdvOteRunnerStrategy htfParent;
+    /** HTF machine only: the LTF child; null when range.ltf.enabled=false. */
+    private final StdvOteRunnerStrategy ltf;
+    private final LtfRangeConfig ltfConfig;
+    /** LTF machine only: range.ltf.maxPerDay counter (CME trading day). */
+    private final LtfRangeConfig.DailyQuota ltfQuota = new LtfRangeConfig.DailyQuota();
+    /** Log / telemetry label: the symbol (HTF) or "SYM/LTF". */
+    private final String logTag;
+    private String lastLtfRangeEvent;
+    private String lastLtfBiasNote;
     /** True from signal emission until a PositionClosedEvent for this symbol. */
     private volatile boolean positionOpen = false;
     /** AGENT-05 (RC-16): account trade count / day at emission — a release
@@ -461,6 +484,17 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
      *         {@link TradeableInstrument} registry
      */
     public StdvOteRunnerStrategy(String symbol, String smtSymbol, EventBus eventBus) {
+        this(symbol, smtSymbol, eventBus, null);
+    }
+
+    /**
+     * AGENT-05.9: {@code htfParent != null} builds the LTF machine - a complete
+     * runner whose dealing range is the intraday-swing range and whose bias is
+     * that range's direction. Only an HTF runner constructs one (when
+     * {@code range.ltf.enabled=true}); it is never registered anywhere.
+     */
+    private StdvOteRunnerStrategy(String symbol, String smtSymbol, EventBus eventBus,
+                                  StdvOteRunnerStrategy htfParent) {
         Optional<TradeableInstrument.Symbol> resolved = TradeableInstrument.resolve(symbol);
         if (resolved.isEmpty()) {
             throw new IllegalArgumentException(
@@ -471,9 +505,19 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         this.smtSymbol = smtSymbol;
         this.spec = TradeableInstrument.of(resolved.get());
         this.eventBus = eventBus;
+        // AGENT-05.9: which machine this runner is.
+        this.htfParent = htfParent;
+        this.ltfMachine = htfParent != null;
+        this.machine = ltfMachine ? LtfRangeConfig.MACHINE_LTF : LtfRangeConfig.MACHINE_HTF;
+        this.logTag = ltfMachine ? symbol + "/LTF" : symbol;
+        this.ltfConfig = LtfRangeConfig.fromEngineConfig(symbol);
         // V5 Agent 05.6: bias.range.window (SESSION_DAY | RTH_FIRST | AUTO)
         // + bias.range.minLegTicks[.<SYM>] in this instrument's ticks.
-        this.dealingRange = DealingRangeTracker.fromConfig(symbol, spec.tickSize());
+        // AGENT-05.9: the LTF machine's range = the most recent confirmed 5m
+        // swing leg >= range.ltf.minLegTicks[.<SYM>] (INTRADAY_SWINGS).
+        this.dealingRange = ltfMachine
+                ? DealingRangeTracker.intradaySwings(ltfConfig.minLegTicks() * spec.tickSize())
+                : DealingRangeTracker.fromConfig(symbol, spec.tickSize());
 
         this.stopBufferTicks = intProperty(STOP_BUFFER_TICKS_PROPERTY, DEFAULT_STOP_BUFFER_TICKS);
         this.reactionWickTicks = intProperty(REACTION_WICK_TICKS_PROPERTY, DEFAULT_REACTION_WICK_TICKS);
@@ -509,7 +553,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // V3 Agent 04: publish THE authoritative aggregation manager for
         // this symbol so the connector's TIER-2 HTF seed and the /api/chart
         // ?tf= reads target the same instance the strategy trades from.
-        com.topstep.trading.strategy.HtfSeriesRegistry.register(symbol, barManager);
+        if (!ltfMachine) com.topstep.trading.strategy.HtfSeriesRegistry.register(symbol, barManager);
 
         // Chart-state pipeline for raid quality scoring.
         this.candleSeries = new CandleSeries(symbol, 5000);
@@ -535,7 +579,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // governing range from THIS runner's LevelEngine at gate time;
         // default mode is LOG (counts, never blocks).
         this.pdEvaluator = PremiumDiscountEvaluator.install(
-                symbol, spec.tickSize(), levelEngine);
+                symbol, spec.tickSize(), levelEngine, !ltfMachine);   // AGENT-05.9: LTF = unregistered
         validator.setPremiumDiscountEvaluator(pdEvaluator);
         // V5 Agent 03: M2b judges the entry against the day's DEALING RANGE
         // (the same range the bias is read from), ahead of R0/R1/R2.
@@ -546,16 +590,23 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // 3-of-4 bias vote (V3 Agent 03): V2's AMD tracker joins the live
         // path (it previously fed only the legacy strategy); default mode
         // LOG — the vote runs and counts agreement, legacy still decides.
-        this.biasVoteEngine = BiasVoteEngine.install(symbol, spec.tickSize());
+        this.biasVoteEngine = BiasVoteEngine.install(symbol, spec.tickSize(), !ltfMachine);
         this.amdTracker = new com.topstep.trading.strategy.DailyAmdCycleTracker(symbol);
         // M7b 30m-OTE confluence gate (V3 Agent 06): default LOG — the
         // V2 log-only comparison, formalized through counters; GATE is one
         // flag away once the promote criteria are met.
-        this.ote30mGate = Ote30mConfluenceGate.install(symbol);
+        this.ote30mGate = Ote30mConfluenceGate.install(symbol, !ltfMachine);
         validator.setOte30mConfluenceGate(ote30mGate);
         this.core = new StdvOteStrategy(symbol, projectionEngine, oteCalculator, validator,
                 eventBus, /* expiryBars, feed bars (see FUNNEL CALIBRATION) */
-                setupExpiryFeedBars);
+                setupExpiryFeedBars, /* AGENT-05.9: only the HTF core registers */ !ltfMachine);
+        if (ltfMachine) {
+            core.configureLtfMachine();
+            SetupContext lc = core.getSetupContext();
+            lc.ltfGating = ltfConfig.gating().name();
+            lc.ltfMinLegTicks = ltfConfig.minLegTicks();
+            lc.ltfRiskFraction = ltfConfig.riskFraction();
+        }
         // AGENT-02 (RC-03): setup lifecycle — expiry anchor + budgets.
         SessionConfig.ExpiryAnchor expiryAnchor = SessionConfig.expiryAnchor(gateMode);
         int huntFeedBars = SessionConfig.expiryFeedBars(detectorTimeframe.getMinutes(), expiryAnchor);
@@ -582,8 +633,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                         : " budget=" + setupExpiryFeedBars + " feed bars from BIAS_SET"));
         // V5 Agent 04: post-sweep funnel (displacement → FVG → MSS → OTE
         // arm / alarm / invalidate) — shared with the golden-case tests.
-        this.oteDriver = new OteSetupDriver(symbol, spec.tickSize(), displacementDetector,
-                eventBus, detectorTimeframe.getMinutes());
+        this.oteDriver = new OteSetupDriver(logTag, spec.tickSize(), displacementDetector,
+                ltfMachine ? null : eventBus, detectorTimeframe.getMinutes());
         System.out.println("[StdvOteRunnerStrategy] " + symbol
                 + " funnel windows (feed bars): expiry=" + setupExpiryFeedBars
                 + " oteWindow=" + maxBarsInOte + " mssFresh=" + mssFreshBars
@@ -624,19 +675,29 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // PositionClosedEvent) left the machine IN_TRADE for 200 minutes.
         // The handler only flips a flag — all state mutation happens on the
         // candle thread (SetupContext is thread-confined).
-        this.counterTrend = CounterTrendScalp.Config.enabledInConfig()
+        this.counterTrend = (CounterTrendScalp.Config.enabledInConfig() && !ltfMachine)
                 ? new CounterTrendScalp(symbol, CounterTrendScalp.Config.fromEngineConfig(), spec.tickSize())
                 : null;
         if (counterTrend != null) {
             System.out.println("[StdvOteRunnerStrategy] " + symbol + " COUNTER-TREND SCALP ON ("
                     + counterTrend.config().describe() + ")");
         }
-        if (eventBus != null) {
+        // AGENT-05.9: the LTF child (flag on, HTF runner only).
+        this.ltf = (!ltfMachine && ltfConfig.enabled())
+                ? new StdvOteRunnerStrategy(symbol, smtSymbol, eventBus, this) : null;
+        if (ltf != null) {
+            System.out.println("[StdvOteRunnerStrategy] " + symbol + " LTF MACHINE ON ("
+                    + ltfConfig.describe() + ")");
+        }
+        if (eventBus != null && !ltfMachine) {
             eventBus.subscribe(PositionClosedEvent.class, evt -> {
                 if (this.symbol.equals(evt.getSymbol())) {
                     CounterTrendScalp ct = this.counterTrend;
+                    StdvOteRunnerStrategy lm = this.ltf;
                     if (ct != null && ct.ownsPosition()) {
                         ctPendingClosed.set(true);          // AGENT-05.8: the scalp's close / release
+                    } else if (lm != null && lm.positionOpen) {
+                        lm.pendingPositionClosed.set(true); // AGENT-05.9: the LTF machine's close / release
                     } else {
                         pendingPositionClosed.set(true);
                     }
@@ -662,6 +723,37 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** AGENT-05.8: the counter-trend scalp's own SetupContext (null when entry.counterTrendScalp=false). */
     public SetupContext getCounterTrendContext() {
         return counterTrend == null ? null : counterTrend.context();
+    }
+
+    /** AGENT-05.9: the LTF machine's own SetupContext (null when range.ltf.enabled=false). */
+    public SetupContext getLtfContext() {
+        return ltf == null ? null : ltf.getSetupContext();
+    }
+
+    /** AGENT-05.9: the LTF machine's current dealing range (EMPTY when the flag is off). */
+    public DealingRangeTracker.Snapshot getLtfRange() {
+        return ltf == null ? DealingRangeTracker.Snapshot.EMPTY : ltf.dealingRange.snapshot();
+    }
+
+    /** AGENT-05.9: the LTF tracker's last rebuild / flip description (null when off / none yet). */
+    public String getLtfRangeEvent() {
+        return ltf == null || ltf.dealingRange.swingRange() == null ? null
+                : ltf.dealingRange.swingRange().lastEvent();
+    }
+
+    /** AGENT-05.9: "HTF" | "LTF". */
+    public String machine() {
+        return machine;
+    }
+
+    /** AGENT-05.9 test hook: the LTF child (null when the flag is off). */
+    StdvOteRunnerStrategy ltfForTest() {
+        return ltf;
+    }
+
+    /** AGENT-05.9 test hook: LTF emissions on the trading day of {@code now}. */
+    int ltfEmitsOnForTest(Instant now) {
+        return ltfQuota.emitsOn(now);
     }
 
     /** AGENT-05.8 test hook: the scalp (null when the flag is off). */
@@ -698,6 +790,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // Route SMT candles to the SMT path.
         if (smtSymbol != null && smtSymbol.equals(candle.getSymbol())) {
             onSmtCandle(candle);
+            if (ltf != null) ltf.onSmtCandle(candle);   // AGENT-05.9
             return;
         }
         // Only process candles for our primary symbol.
@@ -722,7 +815,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // firing outside the bracket. Measure the whole candle or measure
         // nothing.
         final SetupState funnelStateBefore = core.getSetupContext().state;
-        final FunnelTelemetry funnel = FunnelTelemetry.forSymbol(symbol);
+        final FunnelTelemetry funnel = FunnelTelemetry.forSymbol(logTag);
         funnel.rollSessionIfNeeded(now);
 
         // 1a. Aggregate FIRST so the entry-anatomy detectors below can be
@@ -790,7 +883,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // premium/discount factor reads this bar's range.
         if (!dealingRangeWarmChecked) {
             dealingRangeWarmChecked = true;
-            List<Candle> seededH1 = barManager.getCandlesSnapshot(Timeframe.H1, 500);
+            // AGENT-05.9: the LTF range is built from its own 5m swings only.
+            List<Candle> seededH1 = ltfMachine ? null : barManager.getCandlesSnapshot(Timeframe.H1, 500);
             if (seededH1 != null && !seededH1.isEmpty() && !dealingRange.hasData()) {
                 dealingRange.warm(seededH1);
                 System.out.println("[BIAS " + symbol + "] dealing range warm-booted from "
@@ -804,6 +898,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         rangeCtx.rangeHigh = range.high();
         rangeCtx.rangeLow = range.low();
         rangeCtx.rangeEq = range.equilibrium();
+        if (ltfMachine) stampLtfContext(rangeCtx, range);   // AGENT-05.9
         // The HTF-opposes penalty uses the SAME bias M2 judges: the setup's
         // direction while one is live, else the latest evaluation.
         MarketBias scoringBias = (rangeCtx.htfBias != MarketBias.NEUTRAL) ? rangeCtx.htfBias : lastBias;
@@ -882,7 +977,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // hysteresis grace counts CONSECUTIVE NEUTRAL 15m evaluations, and
         // repeated same-bias records are idempotent in the core (INVALIDATED
         // sits above IN_TRADE, so a dead setup ignores repeats).
-        if (htfBarClosed) {
+        // AGENT-05.9: the LTF machine never votes - its bias is its own range's
+        // direction, recorded on every completed detector (5m) bar below.
+        if (ltfMachine && anatomyCandle != null) {
+            recordLtfBias();
+        }
+        if (htfBarClosed && !ltfMachine) {
             MarketBias legacyBias = mapTrendToBias(htfTrend.getTrendState());
             // 3-of-4 bias vote (V3 Agent 03). LEGACY: not evaluated at all.
             // LOG (default): evaluated + counted, legacy still decides.
@@ -922,7 +1022,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // not trading" is answerable from the log in one glance (the same
         // fields /api/setup serves). Placed after the bias hook so the line
         // reflects the bias this bar just produced.
-        if (completedHtf.containsKey(Timeframe.M15)) {
+        if (completedHtf.containsKey(Timeframe.M15) && !ltfMachine) {
             String oteState = "NONE";
             OteAgreementStats stats = OteAgreementStats.forSymbol(symbol);
             com.topstep.trading.chart.ChartEngine ce = chartEngine;
@@ -997,7 +1097,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // 6c. Crash-safe agreement-stats checkpoint every completed 30m bar
         // (V3 Agent 06) — the loader collapses same-session lines last-wins,
         // so re-checkpointing can never double count.
-        if (completedHtf.containsKey(Timeframe.M30)) {
+        if (completedHtf.containsKey(Timeframe.M30) && !ltfMachine) {
             OteAgreementStatsStore.checkpoint(symbol, candle.getTimestamp());
         }
 
@@ -1058,7 +1158,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             if (chartEngine != null && lastBias != MarketBias.NEUTRAL) {
                 boolean screenshotPattern = chartEngine.hasReactedOte(
                         symbol, lastBias == MarketBias.BULLISH);
-                System.out.println("[" + symbol + "] OTE_ARMED (live gate path)"
+                System.out.println("[" + logTag + "] OTE_ARMED (live gate path)"
                         + " | chart30m.hasReactedOte=" + screenshotPattern
                         + " | bias=" + lastBias);
             }
@@ -1091,7 +1191,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 armedDiagnostic("EMIT", "EMIT: armed, attempt produced no signal and no reason",
                         candle.getClose(), Double.NaN);
             }
-            if (ctx.state == SetupState.IN_TRADE) {
+            if (ctx.state == SetupState.IN_TRADE && !ltfMachine) {
                 OteAgreementStats stats = OteAgreementStats.forSymbol(symbol);
                 if (chartAgreedAtEmission) {
                     stats.recordMachineEmittedChartAgreed(candle.getTimestamp());
@@ -1125,6 +1225,99 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
 
         // Remember the state for INVALIDATED-transition detection (SA4).
         lastSeenState = ctx.state;
+
+        // AGENT-05.9: the LTF machine runs AFTER this machine (and after the
+        // counter-trend scalp) on the SAME candle - the HTF setup has priority
+        // on a shared bar.
+        if (ltf != null) {
+            ltf.onCandle(candle, context);
+        }
+    }
+
+    // ======================================================================
+    // AGENT-05.9 - the LTF machine's own bias and context numbers
+    // ======================================================================
+
+    /** LTF machine: the range numbers every gate re-checks (M2 size, HTF_ALIGNED facts). */
+    private void stampLtfContext(SetupContext ctx, DealingRangeTracker.Snapshot range) {
+        ctx.machine = LtfRangeConfig.MACHINE_LTF;
+        ctx.ltfGating = ltfConfig.gating().name();
+        ctx.ltfMinLegTicks = ltfConfig.minLegTicks();
+        ctx.ltfRiskFraction = ltfConfig.riskFraction();
+        ctx.ltfRangeTicks = range.decisive()
+                ? Math.round((range.high() - range.low()) / spec.tickSize()) : Double.NaN;
+        SetupContext h = htfParent.core.getSetupContext();
+        ctx.ltfHtfBias = htfParent.lastBias;
+        ctx.ltfHtfRangeHigh = h.rangeHigh;
+        ctx.ltfHtfRangeLow = h.rangeLow;
+        ctx.ltfHtfEq = h.rangeEq;
+        DealingRangeTracker.SwingRange sr = dealingRange.swingRange();
+        String ev = sr == null ? null : sr.lastEvent();
+        if (ev != null && !ev.equals(lastLtfRangeEvent)) {
+            lastLtfRangeEvent = ev;
+            System.out.println("[" + logTag + "] LTF RANGE " + ev + " eq " + range.equilibrium()
+                    + " | HTF " + htfParent.lastBias + " [" + h.rangeLow + "," + h.rangeHigh + "]");
+        }
+    }
+
+    /**
+     * LTF machine: the bias = the LTF range's direction (NEUTRAL until a leg of
+     * range.ltf.minLegTicks exists). INDEPENDENT: that is the bias. HTF_ALIGNED
+     * (comparison): a direction that differs from the HTF machine's bias reads
+     * NEUTRAL (the machine does not hunt it; M2/M2b re-check at emission).
+     */
+    private void recordLtfBias() {
+        DealingRangeTracker.Snapshot r = dealingRange.snapshot();
+        MarketBias b = r.decisive() ? r.direction() : MarketBias.NEUTRAL;
+        MarketBias htf = htfParent.lastBias;
+        String note = null;
+        if (b != MarketBias.NEUTRAL && ltfConfig.gating() == LtfRangeConfig.Gating.HTF_ALIGNED && b != htf) {
+            note = "LTF bias " + b + " != HTF bias " + htf + " (range.ltf.gating=HTF_ALIGNED) -> NEUTRAL";
+            b = MarketBias.NEUTRAL;
+        }
+        if (note != null && !note.equals(lastLtfBiasNote)) {
+            System.out.println("[" + logTag + "] " + note);
+        }
+        lastLtfBiasNote = note;
+        core.recordHtfBias(b);
+        lastBias = b;
+    }
+
+    /** True when the OTHER machine (or the counter-trend scalp) holds this symbol's order / position. */
+    private boolean siblingOwnsPosition() {
+        if (ltfMachine) {
+            return htfParent.positionOpen
+                    || (htfParent.counterTrend != null && htfParent.counterTrend.ownsPosition());
+        }
+        return ltf != null && ltf.positionOpen;
+    }
+
+    /**
+     * LTF machine emission gates outside the validator: one position per
+     * symbol, range.ltf.sessions, range.ltf.maxPerDay. Every refusal is a
+     * reason (lastGateFailed + one GateDecisionEvent).
+     */
+    private boolean ltfEmitAllowed(StrategyContext context) {
+        boolean accountPosition = context != null && context.hasPosition(symbol);
+        if (siblingOwnsPosition() || accountPosition || positionOpen) {
+            armedDiagnostic("POSITION", "POSITION: " + symbol + " held by the "
+                    + (htfParent.positionOpen ? "HTF machine" : accountPosition ? "account" : "counter-trend scalp")
+                    + " (one position per symbol; LTF emits once it is flat)",
+                    htfParent.positionOpen ? 1 : 0, accountPosition ? 1 : 0);
+            return false;
+        }
+        if (!ltfConfig.sessionAllowed(sessionWindowNow)) {
+            armedDiagnostic("LTF", "LTF: session " + sessionWindowNow + " not in range.ltf.sessions "
+                    + ltfConfig.sessions(), Double.NaN, Double.NaN);
+            return false;
+        }
+        if (!ltfQuota.left(lastCandleInstant, ltfConfig.maxPerDay())) {
+            armedDiagnostic("LTF", "LTF: range.ltf.maxPerDay " + ltfConfig.maxPerDay() + " reached ("
+                    + ltfQuota.emitsOn(lastCandleInstant) + " today)",
+                    ltfQuota.emitsOn(lastCandleInstant), ltfConfig.maxPerDay());
+            return false;
+        }
+        return true;
     }
 
     // ======================================================================
@@ -1148,7 +1341,9 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private void publishArmedDecision(String gate, String reason, double numberA, double numberB) {
         if (reason == null || reason.equals(lastArmedDiagnostic)) return;
         lastArmedDiagnostic = reason;
-        System.out.println("[" + symbol + "] OTE_ARMED, not emitted: " + reason);
+        // AGENT-05.9: every LTF decision is tagged (reason starts with STDV_OTE_LTF:).
+        if (ltfMachine) reason = LtfRangeConfig.REASON_PREFIX + " " + reason;
+        System.out.println("[" + logTag + "] OTE_ARMED, not emitted: " + reason);
         if (eventBus != null) {
             com.topstep.trading.event.EngineTelemetry.publish(eventBus,
                     new com.topstep.trading.event.GateDecisionEvent(symbol, lastCandleInstant,
@@ -1233,7 +1428,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             if (ctx.state == SetupState.IN_TRADE && rearmCooldownRemaining < 0 && rearmAfterClose) {
                 rearmCooldownRemaining = rearmCooldownBars;
                 detectedThisBar = true;
-                System.out.println("[" + symbol + "] SCALP: position closed — re-arm in "
+                System.out.println("[" + logTag + "] SCALP: position closed — re-arm in "
                         + rearmCooldownBars + " bars");
             }
         }
@@ -1248,7 +1443,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             } else if (++entryPendingBars > entryTimeoutBars) {
                 entryPendingBars = 0;
                 positionOpen = false;
-                System.out.println("[" + symbol + "] SCALP: entry not filled within "
+                System.out.println("[" + logTag + "] SCALP: entry not filled within "
                         + entryTimeoutBars + " bars — releasing latch, setup invalidated");
                 core.invalidate("entry not filled within " + entryTimeoutBars + " bars");
             }
@@ -1273,7 +1468,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             }
             rearmCooldownRemaining = rearmCooldownBars;
             detectedThisBar = true;
-            System.out.println("[" + symbol + "] SCALP: setup invalidated ("
+            System.out.println("[" + logTag + "] SCALP: setup invalidated ("
                     + ctx.lastGateFailed + ") — re-arm in " + rearmCooldownBars + " bars");
         }
         if (detectedThisBar) {
@@ -1313,7 +1508,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         if (pendingPositionClosed.compareAndSet(true, false)) {
             positionOpen = false;
             if (ctx.state == SetupState.IN_TRADE && !executedSinceEmit(context)) {
-                System.out.println("[" + symbol + "] signal released without execution"
+                System.out.println("[" + logTag + "] signal released without execution"
                         + " — legacy latch cleared, setup invalidated for re-arm");
                 core.invalidate("signal not executed (released)");
             } else if (ctx.state == SetupState.IN_TRADE && rearmAfterClose
@@ -1323,7 +1518,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 // missed the next setup of the window (09-28 14:53 G1).
                 closedAwaitingRearm = true;
                 rearmCooldownRemaining = rearmCooldownBars;
-                System.out.println("[" + symbol + "] position closed — re-arm in "
+                System.out.println("[" + logTag + "] position closed — re-arm in "
                         + rearmCooldownBars + " bars (setup.rearmAfterClose=true)");
                 return;
             }
@@ -1333,7 +1528,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                 return;
             }
             rearmCooldownRemaining = rearmCooldownBars;
-            System.out.println("[" + symbol + "] setup invalidated ("
+            System.out.println("[" + logTag + "] setup invalidated ("
                     + ctx.lastGateFailed + ") — re-arm in " + rearmCooldownBars + " bars");
             return;
         }
@@ -1364,7 +1559,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         positionOpen = false;
         entryPendingBars = 0;
         String why = (reason == null || reason.isBlank()) ? "invalidated" : reason;
-        System.out.println("[" + symbol + "] setup ended before its entry filled (" + why
+        System.out.println("[" + logTag + "] setup ended before its entry filled (" + why
                 + ") — cancelling the resting entry order");
         if (eventBus != null) {
             eventBus.publish(new com.topstep.trading.event.SetupCancelledEvent(symbol, why, lastCandleInstant));
@@ -1385,7 +1580,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         if (!rearmBiasGuard.isDuplicateInvalidation(ctx, ctx.lastGateFailed)) return false;
         if (!canRearm(ctx, context, isInstrumentKillzone(lastCandleInstant))) return false;
         rearmBiasGuard.recordSuppressed();
-        System.out.println("[" + symbol + "] duplicate invalidation on the SAME bias event suppressed ("
+        System.out.println("[" + logTag + "] duplicate invalidation on the SAME bias event suppressed ("
                 + ctx.lastGateFailed + ", event key " + rearmBiasGuard.currentKey(ctx)
                 + ") — setup restored without a second cooldown");
         rearmCooldownRemaining = -1;
@@ -1432,7 +1627,8 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // AGENT-05.8: the counter-trend scalp's position blocks with-trend
         // EMISSION (tryEmitOrder), not the with-trend hunt - it may arm.
         if (context != null && context.hasPosition(symbol)
-                && !(counterTrend != null && counterTrend.ownsPosition())) return false;
+                && !(counterTrend != null && counterTrend.ownsPosition())
+                && !siblingOwnsPosition()) return false;   // AGENT-05.9: the other machine's position blocks EMISSION only
         // Mirror the PropFirmRiskEngine frequency gates (3b in evaluate()):
         // arming a setup the engine would block is pointless and would burn
         // the killzone window.
@@ -1481,7 +1677,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         if (sessionWindowNow != null) ctx.sessionWindow = sessionWindowNow.name();
         ctx.primeKillzone = primeKillzoneNow;
         rearmBiasGuard.onRearm(ctx);
-        System.out.println("[" + symbol + "] " + (scalpMode ? "SCALP: " : "")
+        System.out.println("[" + logTag + "] " + (scalpMode ? "SCALP: " : "")
                 + "re-armed for next setup"
                 + " (state=" + ctx.state + ", bias=" + lastBias + ")");
     }
@@ -1547,13 +1743,17 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         sessionWindowNow = null;         // AGENT-02
         lastSessionWindow = null;        // AGENT-02
         core.resetForNextWindow();
+        ltfQuota.reset();                // AGENT-05.9
+        lastLtfRangeEvent = null;
+        lastLtfBiasNote = null;
+        if (ltf != null) ltf.initialize();
     }
 
     @Override
     public void onSessionEnd() {
         // Persist the session's agreement counters (V3 Agent 06). Candle
         // time, not wall clock; a session with no candles has nothing new.
-        if (lastCandleInstant != null) {
+        if (lastCandleInstant != null && !ltfMachine) {
             OteAgreementStatsStore.checkpoint(symbol, lastCandleInstant);
         }
         // Core-level invalidation of an in-flight setup must still fire.
@@ -1562,11 +1762,13 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // The HTF aggregation and level engine intentionally survive: HTF
         // structure and prior-day levels are cross-session context.
         resetTransientState();
+        if (ltf != null) ltf.onSessionEnd();   // AGENT-05.9
     }
 
     @Override
     public void shutdown() {
         core.shutdown();
+        if (ltf != null) ltf.shutdown();       // AGENT-05.9 (its core never registered)
     }
 
     /** Clear per-setup / per-session wiring state (not the HTF context). */
@@ -1740,7 +1942,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             core.recordManipulationLeg(leg.get().legLow(), leg.get().legHigh(),
                     spec.tickSize(), MANIP_SNAP_TOL_TICKS);
             if (ctx.state == SetupState.MANIP_DONE) {
-                System.out.println("[" + symbol + "] MANIP leg (" + leg.get().kind() + ", session "
+                System.out.println("[" + logTag + "] MANIP leg (" + leg.get().kind() + ", session "
                         + sessionLegs.currentSession() + "): " + leg.get().legLow()
                         + " - " + leg.get().legHigh());
                 return;
@@ -1783,7 +1985,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             // Begin tracking the reversal-leg origin from the swept extreme.
             lowSinceSweep = Math.min(r.sweep().getSweptLevel(), candle.getLow());
             highSinceSweep = Math.max(r.sweep().getSweptLevel(), candle.getHigh());
-            System.out.println("[" + symbol + "] SWEEP recorded: "
+            System.out.println("[" + logTag + "] SWEEP recorded: "
                     + (r.raid() != null ? r.raid() : "starved-fallback score " + r.score()));
         }
     }
@@ -1809,7 +2011,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         markConsumed(r);
         lowSinceSweep = Math.min(r.sweep().getSweptLevel(), candle.getLow());
         highSinceSweep = Math.max(r.sweep().getSweptLevel(), candle.getHigh());
-        System.out.println("[" + symbol + "] SWEEP refreshed (newer level raid): " + r.raid());
+        System.out.println("[" + logTag + "] SWEEP refreshed (newer level raid): " + r.raid());
     }
 
     /** Rollback (raid.sweepMode=LEGACY): the pre-V5 sweep path, verbatim. */
@@ -1939,7 +2141,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         }
         starvedSweeps++;
         int fallback = BiasConfig.starvedScore(spec.raidMinQuality());
-        System.out.println("[" + symbol + "] RAID starved-pipeline fallback: sweep @ "
+        System.out.println("[" + logTag + "] RAID starved-pipeline fallback: sweep @ "
                 + sweep.getSweptLevel() + " could not be scored -> documented base "
                 + fallback + " (raid.starvedScore; count=" + starvedSweeps + ")");
         return fallback;
@@ -1957,7 +2159,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
         // on the OTE-band sweep); POST_SWEEP otherwise, unchanged.
         String stall = oteDriver.tryRecordDisplacement(core, lastBias, candle);
         if (stall != null) {
-            FunnelTelemetry.forSymbol(symbol).recordStall("SWEEP_DONE", stall);
+            FunnelTelemetry.forSymbol(logTag).recordStall("SWEEP_DONE", stall);
         }
     }
 
@@ -1978,7 +2180,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     private void tryArmOte(Candle candle) {
         String stall = oteDriver.tryArmOte(core, lastBias, candle);
         if (stall != null) {
-            FunnelTelemetry.forSymbol(symbol).recordStall("MSS_CONFIRMED", stall);
+            FunnelTelemetry.forSymbol(logTag).recordStall("MSS_CONFIRMED", stall);
         }
     }
 
@@ -2033,7 +2235,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                     why = "CT: " + sessionWindowNow + " - resting scalp entry cancelled";
                 }
                 if (why != null) {
-                    System.out.println("[" + symbol + "] " + why + " - cancelling the resting scalp entry");
+                    System.out.println("[" + logTag + "] " + why + " - cancelling the resting scalp entry");
                     if (eventBus != null) {
                         eventBus.publish(new com.topstep.trading.event.SetupCancelledEvent(symbol, why, now));
                     }
@@ -2099,7 +2301,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                     ctDecision(ct, v.reason(), v.a(), v.b());
                     if (v.reason().startsWith("CT: raid score")) {
                         // Evidence: the M4 scoring factors of an in-band scalp sweep below the floor.
-                        System.out.println("[" + symbol + "] CT sweep scored " + ctScore + " HTF-neutral; with-trend context: "
+                        System.out.println("[" + logTag + "] CT sweep scored " + ctScore + " HTF-neutral; with-trend context: "
                                 + (r.raid() != null ? r.raid() : "starved-fallback " + r.score()));
                     }
                 }
@@ -2172,9 +2374,11 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                     Double.NaN, Double.NaN);
             return;
         }
-        if (positionOpen || accountPos) {
+        boolean ltfHolds = ltf != null && ltf.positionOpen;   // AGENT-05.9
+        if (positionOpen || accountPos || ltfHolds) {
             ctDecision(ct, "CT: " + symbol + " not flat (with-trend latch=" + positionOpen + ", account="
-                    + accountPos + ") - one position per symbol", positionOpen ? 1 : 0, accountPos ? 1 : 0);
+                    + accountPos + (ltfHolds ? ", LTF machine=true" : "") + ") - one position per symbol",
+                    positionOpen ? 1 : 0, accountPos ? 1 : 0);
             return;
         }
         double rrFloor = OteConfig.rrFloor(scalpMode);
@@ -2312,7 +2516,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
     /** Write the scalp's lastGateFailed and publish ONE GateDecisionEvent "CT" per distinct reason. */
     private void ctDecision(CounterTrendScalp ct, String reason, double a, double b) {
         if (!ct.decide(reason)) return;
-        System.out.println("[" + symbol + "] " + reason);
+        System.out.println("[" + logTag + "] " + reason);
         if (eventBus != null) {
             com.topstep.trading.event.EngineTelemetry.publish(eventBus,
                     new com.topstep.trading.event.GateDecisionEvent(symbol, lastCandleInstant,
@@ -2349,6 +2553,15 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             armedDiagnostic("POSITION", "POSITION: " + symbol + " counter-trend scalp "
                     + counterTrend.phase() + " (one position per symbol; with-trend emits once it is flat)",
                     1, Double.NaN);
+            return;
+        }
+        // AGENT-05.9: one position per symbol across the two machines.
+        if (ltf != null && ltf.positionOpen) {
+            armedDiagnostic("POSITION", "POSITION: " + symbol + " held by the LTF machine"
+                    + " (one position per symbol; HTF emits once it is flat)", 1, Double.NaN);
+            return;
+        }
+        if (ltfMachine && !ltfEmitAllowed(context)) {
             return;
         }
         // NO-OVERLAP (scalp): never emit while a position is open on this
@@ -2408,6 +2621,13 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             tradesAtEmit = (account != null) ? account.getTradesToday() : -1;
             tradingDayAtEmit = (account != null) ? account.getCurrentTradingDay() : null;
             lastArmedDiagnostic = null;
+            if (ltfMachine) {
+                ltfQuota.record(lastCandleInstant);   // AGENT-05.9: range.ltf.maxPerDay
+                System.out.println("[" + logTag + "] LTF EMITTED " + ctx.htfBias + " range [" + ctx.rangeLow
+                        + "," + ctx.rangeHigh + "] eq " + ctx.rangeEq + " entry " + ctx.entry + " stop " + ctx.stop
+                        + " T1 " + ctx.t1 + " T2 " + ctx.t2 + " size " + ctx.sizeRequest
+                        + " (" + ltfQuota.emitsOn(lastCandleInstant) + " today)");
+            }
         }
     }
 
@@ -2460,6 +2680,11 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
                     - (account.getHighestEndOfDayBalance() - account.getEquity());
         }
         double budget = StdvOteSizer.riskBudget(activeRiskLimits.getRiskPerTrade(), dllRoom, mllRoom);
+        if (ltfMachine) {
+            // AGENT-05.9: range.ltf.riskFraction (default 1.0) of the SAME budget
+            // (never more); the sizer's caps and the risk engine are unchanged.
+            budget = CounterTrendScalp.scaledBudget(budget, ltfConfig.riskFraction());
+        }
         StdvOteSizer.RiskSize rs = StdvOteSizer.riskDerived(budget, entry, stop,
                 spec.tickSize(), spec.tickValue(),
                 com.topstep.trading.risk.RiskConfig.minMicros(), cap);
@@ -2472,7 +2697,7 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             // FABLE-REJECT #1: the boost never raises $ risk above the budget.
             int boosted = StdvOteSizer.applyBoost(size, boost, cap, budget, rs.perContract());
             if (boosted != size) {
-                System.out.println("[" + symbol + "] KILLZONE SIZE BOOST x" + boost
+                System.out.println("[" + logTag + "] KILLZONE SIZE BOOST x" + boost
                         + " -> " + boosted + " micros (risk-derived " + size + ", cap " + cap
                         + ", budget $" + budget + ")");
             }
