@@ -57,10 +57,15 @@ public final class Ote30mConfluenceGate {
 
     /** Build from system properties, register for API access, log config. */
     public static Ote30mConfluenceGate install(String symbol) {
+        return install(symbol, true);
+    }
+
+    /** AGENT-05.9: {@code register=false} = the LTF machine's own gate (the registered one is the HTF's). */
+    public static Ote30mConfluenceGate install(String symbol, boolean register) {
         Mode mode = parseMode(OteConfig.ote30mModeRaw());
         boolean acceptArmed = com.topstep.trading.config.EngineConfig.current().getBoolean(ACCEPT_ARMED_PROPERTY, false);
         Ote30mConfluenceGate g = new Ote30mConfluenceGate(symbol, mode, acceptArmed);
-        REGISTRY.put(symbol, g);
+        if (register) REGISTRY.put(symbol, g);
         System.out.println("[OTE30M " + symbol + "] config: mode=" + mode
                 + " acceptArmed=" + acceptArmed);
         return g;

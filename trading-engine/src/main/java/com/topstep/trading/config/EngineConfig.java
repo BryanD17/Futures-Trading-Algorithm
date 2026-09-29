@@ -144,6 +144,15 @@ public final class EngineConfig {
         k.add(key("entry.counterTrend.minRangeTicks", Type.INT, "400", "minimum dealing range (ticks) for a counter-trend scalp: a move to equilibrium must be worth >= 1R (MNQ 400 = 100 pt) (Agent 05.8)"));
         k.add(key("entry.counterTrend.maxRiskFraction", Type.DOUBLE, "0.5", "counter-trend scalp $ risk = the normal risk-derived budget x this fraction (clamped 0..1) (Agent 05.8)"));
         k.add(key("entry.counterTrend.maxPerDay", Type.INT, "2", "maximum counter-trend scalp emissions per CME trading day (18:00 ET roll) (Agent 05.8)"));
+        // V5 Agent 05.9: opt-in INDEPENDENT LTF dealing-range machine, default OFF
+        k.add(key("range.ltf.enabled", Type.BOOL, "false", "opt-in second setup machine per symbol on the INTRADAY-SWING dealing range (own bias / equilibrium / OTE / T1 / stop); false = byte-identical pre-05.9 engine (Agent 05.9)"));
+        k.add(key("range.ltf.minLegTicks", Type.INT, "120", "LTF range: minimum confirmed 5m swing leg in ticks (MNQ 120 = 30 pt) (Agent 05.9)"));
+        k.add(key("range.ltf.minLegTicks.<SYM>", Type.INT, null, "per-symbol LTF minimum leg (e.g. range.ltf.minLegTicks.MES / .MGC; falls back to range.ltf.minLegTicks) (Agent 05.9)"));
+        k.add(key("range.ltf.window", Type.ENUM, "INTRADAY_SWINGS", "LTF range window: INTRADAY_SWINGS = the most recent confirmed 5m fractal swing leg >= minLegTicks (Agent 05.9)"));
+        k.add(key("range.ltf.gating", Type.ENUM, "INDEPENDENT", "INDEPENDENT (the LTF range direction IS the LTF bias) | HTF_ALIGNED (comparison: LTF direction must equal the HTF bias and the entry sit on the HTF discount/premium side) (Agent 05.9)"));
+        k.add(key("range.ltf.maxPerDay", Type.INT, "4", "maximum LTF-machine emissions per CME trading day (18:00 ET roll) (Agent 05.9)"));
+        k.add(key("range.ltf.riskFraction", Type.DOUBLE, "1.0", "LTF $ risk = the normal risk-derived budget x this fraction (clamped 0..1; size still capped by size.maxMicros and the envelope) (Agent 05.9)"));
+        k.add(key("range.ltf.sessions", Type.CSV, "ASIA,LONDON,PRE_NY,NY_AM,NY_LUNCH,NY_PM,PRE_ASIA", "session windows the LTF machine may enter in (NO_ENTRY / WEEKEND are never allowed) (Agent 05.9)"));
         // bias
         k.add(key("bias.vote.mode", Type.ENUM, "VOTE", "LEGACY | LOG | VOTE - which bias feeds recordHtfBias (V5 Agent 03: VOTE)"));
         k.add(key("bias.voteRule", Type.ENUM, "ADAPTIVE", "STRICT_3OF4 | ADAPTIVE vote aggregation (Agent 03)"));
@@ -646,6 +655,14 @@ public final class EngineConfig {
                         + " maxRiskFraction=" + getDouble("entry.counterTrend.maxRiskFraction", 0.5)
                         + " maxPerDay=" + getInt("entry.counterTrend.maxPerDay", 2)
                 : "OFF (entry.counterTrendScalp=false)"));
+        out.add("LTF RANGE MACHINE (Agent 05.9): " + (getBoolean("range.ltf.enabled", false)
+                ? "ON window=" + getString("range.ltf.window", "INTRADAY_SWINGS")
+                        + " minLegTicks=" + getInt("range.ltf.minLegTicks", 120)
+                        + " gating=" + getString("range.ltf.gating", "INDEPENDENT")
+                        + " maxPerDay=" + getInt("range.ltf.maxPerDay", 4)
+                        + " riskFraction=" + getDouble("range.ltf.riskFraction", 1.0)
+                        + " sessions=" + getString("range.ltf.sessions", "ASIA,LONDON,PRE_NY,NY_AM,NY_LUNCH,NY_PM,PRE_ASIA")
+                : "OFF (range.ltf.enabled=false)"));
         out.add("LIFECYCLE (Agent 05.3): setup.rearmAfterClose=" + getBoolean("setup.rearmAfterClose", true)
                 + " rearmCooldownBars=" + getInt("setup.rearmCooldownBars", 5)
                 + " | unfilled entry cancelled when its setup ends (order.ttlBars = backstop)");

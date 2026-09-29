@@ -30,7 +30,9 @@ ext.engineConfigPrefixes = [
         // Agent 04 (M5 FVG linkage)
         'fvg.',
         // Agent 05.8 (opt-in counter-trend scalp)
-        'entry.'
+        'entry.',
+        // Agent 05.9 (opt-in LTF dealing-range machine)
+        'range.'
 ]
 
 /** System properties of THIS gradle JVM that belong to the engine. */

@@ -534,6 +534,28 @@ public class MandatoryConfluenceValidator {
             }
             confirmations.add("M2: bias=" + ctx.htfBias + " epoch=" + ctx.biasEpoch);
         }
+        // V5 Agent 05.9 - the LTF machine (range.ltf.enabled): M2 above ran on
+        // the LTF machine's OWN bias (its range direction). Re-check the LTF
+        // range's recorded size, and under HTF_ALIGNED that the LTF direction
+        // equals the HTF machine's bias. The HTF machine (machine "HTF") never
+        // enters this block.
+        boolean ltfMachine = com.topstep.trading.strategy.stdvote.LtfRangeConfig.MACHINE_LTF.equals(ctx.machine);
+        boolean ltfAligned = ltfMachine && "HTF_ALIGNED".equals(ctx.ltfGating);
+        if (ltfMachine) {
+            if (!(ctx.ltfRangeTicks >= ctx.ltfMinLegTicks)) {
+                return ValidationResult.fail(java.util.List.of(
+                        "M2: LTF range " + ctx.ltfRangeTicks + " ticks < range.ltf.minLegTicks "
+                                + ctx.ltfMinLegTicks), "M2");
+            }
+            if (ltfAligned && ctx.ltfHtfBias != ctx.htfBias) {
+                return ValidationResult.fail(java.util.List.of(
+                        "M2: LTF direction " + ctx.htfBias + " != HTF bias " + ctx.ltfHtfBias
+                                + " (range.ltf.gating=HTF_ALIGNED)"), "M2");
+            }
+            confirmations.add("M2: LTF machine bias=" + ctx.htfBias + " range [" + ctx.rangeLow + ","
+                    + ctx.rangeHigh + "] " + ctx.ltfRangeTicks + " >= " + ctx.ltfMinLegTicks
+                    + " ticks, gating=" + ctx.ltfGating + (ltfAligned ? " (HTF bias " + ctx.ltfHtfBias + ")" : ""));
+        }
 
         // M2b — premium/discount: the proposed ENTRY price (a resting limit,
         // never the current tick) must sit at a DISCOUNT for longs / a
@@ -550,6 +572,19 @@ public class MandatoryConfluenceValidator {
             }
             confirmations.add("M2b: Premium/Discount (entry vs equilibrium) — "
                     + d.reason());
+        }
+        // V5 Agent 05.9 - HTF_ALIGNED (comparison mode): the LTF entry must ALSO
+        // sit on the HTF dealing range's discount (long) / premium (short) side.
+        if (ltfAligned) {
+            double htfEq = ctx.ltfHtfEq;
+            boolean ok = !Double.isNaN(htfEq) && (dirBullish ? ctx.entry < htfEq : ctx.entry > htfEq);
+            if (!ok) {
+                return ValidationResult.fail(java.util.List.of(
+                        "M2b: HTF_ALIGNED entry " + ctx.entry + " not in the HTF "
+                                + (dirBullish ? "discount" : "premium") + " (HTF eq " + htfEq + ")"), "M2b");
+            }
+            confirmations.add("M2b: HTF_ALIGNED entry " + ctx.entry + (dirBullish ? " < " : " > ")
+                    + "HTF eq " + htfEq);
         }
 
         // M3 — session gate (V5 Agent 02, RC-02). SACRED in every mode: the

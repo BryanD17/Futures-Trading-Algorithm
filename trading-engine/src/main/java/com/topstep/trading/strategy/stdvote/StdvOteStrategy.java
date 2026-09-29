@@ -137,6 +137,28 @@ public final class StdvOteStrategy implements TradingStrategy {
                            MandatoryConfluenceValidator validator,
                            EventBus eventBus,
                            long setupExpiryBars) {
+        this(symbol, projectionEngine, oteCalculator, validator, eventBus, setupExpiryBars, true);
+    }
+
+    // AGENT-05.9: the LTF machine's core is NOT registered in StdvOteRegistry
+    // (the registry / API / SIM telemetry keep reading the HTF machine), and it
+    // tags its signals STDV_OTE_LTF with the LTF ladder (T1 = LTF equilibrium,
+    // T2 = LTF far edge). The HTF core keeps every default below.
+    /** True when this core registered itself (shutdown only unregisters its own registration). */
+    private final boolean registered;
+    /** Signal reason prefix ("STDV_OTE" | "STDV_OTE_LTF"). */
+    private String signalPrefix = NAME;
+    /** LTF ladder: T1 = equilibrium (0.5), T2 = T3 = the leg's far edge. */
+    private boolean ltfLadder = false;
+
+    /** AGENT-05.9: construct a core that may stay out of the registry (the LTF machine). */
+    StdvOteStrategy(String symbol,
+                    StdvProjectionEngine projectionEngine,
+                    OteEntryCalculator oteCalculator,
+                    MandatoryConfluenceValidator validator,
+                    EventBus eventBus,
+                    long setupExpiryBars,
+                    boolean register) {
         if (symbol == null) throw new IllegalArgumentException("symbol must not be null");
         if (projectionEngine == null) throw new IllegalArgumentException("projectionEngine must not be null");
         if (oteCalculator == null) throw new IllegalArgumentException("oteCalculator must not be null");
@@ -149,7 +171,15 @@ public final class StdvOteStrategy implements TradingStrategy {
         this.setupExpiryBars = Math.max(0L, setupExpiryBars);
         this.setup = new SetupContext();
         this.setup.symbol = symbol;
-        StdvOteRegistry.register(this);
+        this.registered = register;
+        if (register) StdvOteRegistry.register(this);
+    }
+
+    /** AGENT-05.9 wiring: the LTF machine's signal prefix + ladder. */
+    void configureLtfMachine() {
+        this.signalPrefix = "STDV_OTE_LTF";
+        this.ltfLadder = true;
+        this.setup.machine = LtfRangeConfig.MACHINE_LTF;
     }
 
     /** Read-only snapshot accessor for the API layer (SA6). */
@@ -442,7 +472,7 @@ public final class StdvOteStrategy implements TradingStrategy {
 
     @Override
     public void shutdown() {
-        StdvOteRegistry.unregister(symbol);
+        if (registered) StdvOteRegistry.unregister(symbol);
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -761,6 +791,11 @@ public final class StdvOteStrategy implements TradingStrategy {
             // FURTHEST rung whose RR stays within the ONE ceiling; the M7
             // floor is checked against T1. Recomputed on every attempt.
             double[] rungs = oteCalculator.targetLadder(setup.ote, tickSize);
+            if (ltfLadder) {
+                // AGENT-05.9: the LTF machine's ladder - T1 = the LTF equilibrium,
+                // T2 = the LTF far edge (the leg terminus). Same ceiling rule.
+                rungs = new double[] {rungs[0], rungs[2], rungs[2]};
+            }
             setup.t1 = rungs[0];
             setup.t2 = rungs[1];
             setup.t3 = rungs[2];
@@ -847,7 +882,8 @@ public final class StdvOteStrategy implements TradingStrategy {
             // V5 anchored plan: carry the REAL RR and the real T1/final ladder.
             signal = new StrategySignalEvent(
                     type, symbol, side, entry, stop, targetPrice,
-                    "STDV_OTE: " + tier + " size=" + sizeRequest
+                    signalPrefix + ": " + tier + " size=" + sizeRequest
+                            + (ltfLadder ? " range=[" + setup.ote.legLow() + "," + setup.ote.legHigh() + "] eq=" + setup.ote.eq50() : "")
                             + " anchor=" + setup.oteAnchorMode
                             + " T1=" + setup.t1 + " T2=" + setup.t2 + " T3=" + setup.t3
                             + " RR(T1)=" + String.format("%.2f", setup.rrT1)
@@ -858,7 +894,7 @@ public final class StdvOteStrategy implements TradingStrategy {
             // tier-default partial ladder, exactly as before).
             signal = new StrategySignalEvent(
                     type, symbol, side, entry, stop, targetPrice,
-                    "STDV_OTE: " + tier + " size=" + sizeRequest
+                    signalPrefix + ": " + tier + " size=" + sizeRequest
                             + " RR=" + String.format("%.2f", rr),
                     tier, sizeRequest);
         } else {
