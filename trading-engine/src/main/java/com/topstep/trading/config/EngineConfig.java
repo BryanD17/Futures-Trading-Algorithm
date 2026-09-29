@@ -206,7 +206,8 @@ public final class EngineConfig {
         k.add(key("size.minMicros", Type.INT, "1", "risk-derived size below this is DENIED (SIZE: ...); band [1,20]"));
         k.add(key("size.preferredMicros", Type.INT, "5", "fallback size when geometry is unknown; never a floor"));
         k.add(key("size.maxMicros", Type.INT, "20", "hard micro ceiling per position (also capped by RiskLimits.maxContracts)"));
-        k.add(key("risk.haltOnProfitTarget", Type.BOOL, null, "stop at the profit target (unset: LIVE true / SIM false)"));
+        k.add(key("risk.haltOnProfitTarget", Type.BOOL, null, "stop at the profit target (unset: LIVE true / SIM false); LIVE: refuses new entries once the TRACKED realized P&L since engine start reaches the profile's profit target (never the broker balance) (Agent 05.10)"));
+        k.add(key("risk.phaseAware", Type.BOOL, "false", "LIVE risk path: false = STATIC, the proven path (riskEngine.evaluate with the static riskPerTrade; no PhaseAwareRiskCalculator / quality gate / zone multiplier); true = PHASE_AWARE (lifecycle zone x setup quality budget, quality gate), modelled identically by the tape harness; the strategy sizes from the same budget (Agent 05.10)"));
         k.add(key("news.blockWithoutCalendar", Type.BOOL, "false", "let a Mock/absent economic calendar block trades"));
         k.add(key("order.ttlBars", Type.INT, null, "SIM resting-order TTL in 1m bars (unset: ote.windowBars x detector.timeframe x 2 = 80)"));
         // trade profile
@@ -663,6 +664,7 @@ public final class EngineConfig {
                         + " riskFraction=" + getDouble("range.ltf.riskFraction", 1.0)
                         + " sessions=" + getString("range.ltf.sessions", "ASIA,LONDON,PRE_NY,NY_AM,NY_LUNCH,NY_PM,PRE_ASIA")
                 : "OFF (range.ltf.enabled=false)"));
+        out.add(riskPathLine(scalp));
         out.add("LIFECYCLE (Agent 05.3): setup.rearmAfterClose=" + getBoolean("setup.rearmAfterClose", true)
                 + " rearmCooldownBars=" + getInt("setup.rearmCooldownBars", 5)
                 + " | unfilled entry cancelled when its setup ends (order.ttlBars = backstop)");
@@ -672,6 +674,31 @@ public final class EngineConfig {
         out.add("ACCOUNT GUARD: topstep.allowNonSimulated=" + nonSim
                 + (nonSim ? " (REAL-MONEY ACCOUNTS ALLOWED)" : " (practice/simulated accounts only)"));
         return out;
+    }
+
+    /** Static per-trade budget of the Topstep 50K profiles (RiskLimits.topstep50k / topstep50kScalp). */
+    public static final double RISK_PER_TRADE_LEGACY = 250.0;
+    public static final double RISK_PER_TRADE_SCALP = 150.0;
+
+    /**
+     * AGENT-05.10: {@code RISK PATH: STATIC (proven) | PHASE_AWARE} and the
+     * effective per-trade budget (EngineConfigTest pins the two constants to
+     * RiskLimits so this line cannot drift from the profile).
+     */
+    String riskPathLine(boolean scalp) {
+        double perTrade = scalp ? RISK_PER_TRADE_SCALP : RISK_PER_TRADE_LEGACY;
+        String halt = getRaw("risk.haltOnProfitTarget");
+        String haltTxt = "haltOnProfitTarget=" + (halt == null || halt.isBlank() ? "LIVE true / SIM false" : halt.trim())
+                + " (tracked P&L since engine start)";
+        if (getBoolean("risk.phaseAware", false)) {
+            return String.format(Locale.ROOT, "RISK PATH: PHASE_AWARE (risk.phaseAware=true) - budget = $%.2f base"
+                    + " (0.5%% of the 50K profile) x zone (NORMAL 1.0 / PROTECTION 0.6 / CAUTION 0.7 / DANGER 0.4 / CRUISE 0.3)"
+                    + " x quality (q>=8 1.0 / 6-7 0.75 / 4-5 0.5), quality gate, capped by DLL/MLL room; zone from tracked P&L"
+                    + " | %s", perTrade, haltTxt);
+        }
+        return String.format(Locale.ROOT, "RISK PATH: STATIC (proven) (risk.phaseAware=false) - effective per-trade budget"
+                + " $%.2f (RiskLimits.riskPerTrade%s), capped by DLL/MLL room | %s",
+                perTrade, scalp ? ", scalp profile" : "", haltTxt);
     }
 
     /** JSON-friendly view for GET /api/status ({@code effectiveConfig}). */

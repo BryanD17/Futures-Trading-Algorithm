@@ -48,4 +48,15 @@ public interface StrategyContext {
     default void setCurrentTime(Instant time) {
         // Default no-op - implementations should override
     }
+
+    /**
+     * AGENT-05.10 (V5): the per-trade $ budget the strategy sizes from, BEFORE
+     * the DLL / MLL room caps. Default = the static {@code riskPerTrade} (the
+     * proven path); the LIVE runner installs its {@code LiveRiskPath} budget
+     * when {@code risk.phaseAware=true} so the request is sized from the budget
+     * the risk engine will actually use.
+     */
+    default double perTradeRiskBudget(String symbol, TradeTier tier, double staticRiskPerTrade) {
+        return staticRiskPerTrade;
+    }
 }

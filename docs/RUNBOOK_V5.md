@@ -86,6 +86,7 @@ range.ltf.gating=INDEPENDENT
 range.ltf.maxPerDay=4
 range.ltf.riskFraction=1.0
 range.ltf.sessions=ASIA,LONDON,PRE_NY,NY_AM,NY_LUNCH,NY_PM,PRE_ASIA
+risk.phaseAware=false
 ```
 
 `scalp.enabled` stays at its code default `false` (legacy target model: T1 = 0.5 of the dealing range, T2 = 0.382, T3 = range extreme). The Topstep envelope (DLL $1,000, MLL $2,000, max 5 contracts / 10 total on the 50K legacy profile, 14:45–17:00 CT no-entry + 15:10 CT flatten) is not configurable.
@@ -116,6 +117,8 @@ range.ltf.sessions=ASIA,LONDON,PRE_NY,NY_AM,NY_LUNCH,NY_PM,PRE_ASIA
 | news.blockWithoutCalendar | no calendar ≠ blackout |
 | entry.counterTrendScalp (+ entry.counterTrend.*) | OPT-IN, default false (= byte-identical engine). true: short a HIGH sweep inside the PREMIUM OTE band (0.618–0.786 from the low) of a BULLISH dealing range back to equilibrium (T1) / the top of the discount band (final), mirror for longs; IMPULSE_LEG trigger (PD array at the sweep + rejection close); only in `sessions` (NO_ENTRY/WEEKEND never), range ≥ `minRangeTicks`, $ risk = budget × `maxRiskFraction`, ≤ `maxPerDay`, one position per symbol (a with-trend setup may arm while it is open, emits once it is flat). Signals carry `STDV_OTE_CT:`; decisions are GateDecisionEvent gate `CT`. Tape: A-05.8 |
 | range.ltf.enabled (+ range.ltf.*) | OPT-IN, default false (= byte-identical engine). true: a SECOND full setup machine per symbol on the LOWER-TIMEFRAME dealing range = the most recent confirmed 5m fractal swing leg >= `minLegTicks` (120 = 30 MNQ pt; `.MES` / `.MGC` overrides), rebuilt on every qualifying swing, extended on new extremes, flipped only by an opposite leg >= minLegTicks (or a 1m close beyond its origin); own bias (= its direction), own equilibrium / premium-discount (M2b) / OTE band / sweep + ICT OB + rejection, T1 = LTF equilibrium, T2 = LTF far edge; the same M1..M9 chain. `gating=HTF_ALIGNED` (comparison) also requires LTF direction = HTF bias and the entry on the HTF discount/premium side. One position per symbol (first machine to emit holds it), `maxPerDay` 4, `riskFraction` 1.0 of the budget, `sessions` = every open window. Signals carry `STDV_OTE_LTF:`; `SetupContext.machine` = HTF / LTF. Tape: A-05.9 |
+| risk.phaseAware | default false = LIVE risk path STATIC (the proven path the tape harness measures): `riskEngine.evaluate(signal, account, limits)` with the static riskPerTrade, no PhaseAwareRiskCalculator / quality gate / zone multiplier (DLL / MLL / max contracts unchanged). true = PHASE_AWARE: budget = $250 x zone x quality with the quality gate and the lifecycle's frequency / daily-buffer checks; the harness models it identically and the strategy sizes the request from the same budget. The lifecycle zone comes from TRACKED P&L since engine start on the 50K baseline, never the broker balance. Boot line `RISK PATH: STATIC (proven) | PHASE_AWARE`. Tape: A-05.10 |
+| risk.haltOnProfitTarget | unset = LIVE true / SIM false. LIVE refuses new entries once the tracked REALIZED P&L since engine start reaches the profit target ($3,000), never the broker balance. A-05.10 |
 | strategy.legacyFallback | a non-{MNQ,MES,MGC} symbol fails fast instead of silently running the legacy strategy |
 
 ## 5. Reading the boot table and the gate histogram
@@ -149,6 +152,7 @@ AUTOPSY_PROPS="stdvOte.enabled=false"                            # legacy IctHig
 AUTOPSY_PROPS="entry.counterTrendScalp=true"                     # opt-in counter-trend scalp (A-05.8)
 AUTOPSY_PROPS="range.ltf.enabled=true"                           # opt-in LTF dealing-range machine (A-05.9)
 AUTOPSY_PROPS="range.ltf.enabled=true;range.ltf.gating=HTF_ALIGNED"  # LTF machine, HTF-aligned comparison
+AUTOPSY_PROPS="range.ltf.enabled=true;risk.phaseAware=true"     # LIVE config + the phase-aware risk layer (A-05.10)
 ```
 
 ## 8. Results on the proven tape (final matrix v5, Main 55994e6)
