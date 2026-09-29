@@ -245,10 +245,17 @@ class FunnelAutopsyHarness {
                 // ── post-signal chain (the SIM handler), synchronous here ──
                 String signalCol = "";
                 String riskCol = "";
-                if (after == SetupState.IN_TRADE && before != SetupState.IN_TRADE) {
-                    StrategySignalEvent sig = awaitSignal(signals);
+                // V5 Agent 05.7 (measurement): a signal published on a bar
+                // whose state reads IN_TRADE -> IN_TRADE (a re-arm after a
+                // close that emits in the same step) was never drained, so it
+                // sat on the queue and was submitted at the NEXT transition
+                // with stale prices. Every signal on the bus is handled on the
+                // bar it is published, as the SIM/LIVE handler does.
+                boolean enteredTrade = after == SetupState.IN_TRADE && before != SetupState.IN_TRADE;
+                StrategySignalEvent sig = enteredTrade ? awaitSignal(signals) : signals.poll();
+                {
                     if (sig == null) {
-                        signalCol = "IN_TRADE-but-no-signal-on-bus";
+                        if (enteredTrade) signalCol = "IN_TRADE-but-no-signal-on-bus";
                     } else {
                         counts.get(sess)[4]++;
                         signalCol = sig.getSignalType() + " e=" + sig.getEntryPrice() + " s=" + sig.getStopPrice()

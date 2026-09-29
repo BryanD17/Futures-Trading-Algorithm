@@ -146,6 +146,7 @@ public final class EngineConfig {
         k.add(key("bias.range.reanchorFraction", Type.DOUBLE, "0.5", "pullback share of the leg that re-anchors the dealing range on a BOS (Agent 03)"));
         k.add(key("bias.range.window", Type.ENUM, "AUTO", "dealing-range window SESSION_DAY (Globex day from 18:00 ET) | RTH_FIRST (from 09:30 ET the RTH impulse leg) | AUTO (RTH leg once >= minLegTicks, else session day) (Agent 05.6)"));
         k.add(key("bias.range.minLegTicks", Type.INT, "400", "minimum RTH impulse leg (ticks) for RTH_FIRST/AUTO (Agent 05.6)"));
+        k.add(key("bias.range.carryAcrossReopen", Type.BOOL, "true", "keep the previous session's governing dealing range across the 18:00 ET reopen until the new session prints an impulse >= minLegTicks; false = restart at the reopen (Agent 05.7)"));
         k.add(key("bias.range.minLegTicks.<SYM>", Type.INT, null, "per-symbol minimum RTH impulse leg (falls back to bias.range.minLegTicks)"));
         k.add(key("bias.v1.includeH4", Type.BOOL, "false", "V1 vote consults H4"));
         k.add(key("bias.hysteresis", Type.BOOL, "true", "NEUTRAL-flip grace for in-flight setups", "bias.hysteresis.enabled"));

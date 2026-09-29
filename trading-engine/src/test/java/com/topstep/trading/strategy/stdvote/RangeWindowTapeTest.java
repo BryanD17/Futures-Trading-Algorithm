@@ -69,6 +69,7 @@ class RangeWindowTapeTest {
     @AfterAll
     static void clear() {
         System.clearProperty("bias.range.window");
+        System.clearProperty("bias.range.carryAcrossReopen");
         StdvOteRegistry.unregister("MNQ");
     }
 
@@ -176,6 +177,9 @@ class RangeWindowTapeTest {
         static Replay run(String window) throws Exception {
             if (window == null) System.clearProperty("bias.range.window");
             else System.setProperty("bias.range.window", window);
+            // V5 Agent 05.7: this test isolates the 05.6 window A/B; the
+            // reopen carry is proven in DealingRangeCarryTapeTest.
+            System.setProperty("bias.range.carryAcrossReopen", "false");
             String tag = window == null ? "AUTO(default)" : window;
             Replay r = new Replay();
             List<Candle> mnq = load("real_MNQ_1m.json", "MNQ");
@@ -250,6 +254,7 @@ class RangeWindowTapeTest {
                 bus.stop();
                 StdvOteRegistry.unregister("MNQ");
                 System.clearProperty("bias.range.window");
+                System.clearProperty("bias.range.carryAcrossReopen");
             }
             r.trades = new ArrayList<>(exec.getCompletedTrades());
             double pnl = 0;

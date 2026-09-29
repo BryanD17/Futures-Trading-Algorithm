@@ -108,6 +108,17 @@ public final class BiasConfig {
         return Math.max(1, v);
     }
 
+    /** Code default of {@code bias.range.carryAcrossReopen} (V5 Agent 05.7). */
+    public static final boolean DEFAULT_RANGE_CARRY_ACROSS_REOPEN = true;
+
+    /** Keep the previous session's governing dealing range across the
+     *  18:00 ET reopen until the new session prints an impulse leg of
+     *  {@code bias.range.minLegTicks} ({@code bias.range.carryAcrossReopen});
+     *  false = the range restarts at the reopen (A/B). */
+    public static boolean rangeCarryAcrossReopen() {
+        return cfg().getBoolean("bias.range.carryAcrossReopen", DEFAULT_RANGE_CARRY_ACROSS_REOPEN);
+    }
+
     // ── Levels ──────────────────────────────────────────────────────────
 
     /** A trading day with fewer bars is a phantom (settlement print) and

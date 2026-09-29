@@ -118,6 +118,7 @@ class IctOrderBlockAtSweepTest {
         // reads that morning BEARISH (RangeWindowTapeTest). Pinned so this
         // class keeps documenting the 05.4/05.5 mechanics on that setup.
         System.setProperty("bias.range.window", "SESSION_DAY");
+        System.setProperty("bias.range.carryAcrossReopen", "false"); // V5 05.7: pre-carry regression
         ict = Replay.run(null);
         sweepBar = Replay.run("SWEEP_BAR");
         System.out.println(ict.log);
@@ -128,6 +129,7 @@ class IctOrderBlockAtSweepTest {
     @AfterAll
     static void clear() {
         System.clearProperty("bias.range.window");
+        System.clearProperty("bias.range.carryAcrossReopen");
         System.clearProperty("ote.pdArraySource");
         StdvOteRegistry.unregister("MNQ");
     }
