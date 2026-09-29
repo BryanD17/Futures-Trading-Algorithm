@@ -1098,8 +1098,12 @@ public class LiveEngineRunner {
                 List<String> confluenceFactors = parseConfluenceFromReason(signal.getReason());
                 executionEngine.recordSignalContext(signal.getSymbol(), signal.getTier(), confluenceFactors);
 
-                // THEN submit to live market via connector
-                String orderId = connector.submitOrder(order, (id, status, fillPrice, fillQty) -> {
+                // THEN submit to live market via connector. AGENT-05.12: this
+                // is the one place an order is KNOWN to be a new entry, so it
+                // goes through submitEntryOrder, which refuses an entry on a
+                // calendar-guessed contract the broker cannot confirm.
+                // Protective / closing orders keep using submitOrder.
+                String orderId = connector.submitEntryOrder(order, (id, status, fillPrice, fillQty) -> {
                     handleOrderUpdate(id, status, fillPrice, fillQty, order, signal);
                 });
 

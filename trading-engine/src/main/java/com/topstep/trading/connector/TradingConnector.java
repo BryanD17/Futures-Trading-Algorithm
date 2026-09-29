@@ -43,6 +43,16 @@ public interface TradingConnector {
     String submitOrder(Order order, OrderListener listener) throws Exception;
 
     /**
+     * Submit an order that OPENS a new position (an entry). Venues that can
+     * refuse an entry on an unconfirmed contract binding override this; the
+     * default is a plain {@link #submitOrder}. Protective and closing orders
+     * must keep using {@link #submitOrder} so they are never refused.
+     */
+    default String submitEntryOrder(Order order, OrderListener listener) throws Exception {
+        return submitOrder(order, listener);
+    }
+
+    /**
      * Cancel an order.
      * @param orderId Order ID to cancel
      */
