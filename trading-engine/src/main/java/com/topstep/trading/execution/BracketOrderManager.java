@@ -1,14 +1,19 @@
 package com.topstep.trading.execution;
 
 import com.topstep.trading.connector.TopstepConnector;
+import com.topstep.trading.connector.TopstepConnector.BrokerOrder;
+import com.topstep.trading.connector.TopstepConnector.BrokerPosition;
+import com.topstep.trading.connector.TopstepConnector.BrokerSnapshot;
 import com.topstep.trading.domain.OrderSide;
 import com.topstep.trading.domain.OrderStatus;
+import com.topstep.trading.strategy.InstrumentCharacteristics;
 import com.topstep.trading.strategy.TradeTier;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.ToIntFunction;
 
 /**
  * Manages OCO (One Cancels Other) bracket orders for position protection.
@@ -24,6 +29,30 @@ import java.util.concurrent.ConcurrentHashMap;
  * Directional rules:
  * - LONG position: SL = Sell Stop Market (below entry), TP = Sell Limit (above entry)
  * - SHORT position: SL = Buy Stop Market (above entry), TP = Buy Limit (below entry)
+ *
+ * <h2>AGENT-05.11 (V5, LIVE defect 2026-09-29): the stop can never be lost</h2>
+ * <ul>
+ *   <li>Every stop change is PLACE-THEN-CANCEL: the new stop is placed first
+ *       and the old one is cancelled only after TopstepX acknowledged the new
+ *       one. Only if the new stop cannot be placed alongside the old one does
+ *       it fall back to cancel-then-place (retry with backoff, then the old
+ *       level, then FLATTEN by market + GateDecisionEvent
+ *       "BRACKET: stop lost — flattened").</li>
+ *   <li>The quantity a stop protects comes from the POSITION (the
+ *       {@link #setPositionQuantityProvider provider}, i.e. the engine's
+ *       Position after the partial), falling back to the take-profit ledger —
+ *       never a counter that can read 0. A quantity &lt;= 0 never cancels
+ *       anything.</li>
+ *   <li>After every stop operation the BROKER's view (Position/searchOpen +
+ *       Order/searchOpen) is logged and enforced: exactly one stop, size ==
+ *       position size. {@link #reconcileWithBroker()} repeats that every 30 s
+ *       and adopts broker positions the engine does not track.</li>
+ *   <li>A cancel refused with "order not open" (code 5 / 2) means the order is
+ *       GONE — never "still working". Every log line that states a broker
+ *       state follows a broker response.</li>
+ *   <li>When the position goes flat, every remaining order for the symbol is
+ *       cancelled at the broker and the empty book is verified.</li>
+ * </ul>
  */
 public class BracketOrderManager {
 
@@ -61,7 +90,17 @@ public class BracketOrderManager {
         public volatile String stopOrderId;
         public volatile double stopPrice;
         public double originalStopPrice;    // Keep track for breakeven calculation
-        public volatile int remainingQuantity;       // Contracts still protected by SL
+        public volatile int remainingQuantity;       // Contracts still open (TP ledger / position)
+        /** AGENT-05.11: size of the working stop as last acknowledged by the broker. */
+        public volatile int stopQuantity;
+        /**
+         * AGENT-05.11: where the stop is MEANT to be (the breakeven price once a
+         * move was requested, even if that move failed). Reconciliation
+         * re-places a missing stop here.
+         */
+        public volatile double targetStopPrice;
+        /** AGENT-05.11: bracket built for a broker position the engine did not open. */
+        public volatile boolean adopted = false;
 
         // Multi-level take profits
         public List<TakeProfitLevel> takeProfitLevels = new ArrayList<>();
@@ -93,6 +132,7 @@ public class BracketOrderManager {
             this.entryPrice = entryPrice;
             this.totalQuantity = quantity;
             this.remainingQuantity = quantity;
+            this.stopQuantity = quantity;
             this.entrySide = entrySide;
             this.tier = tier != null ? tier : TradeTier.TIER_1;
         }
@@ -139,6 +179,25 @@ public class BracketOrderManager {
         void onPartialTakeProfitFilled(BracketOrder bracket, TakeProfitLevel level, double fillPrice);
         void onBracketCanceled(BracketOrder bracket, String reason);
         void onStopMovedToBreakeven(BracketOrder bracket, double newStopPrice);
+
+        /**
+         * AGENT-05.11: a broker position the engine did not track was adopted
+         * (startup or reconciliation). The runner registers it so no second
+         * entry is opened on that symbol and its exit books P&amp;L.
+         */
+        default void onPositionAdopted(BracketOrder bracket) {
+            // Default no-op
+        }
+    }
+
+    /** Outcome of a cancel, as the broker answered it. */
+    enum CancelResult {
+        /** TopstepX acknowledged the cancel. */
+        CANCELLED,
+        /** TopstepX says the order is not open (already cancelled / filled). */
+        NOT_WORKING,
+        /** The cancel call failed; the order's broker state is unverified. */
+        FAILED
     }
 
     // Track active brackets by symbol
@@ -163,9 +222,35 @@ public class BracketOrderManager {
     private final java.util.concurrent.atomic.AtomicLong unprotectedFlattens = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong protectiveFailures = new java.util.concurrent.atomic.AtomicLong();
 
+    // ── AGENT-05.11 ──
+    /** Symbol -> absolute open quantity of the engine's Position (&lt;= 0 = unknown/flat). */
+    private volatile ToIntFunction<String> positionQuantityProvider;
+    /** Backoff base between protective retries (attempt n waits n * base). */
+    private volatile long retryBackoffMs = 150;
+    /** Consecutive reconciliation passes that saw a tracked symbol FLAT at the broker. */
+    private final Map<String, Integer> flatSightings = new ConcurrentHashMap<>();
+    /** Consecutive reconciliation passes that saw an UNTRACKED broker position. */
+    private final Map<String, Integer> untrackedSightings = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicLong stopsRestored = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong positionsAdopted = new java.util.concurrent.atomic.AtomicLong();
+
     /** Optional: publish GateDecisionEvent "BRACKET" on protective failures. */
     public void setEventBus(com.topstep.trading.event.EventBus bus) {
         this.eventBus = bus;
+    }
+
+    /**
+     * AGENT-05.11: where the protected quantity comes from — the engine's
+     * Position for the symbol (absolute size). Without a provider (or when it
+     * reports &lt;= 0) the take-profit ledger (total - filled TPs) is used.
+     */
+    public void setPositionQuantityProvider(ToIntFunction<String> provider) {
+        this.positionQuantityProvider = provider;
+    }
+
+    /** Test hook: backoff base between protective retries. */
+    void setRetryBackoffMs(long ms) {
+        this.retryBackoffMs = Math.max(0, ms);
     }
 
     /** Positions flattened by market because no stop could be placed. */
@@ -174,10 +259,45 @@ public class BracketOrderManager {
     /** Protective-order submissions that failed (each attempt counted). */
     public long getProtectiveFailureCount() { return protectiveFailures.get(); }
 
-    /** Submit a stop with up to {@link #PROTECTIVE_RETRIES} attempts; null when all failed. */
+    /** Stops re-placed because the broker showed a position without one. */
+    public long getStopsRestoredCount() { return stopsRestored.get(); }
+
+    /** Broker positions adopted (startup / reconciliation). */
+    public long getPositionsAdoptedCount() { return positionsAdopted.get(); }
+
+    private void backoff(int attempt) {
+        long ms = retryBackoffMs * attempt;
+        if (ms <= 0) return;
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void publishBracketEvent(String symbol, String reason, double a, double b) {
+        com.topstep.trading.event.EventBus bus = this.eventBus;
+        if (bus != null) {
+            com.topstep.trading.event.EngineTelemetry.publish(bus, new com.topstep.trading.event.GateDecisionEvent(
+                    symbol, java.time.Instant.now(), null, "IN_POSITION", "BRACKET", reason, a, b));
+        }
+    }
+
+    /**
+     * Submit a stop with up to {@link #PROTECTIVE_RETRIES} attempts (backoff
+     * between them); null when all failed. A non-null id means TopstepX
+     * acknowledged the order.
+     */
     private String submitStopWithRetry(BracketOrder bracket, int quantity, double stopPrice) {
+        if (quantity <= 0) {
+            // AGENT-05.11: the LIVE defect tried to place "qty 0" — never again.
+            System.err.println("[BRACKET] ERROR refusing to submit a stop for " + bracket.symbol
+                    + " with quantity " + quantity + " (must be > 0)");
+            return null;
+        }
         Exception last = null;
         for (int attempt = 1; attempt <= PROTECTIVE_RETRIES; attempt++) {
+            if (attempt > 1) backoff(attempt - 1);
             try {
                 return connector.submitStopOrder(
                     bracket.symbol,
@@ -190,7 +310,7 @@ public class BracketOrderManager {
                 last = e;
                 protectiveFailures.incrementAndGet();
                 System.err.println("[BRACKET] ERROR stop submit attempt " + attempt + "/" + PROTECTIVE_RETRIES
-                        + " for " + bracket.symbol + " @ " + stopPrice + ": " + e.getMessage());
+                        + " for " + bracket.symbol + " (" + quantity + " @ " + stopPrice + ") rejected: " + e.getMessage());
             }
         }
         System.err.println("[BRACKET] ERROR stop could not be placed for " + bracket.symbol
@@ -198,31 +318,112 @@ public class BracketOrderManager {
         return null;
     }
 
+    /** Record a broker-acknowledged stop as the bracket's working stop. */
+    private void installStop(BracketOrder bracket, String id, int quantity, double price) {
+        bracket.stopOrderId = id;
+        bracket.stopPrice = price;
+        bracket.stopQuantity = quantity;
+        orderIdToBracket.put(id, bracket);
+    }
+
+    /**
+     * Cancel one order and report what the BROKER said. Every log line here
+     * follows the broker's response.
+     */
+    private CancelResult cancelAtBroker(String orderId, String reason) {
+        if (orderId == null) return CancelResult.NOT_WORKING;
+        try {
+            connector.cancelOrder(orderId);
+            System.out.println("[BRACKET] Order " + orderId + " cancelled (TopstepX acknowledged): " + reason);
+            return CancelResult.CANCELLED;
+        } catch (TopstepConnector.OrderNotWorkingException gone) {
+            System.out.println("[BRACKET] Order " + orderId + " was NOT open at TopstepX (code " + gone.getCode()
+                    + ") — already cancelled or filled; nothing left to cancel (" + reason + ")");
+            return CancelResult.NOT_WORKING;
+        } catch (Exception e) {
+            protectiveFailures.incrementAndGet();
+            System.err.println("[BRACKET] ERROR cancel of order " + orderId + " FAILED (" + reason + "): "
+                    + e.getMessage() + " — its state at the broker is UNVERIFIED");
+            return CancelResult.FAILED;
+        }
+    }
+
+    /** {@link #cancelAtBroker} with {@link #PROTECTIVE_RETRIES} attempts for FAILED. */
+    private CancelResult cancelWithRetry(String orderId, String reason) {
+        CancelResult r = CancelResult.FAILED;
+        for (int attempt = 1; attempt <= PROTECTIVE_RETRIES; attempt++) {
+            if (attempt > 1) backoff(attempt - 1);
+            r = cancelAtBroker(orderId, reason);
+            if (r != CancelResult.FAILED) return r;
+        }
+        return r;
+    }
+
+    /** The broker's positions + working orders, or null (logged) when unavailable. */
+    private BrokerSnapshot brokerSnapshot(String context) {
+        try {
+            BrokerSnapshot snap = connector.fetchBrokerSnapshot();
+            if (snap == null) {
+                System.err.println("[BRACKET] broker view unavailable (" + context
+                        + ") — stop state NOT verified; reconciliation will retry");
+            }
+            return snap;
+        } catch (Exception e) {
+            System.err.println("[BRACKET] ERROR broker query failed (" + context + "): " + e.getMessage()
+                    + " — stop state NOT verified; reconciliation will retry");
+            return null;
+        }
+    }
+
+    /**
+     * AGENT-05.11: the quantity the stop must protect, from the POSITION.
+     * The provider (engine Position, updated by the listener before this is
+     * called) wins; otherwise the TP ledger. Never a free-running counter.
+     */
+    int resolveProtectedQuantity(BracketOrder bracket) {
+        int ledger = bracket.totalQuantity - bracket.getTotalFilledTpQuantity();
+        ToIntFunction<String> p = this.positionQuantityProvider;
+        int fromPosition = 0;
+        if (p != null) {
+            try {
+                fromPosition = p.applyAsInt(bracket.symbol);
+            } catch (RuntimeException e) {
+                System.err.println("[BRACKET] ERROR position quantity lookup failed for " + bracket.symbol
+                        + ": " + e.getMessage() + " — using TP ledger " + ledger);
+            }
+        }
+        if (fromPosition > 0) {
+            if (fromPosition != ledger && !bracket.adopted) {
+                System.err.println("[BRACKET] WARN " + bracket.symbol + " position size " + fromPosition
+                        + " != TP ledger " + ledger + " — protecting the POSITION size " + fromPosition);
+            }
+            return fromPosition;
+        }
+        return Math.max(0, ledger);
+    }
+
     /**
      * Last resort: the position has NO stop. Cancel the bracket's other
      * legs, close the position by MARKET, log at ERROR and publish a
-     * GateDecisionEvent "BRACKET". The market fill is routed through the
-     * listener's stop-fill funnel (P&amp;L booked, PositionClosedEvent).
+     * GateDecisionEvent "BRACKET: stop lost — flattened". The market fill is
+     * routed through the listener's stop-fill funnel (P&amp;L booked,
+     * PositionClosedEvent) and then every remaining order for the symbol is
+     * cancelled at the broker.
      */
     private void flattenUnprotected(BracketOrder bracket, int quantity, String why) {
         unprotectedFlattens.incrementAndGet();
         System.err.println("[BRACKET] ERROR " + bracket.symbol + " position UNPROTECTED (" + why
                 + ") — flattening " + quantity + " by MARKET");
-        com.topstep.trading.event.EventBus bus = this.eventBus;
-        if (bus != null) {
-            com.topstep.trading.event.EngineTelemetry.publish(bus, new com.topstep.trading.event.GateDecisionEvent(
-                    bracket.symbol, java.time.Instant.now(), null, "IN_POSITION", "BRACKET",
-                    "BRACKET: no stop could be placed (" + why + ") — flattened by market",
-                    quantity, bracket.stopPrice));
-        }
+        publishBracketEvent(bracket.symbol, "BRACKET: stop lost — flattened (" + why + ")",
+                quantity, bracket.stopPrice);
         bracket.canceled = true;
         for (TakeProfitLevel tp : bracket.takeProfitLevels) {
             if (tp.orderId != null && !tp.filled) {
-                cancelOrder(tp.orderId, "unprotected flatten");
+                cancelAtBroker(tp.orderId, "unprotected flatten");
             }
         }
         if (bracket.takeProfitOrderId != null && !bracket.takeProfitFilled) {
-            cancelOrder(bracket.takeProfitOrderId, "unprotected flatten");
+            cancelAtBroker(bracket.takeProfitOrderId, "unprotected flatten");
         }
         removeBracket(bracket);
         if (quantity <= 0) return;
@@ -236,55 +437,258 @@ public class BracketOrderManager {
                     if (listener != null) {
                         listener.onStopLossFilled(bracket, price != null ? price : bracket.stopPrice);
                     }
+                    sweepSymbolOrders(bracket.symbol, "flat after unprotected flatten");
                 }
             });
         } catch (Exception e) {
             System.err.println("[BRACKET] CRITICAL flatten order FAILED for " + bracket.symbol
                     + ": " + e.getMessage() + " — MANUAL INTERVENTION REQUIRED");
-            if (bus != null) {
-                com.topstep.trading.event.EngineTelemetry.publish(bus, new com.topstep.trading.event.GateDecisionEvent(
-                        bracket.symbol, java.time.Instant.now(), null, "IN_POSITION", "BRACKET",
-                        "BRACKET: CRITICAL flatten failed — manual intervention required: " + e.getMessage(),
-                        quantity, Double.NaN));
-            }
+            publishBracketEvent(bracket.symbol,
+                    "BRACKET: CRITICAL flatten failed — manual intervention required: " + e.getMessage(),
+                    quantity, Double.NaN);
         }
     }
 
     /**
-     * Replace the working stop (cancel, then place at {@code newPrice} for
-     * {@code quantity}). On failure the old level is re-placed; if even that
-     * fails the position is flattened. Never silently stopless.
+     * Replace the working stop with one for {@code quantity} at
+     * {@code newPrice}. PLACE-THEN-CANCEL: the old stop is cancelled only
+     * after TopstepX acknowledged the new one. If the new stop cannot be
+     * placed alongside the old one, falls back to cancel-then-place (retry,
+     * then the old level), and FLATTENS as the last resort. Never ends with a
+     * position and no working stop. The broker's view is verified afterwards.
      *
      * @return true when a stop at {@code newPrice} is working
      */
     private boolean replaceStop(BracketOrder bracket, int quantity, double newPrice, String why) {
-        String oldId = bracket.stopOrderId;
-        if (oldId != null) {
-            try {
-                connector.cancelOrder(oldId);
-                orderIdToBracket.remove(oldId);
-            } catch (Exception e) {
-                protectiveFailures.incrementAndGet();
-                System.err.println("[BRACKET] ERROR cancel of working stop " + oldId + " failed (" + why
-                        + "): " + e.getMessage() + " — old stop kept working, no replacement placed");
+        synchronized (bracket) {
+            if (quantity <= 0) {
+                System.err.println("[BRACKET] ERROR " + why + " for " + bracket.symbol + ": protected quantity resolved to "
+                        + quantity + " — NOT touching the working stop " + bracket.stopOrderId);
+                verifyAtBroker(bracket, why + " (quantity guard)");
                 return false;
             }
+            String oldId = bracket.stopOrderId;
+
+            // ── Phase A: place the new stop FIRST ──
+            String newId = submitStopWithRetry(bracket, quantity, newPrice);
+            if (newId != null) {
+                installStop(bracket, newId, quantity, newPrice);
+                System.out.println("[BRACKET] New stop " + newId + " acknowledged by TopstepX: "
+                        + bracket.getExitSide() + " STOP " + quantity + " @ " + newPrice + " (" + why + ")");
+                if (oldId != null && !oldId.equals(newId)) {
+                    CancelResult r = cancelWithRetry(oldId, why + ": superseded by " + newId);
+                    orderIdToBracket.remove(oldId);
+                    if (r == CancelResult.FAILED) {
+                        System.err.println("[BRACKET] ERROR superseded stop " + oldId + " could not be cancelled — the broker may show "
+                                + "TWO stops for " + bracket.symbol + "; verifying now");
+                        publishBracketEvent(bracket.symbol, "BRACKET: superseded stop " + oldId
+                                + " cancel failed — verifying broker", quantity, newPrice);
+                    }
+                }
+                verifyAtBroker(bracket, why);
+                return true;
+            }
+
+            // ── Phase B: TopstepX refused a second stop — cancel-then-place ──
+            System.err.println("[BRACKET] ERROR new stop for " + bracket.symbol + " (" + why + ") could not be placed while stop "
+                    + oldId + " is working — falling back to cancel-then-place");
+            if (oldId != null) {
+                CancelResult r = cancelWithRetry(oldId, why + ": cancel-then-place fallback");
+                if (r == CancelResult.FAILED) {
+                    BrokerSnapshot snap = brokerSnapshot(why + ": old-stop check");
+                    boolean stillWorking = snap == null || containsOrder(snap, oldId);
+                    if (stillWorking) {
+                        System.err.println("[BRACKET] ERROR stop " + oldId + " for " + bracket.symbol
+                                + (snap == null ? " — broker state UNKNOWN (query failed)"
+                                                : " is still WORKING at the broker (verified)")
+                                + "; no replacement placed (" + why + "); reconciliation will re-check");
+                        return false;
+                    }
+                    System.err.println("[BRACKET] stop " + oldId + " is NOT working at the broker (verified) despite the failed cancel");
+                }
+                orderIdToBracket.remove(oldId);
+                bracket.stopOrderId = null;
+                bracket.stopQuantity = 0;
+            }
+            newId = submitStopWithRetry(bracket, quantity, newPrice);
+            boolean atNew = newId != null;
+            double placedAt = newPrice;
+            if (newId == null && Math.abs(newPrice - bracket.stopPrice) > 1e-12) {
+                System.err.println("[BRACKET] ERROR re-placing the previous stop level " + bracket.stopPrice
+                        + " for " + bracket.symbol);
+                newId = submitStopWithRetry(bracket, quantity, bracket.stopPrice);
+                placedAt = bracket.stopPrice;
+            }
+            if (newId == null) {
+                flattenUnprotected(bracket, quantity, why);
+                return false;
+            }
+            installStop(bracket, newId, quantity, placedAt);
+            System.out.println("[BRACKET] Stop " + newId + " acknowledged by TopstepX: " + bracket.getExitSide()
+                    + " STOP " + quantity + " @ " + placedAt + " (" + why + ", cancel-then-place)");
+            verifyAtBroker(bracket, why);
+            return atNew;
         }
-        String id = submitStopWithRetry(bracket, quantity, newPrice);
-        boolean atNew = id != null;
-        if (id == null && Math.abs(newPrice - bracket.stopPrice) > 1e-12) {
-            System.err.println("[BRACKET] ERROR re-placing the previous stop @ " + bracket.stopPrice
-                    + " for " + bracket.symbol);
-            id = submitStopWithRetry(bracket, quantity, bracket.stopPrice);
+    }
+
+    private static boolean containsOrder(BrokerSnapshot snap, String orderId) {
+        for (BrokerOrder o : snap.openOrders) {
+            if (o.orderId.equals(orderId)) return true;
         }
-        if (id == null) {
-            bracket.stopOrderId = null;
-            flattenUnprotected(bracket, quantity, why);
-            return false;
+        return false;
+    }
+
+    /**
+     * Log the broker's view after a stop operation and enforce "exactly one
+     * stop, size == position size". Unavailable view -&gt; logged, not assumed.
+     */
+    private void verifyAtBroker(BracketOrder bracket, String context) {
+        BrokerSnapshot snap = brokerSnapshot(context);
+        if (snap != null) {
+            enforceProtection(bracket, snap, context);
         }
-        bracket.stopOrderId = id;
-        orderIdToBracket.put(id, bracket);
-        return atNew;
+    }
+
+    private static String describe(BrokerSnapshot snap, String symbol, OrderSide exitSide) {
+        BrokerPosition pos = snap.position(symbol);
+        return "position " + (pos == null ? "FLAT" : pos.toString()) + ", working stops " + snap.stopsFor(symbol, exitSide);
+    }
+
+    /**
+     * Make the broker match "one stop, size == position size" for a tracked
+     * bracket. Uses only primitive broker operations (no replaceStop), so it
+     * never recurses.
+     */
+    private void enforceProtection(BracketOrder bracket, BrokerSnapshot snap, String context) {
+        synchronized (bracket) {
+            OrderSide exitSide = bracket.getExitSide();
+            BrokerPosition pos = snap.position(bracket.symbol);
+            List<BrokerOrder> stops = snap.stopsFor(bracket.symbol, exitSide);
+            if (pos == null) {
+                System.out.println("[BRACKET] BROKER VIEW " + bracket.symbol + " after " + context + ": "
+                        + describe(snap, bracket.symbol, exitSide));
+                return;
+            }
+            if (pos.isLong != bracket.isLong()) {
+                System.err.println("[BRACKET] ERROR BROKER VIEW " + bracket.symbol + " after " + context + ": broker position "
+                        + pos + " is on the OTHER side of the engine bracket (" + (bracket.isLong() ? "LONG" : "SHORT")
+                        + ") — manual check required");
+                publishBracketEvent(bracket.symbol, "BRACKET: broker position side differs from bracket — " + pos,
+                        pos.size, pos.averagePrice);
+                return;
+            }
+            int size = pos.size;
+            if (stops.isEmpty()) {
+                double price = bracket.targetStopPrice > 0 ? bracket.targetStopPrice : bracket.stopPrice;
+                System.err.println("[BRACKET] ERROR BROKER VIEW " + bracket.symbol + " after " + context + ": "
+                        + describe(snap, bracket.symbol, exitSide) + " — position has NO working stop; re-placing "
+                        + exitSide + " STOP " + size + " @ " + price);
+                publishBracketEvent(bracket.symbol, "BRACKET: broker position without a stop — re-placing ("
+                        + context + ")", size, price);
+                if (bracket.stopOrderId != null) orderIdToBracket.remove(bracket.stopOrderId);
+                bracket.stopOrderId = null;
+                String id = submitStopWithRetry(bracket, size, price);
+                double placedAt = price;
+                if (id == null && Math.abs(price - bracket.stopPrice) > 1e-12) {
+                    id = submitStopWithRetry(bracket, size, bracket.stopPrice);
+                    placedAt = bracket.stopPrice;
+                }
+                if (id == null) {
+                    flattenUnprotected(bracket, size, "stop missing at broker and could not be re-placed (" + context + ")");
+                    return;
+                }
+                installStop(bracket, id, size, placedAt);
+                stopsRestored.incrementAndGet();
+                bracket.remainingQuantity = size;
+                System.err.println("[BRACKET] Stop " + id + " re-placed and acknowledged by TopstepX: " + exitSide
+                        + " STOP " + size + " @ " + placedAt + " (" + context + ")");
+                return;
+            }
+
+            BrokerOrder keep = null;
+            for (BrokerOrder o : stops) {
+                if (o.orderId.equals(bracket.stopOrderId)) keep = o;
+            }
+            if (keep == null) {
+                keep = stops.get(0);
+                System.err.println("[BRACKET] WARN " + bracket.symbol + ": engine believed stop " + bracket.stopOrderId
+                        + " is working; the broker's working stop is " + keep + " — adopting it");
+                if (bracket.stopOrderId != null) orderIdToBracket.remove(bracket.stopOrderId);
+                installStop(bracket, keep.orderId, keep.size, Double.isNaN(keep.stopPrice) ? bracket.stopPrice : keep.stopPrice);
+                connector.trackExistingOrder(keep.orderId, bracket.symbol, keep.size, exitSide, bracket.stopPrice,
+                        (id, status, price, qty) -> handleStopOrderUpdate(bracket, status, price));
+            }
+            for (BrokerOrder o : stops) {
+                if (o == keep) continue;
+                System.err.println("[BRACKET] ERROR extra stop " + o + " for " + bracket.symbol + " (position " + size
+                        + ") — cancelling it so the position cannot be over-covered");
+                cancelAtBroker(o.orderId, "extra stop (" + context + ")");
+                orderIdToBracket.remove(o.orderId);
+            }
+            if (keep.size != size) {
+                double price = Double.isNaN(keep.stopPrice) ? bracket.stopPrice : keep.stopPrice;
+                System.err.println("[BRACKET] ERROR stop " + keep + " size " + keep.size + " != broker position size " + size
+                        + " for " + bracket.symbol + " — resizing (place-then-cancel)");
+                String id = submitStopWithRetry(bracket, size, price);
+                if (id != null) {
+                    installStop(bracket, id, size, price);
+                    cancelWithRetry(keep.orderId, "resized to " + size + " by " + id);
+                    orderIdToBracket.remove(keep.orderId);
+                    bracket.remainingQuantity = size;
+                    System.out.println("[BRACKET] Stop resized: " + id + " " + exitSide + " STOP " + size + " @ " + price
+                            + " acknowledged by TopstepX (" + context + ")");
+                } else {
+                    System.err.println("[BRACKET] ERROR resize failed — stop " + keep + " stays working (verified) with size "
+                            + keep.size + " vs position " + size + "; reconciliation will retry");
+                    publishBracketEvent(bracket.symbol, "BRACKET: stop size " + keep.size + " != position " + size
+                            + " and resize failed", size, price);
+                }
+                return;
+            }
+            bracket.stopQuantity = keep.size;
+            System.out.println("[BRACKET] BROKER VIEW " + bracket.symbol + " after " + context + ": "
+                    + describe(snap, bracket.symbol, exitSide) + " — OK (1 stop, size " + keep.size
+                    + " == position " + size + ")");
+        }
+    }
+
+    /**
+     * Position is flat: cancel EVERY remaining order for the symbol at the
+     * broker and verify the book is empty. Refuses (and logs) if the broker
+     * still shows a position — a stop is never stripped from an open position.
+     */
+    void sweepSymbolOrders(String symbol, String why) {
+        BrokerSnapshot snap = brokerSnapshot("flat sweep " + symbol);
+        if (snap == null) {
+            System.err.println("[BRACKET] could NOT verify that " + symbol + " has no working orders after " + why
+                    + " (broker view unavailable)");
+            return;
+        }
+        BrokerPosition pos = snap.position(symbol);
+        if (pos != null) {
+            System.err.println("[BRACKET] ERROR broker still shows " + pos + " after " + why
+                    + " — NOT cancelling its orders; reconciliation will verify");
+            return;
+        }
+        List<BrokerOrder> orders = snap.ordersFor(symbol);
+        for (BrokerOrder o : orders) {
+            cancelAtBroker(o.orderId, "position flat (" + why + ")");
+        }
+        BrokerSnapshot after = orders.isEmpty() ? snap : brokerSnapshot("flat sweep verify " + symbol);
+        if (after == null) {
+            System.err.println("[BRACKET] could NOT verify the " + symbol + " order book after cancelling "
+                    + orders.size() + " order(s) (broker view unavailable)");
+            return;
+        }
+        List<BrokerOrder> left = after.ordersFor(symbol);
+        if (left.isEmpty()) {
+            System.out.println("[BRACKET] BROKER VIEW " + symbol + " after " + why + ": FLAT, 0 working orders (verified; "
+                    + orders.size() + " cancelled)");
+        } else {
+            System.err.println("[BRACKET] ERROR BROKER VIEW " + symbol + " after " + why + ": FLAT but still working "
+                    + left + " — manual check required");
+            publishBracketEvent(symbol, "BRACKET: flat but orders still working " + left, left.size(), Double.NaN);
+        }
     }
 
     public BracketOrderManager(TopstepConnector connector) {
@@ -293,6 +697,32 @@ public class BracketOrderManager {
 
     public void setListener(BracketListener listener) {
         this.listener = listener;
+    }
+
+    /**
+     * An ADOPTED bracket for {@code symbol} is superseded by an engine
+     * bracket: drop it from tracking and return its stop id (cancelled once
+     * the new stop is acknowledged). Null when there is nothing to supersede.
+     * Returns "" (skip) when a normal bracket already exists.
+     */
+    private String supersedeAdopted(String symbol) {
+        BracketOrder existing = activeBrackets.get(symbol);
+        if (existing == null) return null;
+        if (!existing.adopted) {
+            System.out.println("[BRACKET] Warning: Bracket already exists for " + symbol + ", skipping");
+            return "";
+        }
+        System.out.println("[BRACKET] Engine bracket supersedes the ADOPTED bracket for " + symbol
+                + "; adopted stop " + existing.stopOrderId + " is cancelled after the new stop is acknowledged");
+        existing.canceled = true;
+        removeBracket(existing);
+        return existing.stopOrderId;
+    }
+
+    private void cancelSupersededAdoptedStop(String adoptedStopId) {
+        if (adoptedStopId != null && !adoptedStopId.isEmpty()) {
+            cancelWithRetry(adoptedStopId, "superseded adopted stop");
+        }
     }
 
     /**
@@ -314,14 +744,15 @@ public class BracketOrderManager {
                                           TradeTier tier, double tickSize) {
 
         // Check if bracket already exists
-        if (activeBrackets.containsKey(symbol)) {
-            System.out.println("[BRACKET] Warning: Bracket already exists for " + symbol + ", skipping");
+        String adoptedStop = supersedeAdopted(symbol);
+        if ("".equals(adoptedStop)) {
             return;
         }
 
         BracketOrder bracket = new BracketOrder(symbol, entryOrderId, entryPrice, quantity, entrySide, tier);
         bracket.stopPrice = stopPrice;
         bracket.originalStopPrice = stopPrice;
+        bracket.targetStopPrice = stopPrice;
         bracket.takeProfitPrice = finalTargetPrice;
 
         OrderSide exitSide = bracket.getExitSide();
@@ -444,9 +875,9 @@ public class BracketOrderManager {
             flattenUnprotected(bracket, quantity, "initial stop submission failed");
             return;
         }
-        bracket.stopOrderId = stopOrderId;
-        orderIdToBracket.put(stopOrderId, bracket);
-        System.out.println("  ✓ Stop Loss submitted: " + stopOrderId + " (qty: " + quantity + ")");
+        installStop(bracket, stopOrderId, quantity, stopPrice);
+        System.out.println("  ✓ Stop Loss acknowledged by TopstepX: " + stopOrderId + " (qty: " + quantity + ")");
+        cancelSupersededAdoptedStop(adoptedStop);
 
         // Submit Take Profit orders for each level
         for (int i = 0; i < levels.size(); i++) {
@@ -462,11 +893,11 @@ public class BracketOrderManager {
                 level.orderId = tpOrderId;
                 orderIdToBracket.put(tpOrderId, bracket);
                 tpOrderIdToLevel.put(tpOrderId, level);
-                System.out.println("  ✓ TP" + (i + 1) + " submitted: " + tpOrderId);
+                System.out.println("  ✓ TP" + (i + 1) + " acknowledged by TopstepX: " + tpOrderId);
             } catch (Exception e) {
                 protectiveFailures.incrementAndGet();
                 System.err.println("  ❌ ERROR Failed to submit TP" + (i + 1) + ": " + e.getMessage()
-                        + " — stop stays working (position protected)");
+                        + " — stop " + stopOrderId + " (acknowledged) protects the position");
                 // Continue with other TPs
             }
         }
@@ -474,6 +905,7 @@ public class BracketOrderManager {
         // Register the active bracket
         activeBrackets.put(symbol, bracket);
         System.out.println("[BRACKET] Tiered bracket active for " + symbol);
+        verifyAtBroker(bracket, "bracket creation");
     }
 
     /**
@@ -484,14 +916,15 @@ public class BracketOrderManager {
                               double stopPrice, double takeProfitPrice) {
 
         // Check if bracket already exists for this symbol (idempotency guard)
-        if (activeBrackets.containsKey(symbol)) {
-            System.out.println("[BRACKET] Warning: Bracket already exists for " + symbol + ", skipping");
+        String adoptedStop = supersedeAdopted(symbol);
+        if ("".equals(adoptedStop)) {
             return;
         }
 
         BracketOrder bracket = new BracketOrder(symbol, entryOrderId, entryPrice, quantity, entrySide, null);
         bracket.stopPrice = stopPrice;
         bracket.originalStopPrice = stopPrice;
+        bracket.targetStopPrice = stopPrice;
         bracket.takeProfitPrice = takeProfitPrice;
 
         OrderSide exitSide = bracket.getExitSide();
@@ -507,9 +940,9 @@ public class BracketOrderManager {
             flattenUnprotected(bracket, quantity, "initial stop submission failed");
             return;
         }
-        bracket.stopOrderId = stopOrderId;
-        orderIdToBracket.put(stopOrderId, bracket);
-        System.out.println("  ✓ Stop Loss submitted: " + stopOrderId);
+        installStop(bracket, stopOrderId, quantity, stopPrice);
+        System.out.println("  ✓ Stop Loss acknowledged by TopstepX: " + stopOrderId);
+        cancelSupersededAdoptedStop(adoptedStop);
 
         // Submit Take Profit order (retry). AGENT-05: a failed TP no longer
         // CANCELS the working stop (that left the position with neither) —
@@ -533,21 +966,18 @@ public class BracketOrderManager {
         if (tpOrderId != null) {
             bracket.takeProfitOrderId = tpOrderId;
             orderIdToBracket.put(tpOrderId, bracket);
-            System.out.println("  ✓ Take Profit submitted: " + tpOrderId);
+            System.out.println("  ✓ Take Profit acknowledged by TopstepX: " + tpOrderId);
         } else {
-            System.err.println("  ❌ ERROR no Take Profit for " + symbol + " — STOP-ONLY bracket (position protected)");
-            com.topstep.trading.event.EventBus bus = this.eventBus;
-            if (bus != null) {
-                com.topstep.trading.event.EngineTelemetry.publish(bus, new com.topstep.trading.event.GateDecisionEvent(
-                        symbol, java.time.Instant.now(), null, "IN_POSITION", "BRACKET",
-                        "BRACKET: take-profit could not be placed — stop-only protection",
-                        quantity, takeProfitPrice));
-            }
+            System.err.println("  ❌ ERROR no Take Profit for " + symbol + " — STOP-ONLY bracket (stop "
+                    + stopOrderId + " acknowledged)");
+            publishBracketEvent(symbol, "BRACKET: take-profit could not be placed — stop-only protection",
+                    quantity, takeProfitPrice);
         }
 
         // Register the active bracket
         activeBrackets.put(symbol, bracket);
         System.out.println("[BRACKET] OCO bracket active for " + symbol);
+        verifyAtBroker(bracket, "bracket creation");
     }
 
     /**
@@ -555,55 +985,72 @@ public class BracketOrderManager {
      */
     private void handlePartialTakeProfitUpdate(BracketOrder bracket, TakeProfitLevel level,
                                                 OrderStatus status, Double fillPrice, double tickSize) {
-        if (bracket.canceled || level.filled) {
+        if (status != OrderStatus.FILLED) {
             return;
         }
-
-        if (status == OrderStatus.FILLED) {
+        synchronized (bracket) {
+            if (bracket.canceled || level.filled) {
+                return;
+            }
             level.filled = true;
-            bracket.remainingQuantity -= level.quantity;
+            // AGENT-05.11: remaining comes from the TP ledger here, and the
+            // stop quantity below from the POSITION — no decrementing counter.
+            bracket.remainingQuantity = Math.max(0, bracket.totalQuantity - bracket.getTotalFilledTpQuantity());
 
             System.out.println("\n🎯 PARTIAL TP FILLED: " + bracket.symbol);
             System.out.println("  Level: " + level.rMultiple + "R @ " + fillPrice);
             System.out.println("  Quantity: " + level.quantity + " contracts");
             System.out.println("  Remaining: " + bracket.remainingQuantity + " contracts");
 
-            // Notify listener
+            // Notify listener (the runner reduces the engine Position here)
             if (listener != null) {
                 listener.onPartialTakeProfitFilled(bracket, level, fillPrice != null ? fillPrice : level.price);
             }
 
-            // Move stop to breakeven after FIRST partial fill
-            if (!bracket.movedToBreakeven && bracket.remainingQuantity > 0) {
-                moveStopToBreakeven(bracket, tickSize);
-            }
-
-            // Check if all TPs are filled
-            if (bracket.remainingQuantity <= 0 || !bracket.hasUnfilledTakeProfits()) {
+            int protectedQty = resolveProtectedQuantity(bracket);
+            if (protectedQty <= 0) {
                 bracket.allTakesProfitFilled = true;
-                System.out.println("  ✓ All take profits filled for " + bracket.symbol);
+                System.out.println("  ✓ All take profits filled for " + bracket.symbol + " — position flat");
 
-                // Cancel stop loss since position is fully closed
+                // Position fully closed: cancel the stop, then sweep the book.
                 if (bracket.stopOrderId != null && !bracket.stopFilled) {
-                    cancelOrder(bracket.stopOrderId, "All take profits filled");
+                    cancelAtBroker(bracket.stopOrderId, "All take profits filled");
                 }
-
                 removeBracket(bracket);
+                sweepSymbolOrders(bracket.symbol, "final take profit");
 
                 if (listener != null) {
                     listener.onTakeProfitFilled(bracket, fillPrice != null ? fillPrice : level.price);
                 }
+                return;
+            }
+            bracket.remainingQuantity = protectedQty;
+            if (!bracket.hasUnfilledTakeProfits()) {
+                System.err.println("[BRACKET] WARN " + bracket.symbol + ": no take-profit left working but " + protectedQty
+                        + " contract(s) open — the stop keeps protecting them");
+            }
+
+            // ONE stop operation for the partial: move to breakeven with the
+            // position quantity, or (already moved / not needed) resize.
+            if (!bracket.movedToBreakeven && moveStopToBreakeven(bracket, tickSize)) {
+                return;
+            }
+            if (bracket.stopQuantity != protectedQty || bracket.stopOrderId == null) {
+                updateStopLossQuantity(bracket, protectedQty);
             } else {
-                // Update stop loss quantity to match remaining position
-                updateStopLossQuantity(bracket);
+                verifyAtBroker(bracket, "partial take profit");
             }
         }
     }
 
     /**
-     * Move stop loss to breakeven (entry price + small buffer).
+     * Move stop loss to breakeven (entry price + small buffer), for the
+     * quantity of the POSITION.
+     *
+     * @return true when a move was attempted (the stop was handled), false
+     *         when no move was needed
      */
-    private void moveStopToBreakeven(BracketOrder bracket, double tickSize) {
+    private boolean moveStopToBreakeven(BracketOrder bracket, double tickSize) {
         double buffer = tickSize * BREAKEVEN_BUFFER_TICKS;
         double newStopPrice;
 
@@ -612,54 +1059,65 @@ public class BracketOrderManager {
             // Only move if it's actually better (higher stop for long)
             if (newStopPrice <= bracket.stopPrice) {
                 System.out.println("[BRACKET] Breakeven not needed - stop already at or above entry");
-                return;
+                return false;
             }
         } else {
             newStopPrice = bracket.entryPrice - buffer;
             // Only move if it's actually better (lower stop for short)
             if (newStopPrice >= bracket.stopPrice) {
                 System.out.println("[BRACKET] Breakeven not needed - stop already at or below entry");
-                return;
+                return false;
             }
         }
 
+        int quantity = resolveProtectedQuantity(bracket);
         System.out.println("\n[BRACKET] 🔒 MOVING STOP TO BREAKEVEN: " + bracket.symbol);
         System.out.println("  Entry: " + bracket.entryPrice);
-        System.out.println("  Old Stop: " + bracket.stopPrice);
+        System.out.println("  Old Stop: " + bracket.stopPrice + " (" + bracket.stopOrderId + ")");
         System.out.println("  New Stop: " + newStopPrice + " (breakeven + " + BREAKEVEN_BUFFER_TICKS + " ticks)");
+        System.out.println("  Quantity: " + quantity + " (from the position)");
 
-        // Cancel old stop and submit new one. AGENT-05: the old comment
-        // "keep old stop in place" was wrong — the old stop had already been
-        // cancelled. replaceStop retries, re-places the old level, and
-        // flattens as the last resort.
-        if (replaceStop(bracket, bracket.remainingQuantity, newStopPrice, "breakeven move")) {
-            bracket.stopPrice = newStopPrice;
+        // Reconciliation re-places a missing stop HERE even if the move fails.
+        bracket.targetStopPrice = newStopPrice;
+        // AGENT-05.11: place-then-cancel; flatten only as the last resort.
+        if (replaceStop(bracket, quantity, newStopPrice, "breakeven move")) {
             bracket.movedToBreakeven = true;
-            System.out.println("  ✓ New breakeven stop submitted: " + bracket.stopOrderId);
+            bracket.remainingQuantity = quantity;
+            System.out.println("  ✓ Breakeven stop working: " + bracket.stopOrderId + " (" + quantity + " @ "
+                    + newStopPrice + ", TopstepX acknowledged)");
 
             if (listener != null) {
                 listener.onStopMovedToBreakeven(bracket, newStopPrice);
             }
+        } else if (bracket.canceled) {
+            System.err.println("  ❌ ERROR breakeven move failed for " + bracket.symbol + " — position was flattened");
         } else {
-            System.err.println("  ❌ ERROR Failed to move stop to breakeven for " + bracket.symbol);
+            System.err.println("  ❌ ERROR breakeven move failed for " + bracket.symbol + " — working stop is "
+                    + bracket.stopOrderId + " @ " + bracket.stopPrice + " (see BROKER VIEW)");
         }
+        return true;
     }
 
     /**
-     * Update stop loss quantity after partial TP fills.
+     * Update stop loss quantity after partial TP fills (place-then-cancel).
      */
-    private void updateStopLossQuantity(BracketOrder bracket) {
-        if (bracket.remainingQuantity <= 0 || bracket.stopOrderId == null) {
+    private void updateStopLossQuantity(BracketOrder bracket, int quantity) {
+        if (quantity <= 0) {
+            System.err.println("[BRACKET] ERROR stop quantity update for " + bracket.symbol + " resolved to "
+                    + quantity + " — working stop untouched");
             return;
         }
 
-        System.out.println("[BRACKET] Updating stop quantity to " + bracket.remainingQuantity + " for " + bracket.symbol);
+        System.out.println("[BRACKET] Updating stop quantity to " + quantity + " for " + bracket.symbol);
 
-        // AGENT-05: cancel + re-place with retry; flatten as the last resort.
-        if (replaceStop(bracket, bracket.remainingQuantity, bracket.stopPrice, "stop quantity update")) {
-            System.out.println("  ✓ Stop updated: " + bracket.stopOrderId + " (qty: " + bracket.remainingQuantity + ")");
+        if (replaceStop(bracket, quantity, bracket.stopPrice, "stop quantity update")) {
+            bracket.remainingQuantity = quantity;
+            System.out.println("  ✓ Stop updated: " + bracket.stopOrderId + " (qty: " + quantity + ", TopstepX acknowledged)");
+        } else if (bracket.canceled) {
+            System.err.println("  ❌ ERROR stop quantity update failed for " + bracket.symbol + " — position was flattened");
         } else {
-            System.err.println("  ❌ ERROR Failed to update stop quantity for " + bracket.symbol);
+            System.err.println("  ❌ ERROR stop quantity update failed for " + bracket.symbol + " — working stop is "
+                    + bracket.stopOrderId + " (see BROKER VIEW)");
         }
     }
 
@@ -667,27 +1125,30 @@ public class BracketOrderManager {
      * Handle stop loss order status update.
      */
     private void handleStopOrderUpdate(BracketOrder bracket, OrderStatus status, Double fillPrice) {
-        if (bracket.canceled || bracket.stopFilled) {
+        if (status != OrderStatus.FILLED) {
             return;
         }
-
-        if (status == OrderStatus.FILLED) {
+        synchronized (bracket) {
+            if (bracket.canceled || bracket.stopFilled) {
+                return;
+            }
             bracket.stopFilled = true;
             System.out.println("\n⛔ STOP LOSS FILLED: " + bracket.symbol + " @ " + fillPrice);
 
             // OCO: Cancel all remaining take profit orders
             for (TakeProfitLevel tp : bracket.takeProfitLevels) {
                 if (tp.orderId != null && !tp.filled) {
-                    cancelOrder(tp.orderId, "Stop Loss filled (OCO)");
+                    cancelAtBroker(tp.orderId, "Stop Loss filled (OCO)");
                 }
             }
 
             // Legacy single TP
             if (bracket.takeProfitOrderId != null && !bracket.takeProfitFilled) {
-                cancelOrder(bracket.takeProfitOrderId, "Stop Loss filled (OCO)");
+                cancelAtBroker(bracket.takeProfitOrderId, "Stop Loss filled (OCO)");
             }
 
             removeBracket(bracket);
+            sweepSymbolOrders(bracket.symbol, "stop loss fill");
 
             if (listener != null) {
                 listener.onStopLossFilled(bracket, fillPrice != null ? fillPrice : bracket.stopPrice);
@@ -699,19 +1160,22 @@ public class BracketOrderManager {
      * Handle legacy single take profit order status update.
      */
     private void handleTakeProfitOrderUpdate(BracketOrder bracket, OrderStatus status, Double fillPrice) {
-        if (bracket.canceled || bracket.takeProfitFilled) {
+        if (status != OrderStatus.FILLED) {
             return;
         }
-
-        if (status == OrderStatus.FILLED) {
+        synchronized (bracket) {
+            if (bracket.canceled || bracket.takeProfitFilled) {
+                return;
+            }
             bracket.takeProfitFilled = true;
             System.out.println("\n🎯 TAKE PROFIT FILLED: " + bracket.symbol + " @ " + fillPrice);
 
             if (bracket.stopOrderId != null && !bracket.stopFilled) {
-                cancelOrder(bracket.stopOrderId, "Take Profit filled (OCO)");
+                cancelAtBroker(bracket.stopOrderId, "Take Profit filled (OCO)");
             }
 
             removeBracket(bracket);
+            sweepSymbolOrders(bracket.symbol, "take profit fill");
 
             if (listener != null) {
                 listener.onTakeProfitFilled(bracket, fillPrice != null ? fillPrice : bracket.takeProfitPrice);
@@ -720,26 +1184,10 @@ public class BracketOrderManager {
     }
 
     /**
-     * Cancel an order with logging.
-     */
-    private void cancelOrder(String orderId, String reason) {
-        if (orderId == null) return;
-
-        try {
-            System.out.println("[BRACKET] Canceling order " + orderId + ": " + reason);
-            connector.cancelOrder(orderId);
-            System.out.println("[BRACKET] ✓ Order " + orderId + " canceled");
-        } catch (Exception e) {
-            protectiveFailures.incrementAndGet();
-            System.err.println("[BRACKET] ERROR cancel failed for " + orderId + " (" + reason + "): " + e.getMessage());
-        }
-    }
-
-    /**
      * Remove a bracket from tracking.
      */
     private void removeBracket(BracketOrder bracket) {
-        activeBrackets.remove(bracket.symbol);
+        activeBrackets.remove(bracket.symbol, bracket);
 
         if (bracket.stopOrderId != null) {
             orderIdToBracket.remove(bracket.stopOrderId);
@@ -767,25 +1215,27 @@ public class BracketOrderManager {
             return;
         }
 
-        bracket.canceled = true;
-        System.out.println("[BRACKET] Canceling bracket for " + symbol + ": " + reason);
+        synchronized (bracket) {
+            bracket.canceled = true;
+            System.out.println("[BRACKET] Canceling bracket for " + symbol + ": " + reason);
 
-        if (bracket.stopOrderId != null && !bracket.stopFilled) {
-            cancelOrder(bracket.stopOrderId, reason);
-        }
-
-        for (TakeProfitLevel tp : bracket.takeProfitLevels) {
-            if (tp.orderId != null && !tp.filled) {
-                cancelOrder(tp.orderId, reason);
+            if (bracket.stopOrderId != null && !bracket.stopFilled) {
+                cancelAtBroker(bracket.stopOrderId, reason);
             }
-        }
 
-        // Legacy
-        if (bracket.takeProfitOrderId != null && !bracket.takeProfitFilled) {
-            cancelOrder(bracket.takeProfitOrderId, reason);
-        }
+            for (TakeProfitLevel tp : bracket.takeProfitLevels) {
+                if (tp.orderId != null && !tp.filled) {
+                    cancelAtBroker(tp.orderId, reason);
+                }
+            }
 
-        removeBracket(bracket);
+            // Legacy
+            if (bracket.takeProfitOrderId != null && !bracket.takeProfitFilled) {
+                cancelAtBroker(bracket.takeProfitOrderId, reason);
+            }
+
+            removeBracket(bracket);
+        }
 
         if (listener != null) {
             listener.onBracketCanceled(bracket, reason);
@@ -820,6 +1270,144 @@ public class BracketOrderManager {
      */
     public int getActiveBracketCount() {
         return activeBrackets.size();
+    }
+
+    // ── AGENT-05.11: broker reconciliation + adoption ─────────────────────
+
+    /**
+     * Engine start: adopt every broker position the engine does not track
+     * immediately (no in-flight entry can exist yet), then enforce stops.
+     */
+    public void reconcileOnStartup() {
+        reconcile(true);
+    }
+
+    /**
+     * Periodic (every 30 s) broker reconciliation. For each tracked bracket:
+     * broker position without a stop -&gt; re-place it at the intended stop
+     * price (ERROR + event); stop size != position size -&gt; fix it; extra
+     * stops -&gt; cancel. Broker FLAT on two consecutive passes -&gt; sweep the
+     * symbol's orders and drop the bracket. An untracked broker position seen
+     * on two consecutive passes (one pass could be an entry fill still in
+     * flight) is adopted.
+     */
+    public void reconcileWithBroker() {
+        reconcile(false);
+    }
+
+    private synchronized void reconcile(boolean startup) {
+        String ctx = startup ? "startup reconciliation" : "reconciliation";
+        BrokerSnapshot snap = brokerSnapshot(ctx);
+        if (snap == null) {
+            return;
+        }
+        for (BracketOrder bracket : new ArrayList<>(activeBrackets.values())) {
+            if (bracket.canceled || bracket.stopFilled) continue;
+            BrokerPosition pos = snap.position(bracket.symbol);
+            if (pos == null) {
+                int n = flatSightings.merge(bracket.symbol, 1, Integer::sum);
+                if (n < 2) {
+                    System.out.println("[RECONCILE] broker shows NO position for tracked " + bracket.symbol
+                            + " (1st sighting — a fill callback may be in flight); re-checking next pass");
+                    continue;
+                }
+                flatSightings.remove(bracket.symbol);
+                System.err.println("[RECONCILE] ERROR broker FLAT for " + bracket.symbol + " on 2 passes but the bracket is "
+                        + "still tracked (no fill callback seen) — cancelling its orders and dropping the bracket");
+                publishBracketEvent(bracket.symbol, "BRACKET: broker flat, bracket dropped (no fill callback)",
+                        bracket.remainingQuantity, bracket.stopPrice);
+                synchronized (bracket) {
+                    bracket.canceled = true;
+                    removeBracket(bracket);
+                }
+                sweepSymbolOrders(bracket.symbol, "broker flat (reconciliation)");
+                if (listener != null) {
+                    listener.onBracketCanceled(bracket, "BROKER_FLAT: broker shows no position (reconciliation)");
+                }
+                continue;
+            }
+            flatSightings.remove(bracket.symbol);
+            enforceProtection(bracket, snap, ctx);
+        }
+
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (BrokerPosition pos : snap.positions) {
+            seen.add(pos.symbol);
+            if (activeBrackets.containsKey(pos.symbol)) {
+                untrackedSightings.remove(pos.symbol);
+                continue;
+            }
+            int n = untrackedSightings.merge(pos.symbol, 1, Integer::sum);
+            if (!startup && n < 2) {
+                System.err.println("[RECONCILE] WARN broker shows " + pos + " that the engine does not track "
+                        + "(1st sighting — may be an entry fill in flight); adopting next pass if still untracked");
+                continue;
+            }
+            untrackedSightings.remove(pos.symbol);
+            adoptPosition(pos, snap, ctx);
+        }
+        untrackedSightings.keySet().retainAll(seen);
+    }
+
+    /**
+     * Adopt a broker position the engine does not track: keep its working
+     * stop if it has one (size enforced), otherwise place a protective stop
+     * at BREAKEVEN (the broker's average price, tick-aligned); if even that
+     * cannot be placed, flatten. Documented choice (V5 05.11 §6): adopt, not
+     * "refuse to trade until flat" — a position is never left unmanaged.
+     */
+    private void adoptPosition(BrokerPosition pos, BrokerSnapshot snap, String ctx) {
+        positionsAdopted.incrementAndGet();
+        System.err.println("\n[BRACKET] !!! UNTRACKED BROKER POSITION " + pos + " (" + ctx
+                + ") — ADOPTING it; broker orders for the symbol: " + snap.ordersFor(pos.symbol));
+        publishBracketEvent(pos.symbol, "BRACKET: untracked broker position adopted — " + pos,
+                pos.size, pos.averagePrice);
+
+        OrderSide entrySide = pos.isLong ? OrderSide.BUY : OrderSide.SELL;
+        BracketOrder b = new BracketOrder(pos.symbol, "ADOPTED-" + System.currentTimeMillis(),
+                pos.averagePrice, pos.size, entrySide, null);
+        b.adopted = true;
+        b.movedToBreakeven = true; // no engine-side breakeven logic for adopted positions
+        double tick = InstrumentCharacteristics.getProfile(pos.symbol).getTickSize();
+        double breakeven = tick > 0 ? Math.round(pos.averagePrice / tick) * tick : pos.averagePrice;
+        b.originalStopPrice = breakeven;
+
+        List<BrokerOrder> stops = snap.stopsFor(pos.symbol, b.getExitSide());
+        synchronized (b) {
+            if (!stops.isEmpty()) {
+                BrokerOrder keep = stops.get(0);
+                double px = Double.isNaN(keep.stopPrice) ? breakeven : keep.stopPrice;
+                b.targetStopPrice = px;
+                installStop(b, keep.orderId, keep.size, px);
+                connector.trackExistingOrder(keep.orderId, pos.symbol, keep.size, b.getExitSide(), px,
+                        (id, status, price, qty) -> handleStopOrderUpdate(b, status, price));
+                activeBrackets.put(pos.symbol, b);
+                System.err.println("[BRACKET] adopted " + pos.symbol + " with its working broker stop " + keep);
+                enforceProtection(b, snap, "adoption");
+            } else {
+                b.stopPrice = breakeven;
+                b.targetStopPrice = breakeven;
+                System.err.println("[BRACKET] adopted " + pos + " has NO working stop — placing " + b.getExitSide()
+                        + " STOP " + pos.size + " @ breakeven " + breakeven);
+                String id = submitStopWithRetry(b, pos.size, breakeven);
+                if (id == null) {
+                    flattenUnprotected(b, pos.size, "adopted position: no stop could be placed");
+                    return;
+                }
+                installStop(b, id, pos.size, breakeven);
+                activeBrackets.put(pos.symbol, b);
+                System.err.println("[BRACKET] adopted " + pos.symbol + ": stop " + id + " acknowledged by TopstepX ("
+                        + b.getExitSide() + " STOP " + pos.size + " @ " + breakeven + ")");
+                verifyAtBroker(b, "adoption");
+            }
+        }
+        if (listener != null) {
+            try {
+                listener.onPositionAdopted(b);
+            } catch (RuntimeException e) {
+                System.err.println("[BRACKET] ERROR onPositionAdopted listener failed for " + pos.symbol + ": " + e);
+            }
+        }
     }
 
     /**
@@ -882,7 +1470,11 @@ public class BracketOrderManager {
         if (triggered) {
             System.out.println("\n[BRACKET] Price reached 1R breakeven trigger for " + symbol +
                 " (price: " + currentPrice + ", trigger: " + bracket.breakevenTriggerPrice + ")");
-            moveStopToBreakeven(bracket, tickSize);
+            synchronized (bracket) {
+                if (!bracket.movedToBreakeven && !bracket.canceled) {
+                    moveStopToBreakeven(bracket, tickSize);
+                }
+            }
         }
     }
 }

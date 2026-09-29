@@ -1691,25 +1691,287 @@ public class TopstepConnector implements TradingConnector {
                 int code = cj.path("errorCode").asInt(0);
                 if (!ok || code != 0) {
                     String msg = cj.has("errorMessage") ? cj.get("errorMessage").asText() : "Unknown error";
+                    if (code == CANCEL_CODE_ORDER_NOT_FOUND || code == CANCEL_CODE_NOT_WORKING) {
+                        // AGENT-05.11: the order is not open at the broker any
+                        // more (already cancelled / filled). This is NOT "still
+                        // working" — callers treat it as already gone and
+                        // confirm with searchOpenOrders().
+                        throw new OrderNotWorkingException(orderId, code, msg);
+                    }
                     throw new IOException("Order cancellation rejected by TopstepX: " + msg + " (code: " + code + ")");
                 }
             }
 
             logger.info("Order cancelled successfully: {}", orderId);
 
-            // Notify listener
+            // Notify listener. AGENT-05.11 (LIVE 2026-09-29 11:44:17): this
+            // used to build a placeholder Order with quantity(0), which the
+            // Order builder rejects ("Order quantity must be positive, got:
+            // 0"). The exception escaped cancelOrder AFTER the broker had
+            // cancelled the stop, so BracketOrderManager believed the cancel
+            // failed, placed no replacement and logged "old stop kept
+            // working" while the position had no stop. A listener
+            // notification can never turn a broker-confirmed cancel into a
+            // failure again.
             OrderListener listener = orderListeners.remove(orderId);
             if (listener != null) {
-                Order dummyOrder = Order.builder()
-                    .orderId(orderId)
-                    .symbol("UNKNOWN")
-                    .side(OrderSide.BUY)
-                    .type(OrderType.MARKET)
-                    .quantity(0)
-                    .build();
-                listener.onOrderCanceled(dummyOrder);
+                try {
+                    PendingOrder p = pendingOrders.get(orderId);
+                    Order placeholder = Order.builder()
+                        .orderId(orderId)
+                        .symbol(p != null ? p.symbol : "UNKNOWN")
+                        .side(p != null && p.side != null ? p.side : OrderSide.BUY)
+                        .type(OrderType.MARKET)
+                        .quantity(p != null && p.quantity > 0 ? p.quantity : 1)
+                        .build();
+                    listener.onOrderCanceled(placeholder);
+                } catch (RuntimeException e) {
+                    logger.error("ERROR in cancel listener for order {} (the broker DID cancel it): {}",
+                        orderId, e.toString(), e);
+                }
             }
         }
+    }
+
+    // ── AGENT-05.11: broker-side view (Order/searchOpen, Position/searchOpen) ──
+
+    /** ProjectX cancel error code: order not found. */
+    public static final int CANCEL_CODE_ORDER_NOT_FOUND = 2;
+    /**
+     * Cancel error code 5 — observed LIVE (2026-09-29 11:44:17) when
+     * cancelling an order the broker had already cancelled. Treated as "the
+     * order is not working"; callers confirm with {@link #searchOpenOrders()}.
+     */
+    public static final int CANCEL_CODE_NOT_WORKING = 5;
+
+    /** ProjectX order type: Stop (market). */
+    public static final int ORDER_TYPE_STOP = 4;
+    /** ProjectX order type: Limit. */
+    public static final int ORDER_TYPE_LIMIT = 1;
+
+    /**
+     * A cancel was refused because the order is no longer open at the broker
+     * (already cancelled or filled). It is GONE, not "still working".
+     */
+    public static class OrderNotWorkingException extends IOException {
+        private final String orderId;
+        private final int code;
+        public OrderNotWorkingException(String orderId, int code, String brokerMessage) {
+            super("Order " + orderId + " is not open at TopstepX (cancel code " + code
+                + (brokerMessage != null && !"null".equals(brokerMessage) ? ", " + brokerMessage : "")
+                + ") — already cancelled or filled");
+            this.orderId = orderId;
+            this.code = code;
+        }
+        public String getOrderId() { return orderId; }
+        public int getCode() { return code; }
+    }
+
+    /** One working order as the BROKER reports it. */
+    public static final class BrokerOrder {
+        public final String orderId;
+        public final String symbol;
+        public final String contractId;
+        public final int type;           // ProjectX: 1=Limit 2=Market 4=Stop ...
+        public final OrderSide side;
+        public final int size;
+        public final double stopPrice;   // NaN when absent
+        public final double limitPrice;  // NaN when absent
+
+        public BrokerOrder(String orderId, String symbol, String contractId, int type,
+                           OrderSide side, int size, double stopPrice, double limitPrice) {
+            this.orderId = orderId;
+            this.symbol = symbol;
+            this.contractId = contractId;
+            this.type = type;
+            this.side = side;
+            this.size = size;
+            this.stopPrice = stopPrice;
+            this.limitPrice = limitPrice;
+        }
+
+        public boolean isStop() { return type == ORDER_TYPE_STOP; }
+
+        @Override public String toString() {
+            String kind = isStop() ? "STOP" : (type == ORDER_TYPE_LIMIT ? "LIMIT" : "type" + type);
+            return "#" + orderId + " " + side + " " + kind + " " + size + " @ "
+                + (isStop() ? stopPrice : limitPrice);
+        }
+    }
+
+    /** One open position as the BROKER reports it. */
+    public static final class BrokerPosition {
+        public final String symbol;
+        public final String contractId;
+        public final boolean isLong;
+        public final int size;           // always > 0
+        public final double averagePrice;
+
+        public BrokerPosition(String symbol, String contractId, boolean isLong, int size, double averagePrice) {
+            this.symbol = symbol;
+            this.contractId = contractId;
+            this.isLong = isLong;
+            this.size = size;
+            this.averagePrice = averagePrice;
+        }
+
+        @Override public String toString() {
+            return (isLong ? "LONG " : "SHORT ") + size + " " + symbol + " @ " + averagePrice;
+        }
+    }
+
+    /** Broker positions + working orders, fetched together. */
+    public static final class BrokerSnapshot {
+        public final java.util.List<BrokerPosition> positions;
+        public final java.util.List<BrokerOrder> openOrders;
+
+        public BrokerSnapshot(java.util.List<BrokerPosition> positions, java.util.List<BrokerOrder> openOrders) {
+            this.positions = java.util.List.copyOf(positions);
+            this.openOrders = java.util.List.copyOf(openOrders);
+        }
+
+        public BrokerPosition position(String symbol) {
+            for (BrokerPosition p : positions) {
+                if (p.symbol.equalsIgnoreCase(symbol)) return p;
+            }
+            return null;
+        }
+
+        public java.util.List<BrokerOrder> ordersFor(String symbol) {
+            java.util.List<BrokerOrder> out = new java.util.ArrayList<>();
+            for (BrokerOrder o : openOrders) {
+                if (o.symbol.equalsIgnoreCase(symbol)) out.add(o);
+            }
+            return out;
+        }
+
+        /** Working STOP orders for {@code symbol} on {@code exitSide}. */
+        public java.util.List<BrokerOrder> stopsFor(String symbol, OrderSide exitSide) {
+            java.util.List<BrokerOrder> out = new java.util.ArrayList<>();
+            for (BrokerOrder o : ordersFor(symbol)) {
+                if (o.isStop() && o.side == exitSide) out.add(o);
+            }
+            return out;
+        }
+    }
+
+    /**
+     * Positions and working orders for the configured account, straight from
+     * the broker (POST /Position/searchOpen + POST /Order/searchOpen).
+     * Throws when either call fails — callers must never infer broker state
+     * from a failed query.
+     */
+    public BrokerSnapshot fetchBrokerSnapshot() throws Exception {
+        return new BrokerSnapshot(searchOpenPositions(), searchOpenOrders());
+    }
+
+    /** Working orders for the account (POST /Order/searchOpen). */
+    public java.util.List<BrokerOrder> searchOpenOrders() throws Exception {
+        return parseOpenOrders(postAccountQuery("/Order/searchOpen"));
+    }
+
+    /** Open positions for the account (POST /Position/searchOpen). */
+    public java.util.List<BrokerPosition> searchOpenPositions() throws Exception {
+        return parseOpenPositions(postAccountQuery("/Position/searchOpen"));
+    }
+
+    java.util.List<BrokerOrder> parseOpenOrders(JsonNode json) {
+        JsonNode arr = json.has("orders") ? json.get("orders") : json;
+        java.util.List<BrokerOrder> out = new java.util.ArrayList<>();
+        if (arr == null || !arr.isArray()) return out;
+        for (JsonNode o : arr) {
+            String id = o.hasNonNull("id") ? o.get("id").asText()
+                : (o.hasNonNull("orderId") ? o.get("orderId").asText() : null);
+            if (id == null) continue;
+            int status = o.path("status").asInt(1);
+            if (status != 1 && status != 6) continue; // 1=Open, 6=Pending; the rest are terminal
+            String contractId = o.path("contractId").asText("");
+            out.add(new BrokerOrder(id, symbolForContract(contractId), contractId,
+                o.path("type").asInt(0),
+                o.path("side").asInt(0) == 0 ? OrderSide.BUY : OrderSide.SELL,
+                o.path("size").asInt(0),
+                o.hasNonNull("stopPrice") ? o.get("stopPrice").asDouble() : Double.NaN,
+                o.hasNonNull("limitPrice") ? o.get("limitPrice").asDouble() : Double.NaN));
+        }
+        return out;
+    }
+
+    java.util.List<BrokerPosition> parseOpenPositions(JsonNode json) {
+        JsonNode arr = json.has("positions") ? json.get("positions") : json;
+        java.util.List<BrokerPosition> out = new java.util.ArrayList<>();
+        if (arr == null || !arr.isArray()) return out;
+        for (JsonNode p : arr) {
+            int size = Math.abs(p.path("size").asInt(0));
+            if (size <= 0) continue;
+            String contractId = p.path("contractId").asText("");
+            // ProjectX PositionType: 1=Long, 2=Short
+            boolean isLong = p.path("type").asInt(1) == 1;
+            out.add(new BrokerPosition(symbolForContract(contractId), contractId, isLong, size,
+                p.path("averagePrice").asDouble(0.0)));
+        }
+        return out;
+    }
+
+    private JsonNode postAccountQuery(String path) throws Exception {
+        String numericAccountId = getNumericAccountId();
+        String body = objectMapper.writeValueAsString(Map.of("accountId", Integer.parseInt(numericAccountId)));
+        Request request = new Request.Builder()
+            .url(apiUrl + path)
+            .header("Authorization", "Bearer " + authToken)
+            .post(RequestBody.create(body, MediaType.parse("application/json")))
+            .build();
+        try (Response response = httpClient.newCall(request).execute()) {
+            String rb = response.body() != null ? response.body().string() : "";
+            if (!response.isSuccessful()) {
+                throw new IOException(path + " failed: HTTP " + response.code() + " - " + rb);
+            }
+            JsonNode json = objectMapper.readTree(rb);
+            if (json.has("success") && !json.get("success").asBoolean()) {
+                throw new IOException(path + " rejected: " + json.path("errorMessage").asText("?")
+                    + " (code: " + json.path("errorCode").asInt(-1) + ")");
+            }
+            return json;
+        }
+    }
+
+    /**
+     * Map a TopstepX contract id (e.g. CON.F.US.MNQ.Z26) back to the engine
+     * symbol: the subscribed mapping first, then the ProjectX root.
+     */
+    String symbolForContract(String contractId) {
+        if (contractId == null) return "";
+        for (Map.Entry<String, String> e : symbolToContractId.entrySet()) {
+            if (contractId.equals(e.getValue())) return e.getKey();
+        }
+        return symbolFromContractId(contractId);
+    }
+
+    /** Pure: ProjectX root of a contract id, mapped back to the engine symbol. */
+    static String symbolFromContractId(String contractId) {
+        String[] parts = contractId.split("\\.");
+        String root = parts.length >= 4 ? parts[3] : contractId;
+        switch (root) {
+            case "EP": return "ES";
+            case "ENQ": return "NQ";
+            case "GCE": return "GC";
+            case "SIE": return "SI";
+            case "NGE": return "NG";
+            case "HOE": return "HO";
+            default: return root;
+        }
+    }
+
+    /**
+     * Start fill tracking for an order the engine did not place in this
+     * process (adopted at startup / by reconciliation), so its fill reaches
+     * {@code listener} through the normal order-status poll.
+     */
+    public void trackExistingOrder(String orderId, String symbol, int quantity, OrderSide side,
+                                   double price, OrderListener listener) {
+        if (orderId == null || listener == null) return;
+        orderListeners.put(orderId, listener);
+        pendingOrders.put(orderId, new PendingOrder(orderId, symbol, Math.max(1, quantity), side, price, listener));
+        logger.info("Order {} ({} {} {} @ {}) adopted for fill tracking", orderId, side, quantity, symbol, price);
     }
 
     @Override
