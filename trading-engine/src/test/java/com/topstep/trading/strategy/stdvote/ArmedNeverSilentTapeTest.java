@@ -85,6 +85,7 @@ class ArmedNeverSilentTapeTest {
         // reads that morning BEARISH (RangeWindowTapeTest). Pinned so this
         // class keeps documenting the 05.4/05.5 mechanics on that setup.
         System.setProperty("bias.range.window", "SESSION_DAY");
+        System.setProperty("bias.range.carryAcrossReopen", "false"); // V5 05.7: pre-carry regression
         List<Candle> mnq = load("real_MNQ_1m.json", "MNQ");
         List<Candle> mes = load("real_MES_1m.json", "MES");
         EventBus bus = new EventBus();
@@ -207,6 +208,7 @@ class ArmedNeverSilentTapeTest {
     @AfterAll
     static void clear() {
         System.clearProperty("bias.range.window");
+        System.clearProperty("bias.range.carryAcrossReopen");
         StdvOteRegistry.unregister("MNQ");
     }
 

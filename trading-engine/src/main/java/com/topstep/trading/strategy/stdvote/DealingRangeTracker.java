@@ -56,7 +56,25 @@ import java.util.List;
  *       session-day range (identical to SESSION_DAY until the RTH impulse
  *       exists).</li>
  * </ul>
- * WHY (golden case G2, 2026-09-25): the session-day range anchored on the
+ * <h2>Carry across the 18:00 ET reopen ({@code bias.range.carryAcrossReopen}, V5 Agent 05.7)</h2>
+ * With the flag on (default) the previous session's GOVERNING range (the
+ * RTH impulse leg under AUTO / RTH_FIRST when it governed at the close, else
+ * the session-day range, else the range that session itself carried) keeps
+ * governing after the 18:00 ET roll: same high / low / direction, published
+ * decisive. It is EXTENDED when price prints beyond it (a new high in a
+ * bearish carried range raises the high; the direction does not flip on
+ * it). It hands over only when the NEW session prints an impulse leg of at
+ * least {@code bias.range.minLegTicks} (a leg with the same rules as the RTH
+ * leg, seeded at the first bar after the roll; an opposite impulse of that
+ * size is the only way the carried direction is replaced); from that bar on
+ * the range is exactly the flag-off range. An AUTO RTH leg that becomes
+ * decisive also governs over the carry (it is itself such an impulse).
+ * WHY (LIVE 2026-09-28 18:00 ET): the session-day range restarted at the
+ * reopen, the first 78-pt up-move (30537.00 -> 30615.25) read BULLISH and
+ * armed a long on a day whose RTH impulse was 30759.25 -> 30356.75 BEARISH;
+ * M2b refused it every bar until ~21:00 ET. Flag off = that behaviour (A/B).
+ *
+ * <p>WHY (golden case G2, 2026-09-25): the session-day range anchored on the
  * OVERNIGHT high 30999.50 (03:35 ET) and the Thu-evening low 30679.00, read
  * the day BULLISH and bought 10:06 ET; the owner anchors on the NY-AM impulse
  * HH 30926.50 (09:55) → LL 30684.00 (10:19): BEARISH. On G1 (09-28) both
@@ -108,6 +126,13 @@ public final class DealingRangeTracker {
     /** The RTH leg of the current trading day (null before 09:30 ET). */
     private Leg rth;
 
+    // ── V5 Agent 05.7: carry across the 18:00 ET reopen ──
+    private final boolean carryAcrossReopen;
+    /** Previous session's governing range while it still governs (null = not carrying). */
+    private Carried carried;
+    /** The new session's impulse leg that ends the carry once decisive. */
+    private Leg sessionLeg;
+
     /** SESSION_DAY tracker (Agent 03 constructor, kept for tests / A/B). */
     public DealingRangeTracker() {
         this(BiasConfig.rangeMinPct(), BiasConfig.rangeReanchorFraction());
@@ -125,6 +150,19 @@ public final class DealingRangeTracker {
      */
     public DealingRangeTracker(double minRangePct, double reanchorFraction,
                                Window window, double minLegPrice) {
+        this(minRangePct, reanchorFraction, window, minLegPrice, false);
+    }
+
+    /**
+     * Full constructor with the reopen carry (V5 Agent 05.7).
+     *
+     * @param carryAcrossReopen keep the previous session's governing range
+     *                          across the 18:00 ET roll until the new session
+     *                          prints an impulse leg of {@code minLegPrice}
+     */
+    public DealingRangeTracker(double minRangePct, double reanchorFraction,
+                               Window window, double minLegPrice, boolean carryAcrossReopen) {
+        this.carryAcrossReopen = carryAcrossReopen;
         this.minRangePct = Math.max(0.0, minRangePct);
         this.reanchorFraction = Math.min(1.0, Math.max(0.0, reanchorFraction));
         this.window = window == null ? Window.SESSION_DAY : window;
@@ -134,11 +172,21 @@ public final class DealingRangeTracker {
     /** The runner's tracker: every parameter read from {@link BiasConfig}. */
     public static DealingRangeTracker fromConfig(String symbol, double tickSize) {
         return new DealingRangeTracker(BiasConfig.rangeMinPct(), BiasConfig.rangeReanchorFraction(),
-                BiasConfig.rangeWindow(), BiasConfig.rangeMinLegTicks(symbol) * tickSize);
+                BiasConfig.rangeWindow(), BiasConfig.rangeMinLegTicks(symbol) * tickSize,
+                BiasConfig.rangeCarryAcrossReopen());
     }
 
     public Window window() {
         return window;
+    }
+
+    public boolean carryAcrossReopen() {
+        return carryAcrossReopen;
+    }
+
+    /** True while the previous session's range still governs (V5 Agent 05.7). */
+    public boolean carryingPreviousRange() {
+        return carried != null;
     }
 
     /** Warm the tracker from seeded history (e.g. H1 bars) in time order. */
@@ -165,6 +213,20 @@ public final class DealingRangeTracker {
         double close = c.getClose();
         seq++;
         if (tradingDay == null || !day.equals(tradingDay)) {
+            boolean roll = tradingDay != null;
+            Carried next = null;
+            if (roll && carryAcrossReopen) {
+                // The previous session's GOVERNING range as of its close.
+                Snapshot prev = snapshot();
+                if (prev.direction() != MarketBias.NEUTRAL
+                        && !Double.isNaN(prev.high()) && !Double.isNaN(prev.low())) {
+                    next = new Carried(prev.high(), prev.low(),
+                            prev.direction() == MarketBias.BULLISH ? 1 : -1);
+                    next.extend(h, l);
+                }
+            }
+            carried = next;
+            sessionLeg = next == null ? null : new Leg(h, l);
             tradingDay = day;
             if (dir != 0) {
                 carry = dir;
@@ -182,6 +244,7 @@ public final class DealingRangeTracker {
             return;
         }
         onRthCandle(t, h, l, close);
+        onCarryCandle(h, l, close);
         if (dir == 0) {
             if (h > hi) { hi = h; hiSeq = seq; }
             if (l < lo) { lo = l; loSeq = seq; }
@@ -226,6 +289,18 @@ public final class DealingRangeTracker {
         }
     }
 
+    /** Advance the reopen carry: the new session's leg, then hand over or extend. */
+    private void onCarryCandle(double h, double l, double close) {
+        if (carried == null) return;
+        sessionLeg.onBar(h, l, close, minLegPrice, reanchorFraction);
+        if (sessionLeg.dir != 0) {
+            carried = null; // the new session printed its impulse: it governs
+            sessionLeg = null;
+            return;
+        }
+        carried.extend(h, l);
+    }
+
     /** Feed the RTH leg (from 09:30 ET; the halt is filtered by the caller). */
     private void onRthCandle(LocalTime t, double h, double l, double close) {
         if (window == Window.SESSION_DAY) return;
@@ -253,6 +328,7 @@ public final class DealingRangeTracker {
     }
 
     private MarketBias sessionDayDirection() {
+        if (carried != null) return carried.bias();
         int d = dir != 0 ? dir : carry;
         return d > 0 ? MarketBias.BULLISH : d < 0 ? MarketBias.BEARISH : MarketBias.NEUTRAL;
     }
@@ -264,6 +340,13 @@ public final class DealingRangeTracker {
 
     public Snapshot snapshot() {
         if (!hasData()) return Snapshot.EMPTY;
+        if (carried != null && !(rthGoverns() && rth.dir != 0)) {
+            // V5 Agent 05.7: the previous session's range still governs
+            // (RTH_FIRST below the minimum leg keeps publishing the carry).
+            return new Snapshot(carried.bias(), carried.hi, carried.lo,
+                    com.topstep.trading.strategy.HtfTrendAnalyzer.equilibriumOf(carried.hi, carried.lo),
+                    true);
+        }
         if (rthGoverns()) {
             // RTH leg decisive: its direction and extremes. RTH_FIRST below
             // the minimum leg: the RTH extremes, NON-decisive, session-day
@@ -293,6 +376,30 @@ public final class DealingRangeTracker {
         pullback = Double.NaN;
         carryHi = carryLo = Double.NaN;
         rth = null;
+        carried = null;
+        sessionLeg = null;
+    }
+
+    /** The previous session's governing range, carried across the reopen. */
+    private static final class Carried {
+        double hi;
+        double lo;
+        final int dir;
+
+        Carried(double hi, double lo, int dir) {
+            this.hi = hi;
+            this.lo = lo;
+            this.dir = dir;
+        }
+
+        void extend(double h, double l) {
+            if (h > hi) hi = h;
+            if (l < lo) lo = l;
+        }
+
+        MarketBias bias() {
+            return dir > 0 ? MarketBias.BULLISH : MarketBias.BEARISH;
+        }
     }
 
     /**
