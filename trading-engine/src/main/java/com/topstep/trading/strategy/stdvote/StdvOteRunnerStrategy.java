@@ -2398,7 +2398,12 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             mllRoom = activeRiskLimits.getMaxLossLimit()
                     - (account.getHighestEndOfDayBalance() - account.getEquity());
         }
-        double budget = StdvOteSizer.riskBudget(activeRiskLimits.getRiskPerTrade(), dllRoom, mllRoom);
+        // AGENT-05.10: the per-trade budget the risk engine will use (static
+        // riskPerTrade unless the LIVE runner installed its phase-aware budget).
+        double perTrade = (context != null)
+                ? context.perTradeRiskBudget(symbol, TradeTier.TIER_1, activeRiskLimits.getRiskPerTrade())
+                : activeRiskLimits.getRiskPerTrade();
+        double budget = StdvOteSizer.riskBudget(perTrade, dllRoom, mllRoom);
         double ctBudget = CounterTrendScalp.scaledBudget(budget, ct.config().maxRiskFraction());
         StdvOteSizer.RiskSize rs = StdvOteSizer.riskDerived(ctBudget, p.entry(), p.stop(),
                 spec.tickSize(), spec.tickValue(), com.topstep.trading.risk.RiskConfig.minMicros(), cap);
@@ -2679,7 +2684,13 @@ public final class StdvOteRunnerStrategy implements TradingStrategy {
             mllRoom = activeRiskLimits.getMaxLossLimit()
                     - (account.getHighestEndOfDayBalance() - account.getEquity());
         }
-        double budget = StdvOteSizer.riskBudget(activeRiskLimits.getRiskPerTrade(), dllRoom, mllRoom);
+        // AGENT-05.10: size from the per-trade budget the risk engine will
+        // actually use - the static riskPerTrade (risk.phaseAware=false, the
+        // proven path) or the LIVE runner's phase-aware budget for THIS tier.
+        double perTrade = (context != null)
+                ? context.perTradeRiskBudget(symbol, tier, activeRiskLimits.getRiskPerTrade())
+                : activeRiskLimits.getRiskPerTrade();
+        double budget = StdvOteSizer.riskBudget(perTrade, dllRoom, mllRoom);
         if (ltfMachine) {
             // AGENT-05.9: range.ltf.riskFraction (default 1.0) of the SAME budget
             // (never more); the sizer's caps and the risk engine are unchanged.

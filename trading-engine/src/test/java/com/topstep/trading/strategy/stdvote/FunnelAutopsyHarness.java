@@ -13,6 +13,7 @@ import com.topstep.trading.event.EventBus;
 import com.topstep.trading.event.PositionClosedEvent;
 import com.topstep.trading.event.StrategySignalEvent;
 import com.topstep.trading.execution.ExecutionEngine;
+import com.topstep.trading.risk.LiveRiskPath;
 import com.topstep.trading.risk.PropFirmRiskEngine;
 import com.topstep.trading.risk.RiskDecision;
 import com.topstep.trading.strategy.DefaultStrategyContext;
@@ -150,6 +151,13 @@ class FunnelAutopsyHarness {
         AccountState account = new AccountState(50_000.0);
         RiskLimits limits = ScalpConfig.activeRiskLimits();
         PropFirmRiskEngine risk = new PropFirmRiskEngine();
+        // V5 Agent 05.10 (R5): the LIVE handler's risk section, built by the SAME
+        // factory LiveEngineRunner uses. risk.phaseAware=false (default) = STATIC:
+        // riskEngine.evaluate(signal, account, limits) exactly as before;
+        // risk.phaseAware=true = the phase-aware layer (same calculator, profile,
+        // lifecycle inputs from tracked P&L) + the strategy sizes from its budget.
+        LiveRiskPath livePath = com.topstep.trading.LiveEngineRunner.newLiveRiskPath();
+        List<String> phaseAwareLog = new ArrayList<>();
         ExecutionEngine exec = new ExecutionEngine(account);
         exec.setEventBus(bus);
         // V5 Agent 05.3: count fills at the fill itself (a fill + stop inside
@@ -161,9 +169,14 @@ class FunnelAutopsyHarness {
                 fillEvents[0]++;
                 barNotes.add("FILL " + side + " " + q + " @ " + px);
             }
-            @Override public void onPositionClosed(String s, double pnl, boolean win) { }
+            // V5 Agent 05.10: the LIVE runner's notifyPositionClosed -> lifecycle.
+            @Override public void onPositionClosed(String s, double pnl, boolean win) { livePath.onPositionClosed(pnl); }
         });
         DefaultStrategyContext context = new DefaultStrategyContext(account);
+        // V5 Agent 05.10: the strategy sizes from the budget the risk path will use (null = static).
+        context.setRiskBudgetProvider(livePath.budgetProviderOrNull());
+        System.out.println("[AUTOPSY] " + livePath.bootLine(limits));
+        livePath.logZone("boot");
         ConcurrentLinkedQueue<StrategySignalEvent> signals = new ConcurrentLinkedQueue<>();
         bus.subscribe(StrategySignalEvent.class, signals::add);
         // V5 Agent 05.3: order-lifecycle decisions (setup-end cancels, TTL, flatten) into the log.
@@ -254,6 +267,7 @@ class FunnelAutopsyHarness {
                 int logMark = signalLog.size();
                 SetupState before = ctx.state;
                 context.setCurrentTime(now);
+                livePath.onCandle(now, account);   // V5 Agent 05.10: LIVE candleHousekeeping lifecycle inputs
                 exec.onNewCandle(c);          // fills / stops / targets on THIS bar (SimEngineRunner order)
                 // V5 Agent 05.3 (determinism): every handler of the events this
                 // step published (PositionClosedEvent -> strategy latch, ...) has
@@ -281,7 +295,9 @@ class FunnelAutopsyHarness {
                         counts.get(sess)[4]++;
                         signalCol = sig.getSignalType() + " e=" + sig.getEntryPrice() + " s=" + sig.getStopPrice()
                                 + " t=" + sig.getTargetPrice() + " rr=" + fmt(sig.getActualRR()) + " q=" + sig.getQuantity();
-                        RiskDecision d = risk.evaluate(sig, account, limits);
+                        // V5 Agent 05.10: the LIVE risk section (STATIC = risk.evaluate(sig, account, limits)).
+                        LiveRiskPath.Decision rd = livePath.evaluate(sig, account, limits, risk);
+                        RiskDecision d = rd.riskDecision() != null ? rd.riskDecision() : RiskDecision.deny(rd.reason());
                         if (d.isAllowed()) {
                             Order o = d.getOrder();
                             exec.submitOrder(o, sig.getStopPrice(), sig.getTargetPrice());
@@ -303,6 +319,7 @@ class FunnelAutopsyHarness {
                                         + " | LTF now [" + lctx.rangeLow + "," + lctx.rangeHigh + "]"
                                         + " | HTF " + lctx.ltfHtfBias + " [" + lctx.ltfHtfRangeLow + "," + lctx.ltfHtfRangeHigh + "]]";
                             }
+                            if (livePath.phaseAware()) riskCol += phaseAwareTag(rd);
                             allows.add(new Object[] {now, ltfSig, ltfSig ? TS.format(now.atZone(ET)) + " ET " + sess
                                     + " | " + signalCol + " | " + riskCol : null});
                         } else {
@@ -314,10 +331,18 @@ class FunnelAutopsyHarness {
                             if (sig.getReason() != null && sig.getReason().startsWith(LtfRangeConfig.REASON_PREFIX)) {
                                 riskCol += " [LTF " + LtfRangeConfig.REASON_PREFIX + "]";
                             }
+                            if (livePath.phaseAware()) riskCol += phaseAwareTag(rd);
                             riskDenials.merge(d.getReason().replaceAll("[0-9.]+", "#"), 1L, Long::sum);
                             bus.publish(new PositionClosedEvent(symbol, 0.0, false, now)); // SIM release
                         }
                         signalLog.add(TS.format(now.atZone(ET)) + " ET " + sess + " | " + signalCol + " | " + riskCol);
+                        if (livePath.phaseAware()) {
+                            phaseAwareLog.add(TS.format(now.atZone(ET)) + " ET " + sess + " | " + sig.getTier()
+                                    + " q=" + rd.setupQuality() + " zone=" + rd.zone() + " budget="
+                                    + fmt(rd.effectiveBudget()) + " reqQty=" + sig.getQuantity() + " | "
+                                    + (d.isAllowed() ? "ALLOW qty=" + d.getOrder().getQuantity() : "DENY(" + rd.deniedBy() + ") "
+                                    + rd.reason()) + " | trackedPnL=" + fmt(livePath.lifecycle().trackedPnlSinceStart()));
+                        }
                         bus.awaitIdle(5_000);
                     }
                 }
@@ -491,6 +516,17 @@ class FunnelAutopsyHarness {
                     + " riskPerTrade=" + limits.getRiskPerTrade() + " riskEngineRR=[" + limits.getMinRiskRewardRatio()
                     + "," + limits.getMaxRiskRewardRatio() + "] validatorRR=[" + limits.getSignalMinRr() + ","
                     + limits.getSignalMaxRr() + "]");
+            if (livePath.phaseAware()) {
+                // V5 Agent 05.10: only with risk.phaseAware=true (STATIC output is byte-identical).
+                md.println();
+                md.println("## Risk path: PHASE_AWARE (risk.phaseAware=true)");
+                md.println();
+                md.println(livePath.bootLine(limits));
+                md.println();
+                md.println("final lifecycle: " + livePath.lifecycle().zoneInputs());
+                md.println();
+                for (String l : phaseAwareLog) md.println("- " + l);
+            }
             md.println();
             md.println("cold start: first non-NEUTRAL bias at bar " + firstNonNeutralBar + " (" + firstNonNeutralAt
                     + " ET); first decisive 3-of-4 vote at bar " + firstVoteDecisiveBar);
@@ -679,6 +715,12 @@ class FunnelAutopsyHarness {
     }
 
     private static String fmt(double d) { return String.format("%.2f", d); }
+
+    /** V5 Agent 05.10: the phase-aware numbers of one decision (risk.phaseAware=true only). */
+    private static String phaseAwareTag(LiveRiskPath.Decision rd) {
+        return " [PHASE_AWARE zone=" + rd.zone() + " q=" + rd.setupQuality() + " budget=" + fmt(rd.effectiveBudget())
+                + (rd.allowed() ? "" : " deniedBy=" + rd.deniedBy()) + "]";
+    }
 
     private static String q(String s) {
         if (s == null) return "";

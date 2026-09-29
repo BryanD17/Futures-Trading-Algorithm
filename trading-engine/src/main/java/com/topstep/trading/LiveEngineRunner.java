@@ -189,8 +189,13 @@ public class LiveEngineRunner {
     private final AccountLifecycle lifecycle;
     private final PhaseAwareRiskCalculator riskCalculator;
     private final RiskProfile riskProfile;
-    private volatile int tradesToday = 0;
-    private volatile LocalDate lastTradingDate = null;
+    /**
+     * AGENT-05.10: the LIVE risk section (STATIC proven path unless
+     * risk.phaseAware=true), the lifecycle inputs (tracked P&L since start,
+     * never the broker balance) and the budget the strategy sizes from. The
+     * tape harness builds the SAME object (LiveEngineRunner.newLiveRiskPath).
+     */
+    private final com.topstep.trading.risk.LiveRiskPath livePath;
 
     /**
      * Create a new LIVE engine with Topstep 50K configuration.
@@ -488,21 +493,25 @@ public class LiveEngineRunner {
         }
 
         // === Convex Payoff Optimization: Initialize lifecycle-aware risk components ===
-        this.lifecycle = AccountLifecycle.topstep50kEvaluation();
-        this.riskProfile = RiskProfile.topstep50kEvaluation();
-        this.riskCalculator = new PhaseAwareRiskCalculator();
+        this.livePath = newLiveRiskPath();
+        this.lifecycle = livePath.lifecycle();
+        this.riskProfile = livePath.profile();
+        this.riskCalculator = livePath.calculator();
+        // AGENT-05.10: the strategy sizes from the budget the risk engine will
+        // use (null provider = static riskPerTrade = the proven path).
+        this.strategyContext.setRiskBudgetProvider(livePath.budgetProviderOrNull());
 
         // Register lifecycle with the facade for dashboard access
         EngineFacade.getInstance().initializeLifecycle(lifecycle);
 
-        System.out.println("\n  CONVEX PAYOFF OPTIMIZATION: ACTIVE");
-        System.out.println("  - Dynamic risk sizing based on account zone & setup quality");
-        System.out.println("  - Zone multipliers: NORMAL=1.0x, PROTECTION=0.6x, CAUTION=0.7x, DANGER=0.4x, CRUISE=0.3x");
-        System.out.println("  - Quality gates: min quality " + riskProfile.getMinSetupQuality() +
-            " (cruise: " + riskProfile.getCruiseMinQuality() + ")");
-        System.out.println("  - Base risk: " + String.format("%.2f%%", riskProfile.getBaseRiskPct() * 100) +
-            " of $" + String.format("%.0f", lifecycle.getStartingBalance()) +
-            " = $" + String.format("%.0f", lifecycle.getStartingBalance() * riskProfile.getBaseRiskPct()));
+        System.out.println("\n  " + livePath.bootLine(riskLimits));
+        if (livePath.phaseAware()) {
+            System.out.println("  CONVEX PAYOFF OPTIMIZATION: ACTIVE (risk.phaseAware=true)");
+            System.out.println("  - Zone multipliers: NORMAL=1.0x, PROTECTION=0.6x, CAUTION=0.7x, DANGER=0.4x, CRUISE=0.3x");
+            System.out.println("  - Quality gates: min quality " + riskProfile.getMinSetupQuality() +
+                " (cruise: " + riskProfile.getCruiseMinQuality() + ")");
+        }
+        livePath.logZone("boot");
 
         // Subscribe to strategy signals
         eventBus.subscribe(StrategySignalEvent.class, this::handleStrategySignal);
@@ -807,24 +816,10 @@ public class LiveEngineRunner {
         // Update context time
         strategyContext.setCurrentTime(candle.getTimestamp());
 
-        // === Convex Payoff: Detect new trading day and sync lifecycle equity ===
-        LocalDate candleDate = candle.getTimestamp()
-            .atZone(CT_ZONE).toLocalDate();
-        if (lastTradingDate == null || !candleDate.equals(lastTradingDate)) {
-            if (lastTradingDate != null) {
-                // End of previous day: record daily PnL
-                double dayPnl = accountState.getNetDailyPnl();
-                lifecycle.onDayEnd(dayPnl);
-                System.out.println("[LIFECYCLE] New trading day detected. Previous day PnL: $" +
-                    String.format("%.2f", dayPnl));
-            }
-            tradesToday = 0;
-            lastTradingDate = candleDate;
-        }
-
-        // Sync lifecycle equity from live account state on every candle
-        lifecycle.syncEquityFromLive(accountState.getEquity());
-        lifecycle.updateIntradayPnl(accountState.getNetDailyPnl());
+        // === Lifecycle inputs (AGENT-05.10): CT-day rollover, equity from the
+        // engine's TRACKED P&L since start on the profile baseline (never the
+        // broker balance), intraday P&L; zone changes are logged with inputs.
+        livePath.onCandle(candle.getTimestamp(), accountState);
 
         // Process through execution engine first (fills, stops, targets)
         executionEngine.onNewCandle(candle);
@@ -1009,44 +1004,32 @@ public class LiveEngineRunner {
             }
         }
 
-        // STEP 2: Calculate dynamic risk via PhaseAwareRiskCalculator
-        int setupQuality = extractSetupQuality(signal);
-        RiskZone currentZone = lifecycle.getCurrentRiskZone();
-
-        // Log lifecycle state before every risk decision
-        System.out.println(String.format(
-            "[LIFECYCLE] Phase=%s Zone=%s Target=%.1f%% DD=%.1f%% ConsecLoss=%d Budget=$%.0f DLLRoom=$%.0f",
-            lifecycle.getCurrentPhase(), currentZone,
-            lifecycle.targetCompletionPct() * 100,
-            lifecycle.drawdownUsagePct() * 100,
-            lifecycle.getConsecutiveLosses(),
-            lifecycle.riskBudgetRemaining(),
-            lifecycle.dailyLossRoomRemaining()
-        ));
-
-        PhaseAwareRiskCalculator.RiskCalculation riskCalc =
-            riskCalculator.calculateRisk(lifecycle, riskProfile, setupQuality, tradesToday);
-
-        System.out.println("[DYNAMIC RISK] " + riskCalc);
-
-        if (!riskCalc.isTradingAllowed()) {
-            System.out.println("\n❌ Signal DENIED by PhaseAwareRiskCalculator: " + signal.getReason());
-            System.out.println("  Reason: " + riskCalc.getBlockReason());
-            publishGate(signal, "RISK", "RISK: PhaseAwareRiskCalculator — " + riskCalc.getBlockReason(),
-                    riskCalc.getRiskDollars(), Double.NaN);
-            releaseLatch(signal, "PhaseAwareRiskCalculator deny");
+        // STEP 2 + 3 (AGENT-05.10): the ONE risk section, shared with the tape
+        // harness. risk.phaseAware=false (default) = the proven path:
+        // riskEngine.evaluate(signal, accountState, riskLimits) with the static
+        // riskPerTrade. risk.phaseAware=true = PhaseAwareRiskCalculator (quality
+        // gate, zone x quality budget) then riskEngine.evaluate(..., dynamicRisk).
+        // risk.haltOnProfitTarget (LIVE true) refuses entries once the TRACKED
+        // realized P&L since engine start reaches the profit target.
+        com.topstep.trading.risk.LiveRiskPath.Decision riskStep =
+                livePath.evaluate(signal, accountState, riskLimits, riskEngine);
+        if (riskStep.deniedBeforeEngine()) {
+            String layer = riskStep.deniedBy() == com.topstep.trading.risk.LiveRiskPath.DeniedBy.PHASE_AWARE_GATE
+                    ? "PhaseAwareRiskCalculator" : "profit-target halt";
+            System.out.println("\n❌ Signal DENIED by " + layer + ": " + signal.getReason());
+            System.out.println("  Reason: " + riskStep.reason());
+            publishGate(signal, "RISK", riskStep.reason(), riskStep.effectiveBudget(), Double.NaN);
+            releaseLatch(signal, layer + " deny");
             return;
         }
-
-        // STEP 3: Evaluate against prop firm risk limits with dynamic risk amount
-        double dynamicRisk = riskCalc.getRiskDollars();
-        RiskDecision decision = riskEngine.evaluate(signal, accountState, riskLimits, dynamicRisk);
+        RiskDecision decision = riskStep.riskDecision();
 
         if (decision.isAllowed()) {
             System.out.println("\n✓ LIVE Signal APPROVED: " + signal.getReason());
             System.out.println("  Tier: " + signal.getTier() + " | R:R: 1:" + signal.getRiskRewardRatio());
-            System.out.println("  Dynamic Risk: $" + String.format("%.2f", dynamicRisk) +
-                " (zone=" + currentZone + ", quality=" + setupQuality + ")");
+            System.out.println("  Risk path " + riskStep.path() + ": per-trade budget $"
+                + String.format("%.2f", riskStep.effectiveBudget()) +
+                " (zone=" + riskStep.zone() + ", quality=" + riskStep.setupQuality() + ")");
             System.out.println("  Quantity: " + signal.getQuantity() + " | " + decision.getReason());
 
             try {
@@ -1535,13 +1518,8 @@ public class LiveEngineRunner {
             multiEngine.notifyPositionClosed(symbol, pnl);
         }
 
-        // === Convex Payoff: Track trade in lifecycle for zone transitions ===
-        lifecycle.recordTrade(pnl);
-        tradesToday++;
-        System.out.println(String.format(
-            "[LIFECYCLE] Trade recorded: $%.2f | ConsecLoss=%d | TradesToday=%d | Zone=%s",
-            pnl, lifecycle.getConsecutiveLosses(), tradesToday, lifecycle.getCurrentRiskZone()
-        ));
+        // === Lifecycle (AGENT-05.10: shared with the tape harness) ===
+        livePath.onPositionClosed(pnl);
     }
 
     /**
@@ -2091,26 +2069,6 @@ public class LiveEngineRunner {
         System.out.println("  Open Positions: " + accountState.getPositions().size());
     }
 
-    /**
-     * Extract a numeric setup quality score (0-10) from the strategy signal.
-     * Derives quality from the trade tier since signals don't carry a separate quality score.
-     *
-     * Tier mapping:
-     *   TIER_4 (Elite) = 9, TIER_3 (Premium) = 7, TIER_2 (Standard) = 5, TIER_1 = 3
-     */
-    private int extractSetupQuality(StrategySignalEvent signal) {
-        TradeTier tier = signal.getTier();
-        if (tier == null) return 5;  // default to standard
-
-        switch (tier) {
-            case TIER_4: return 9;   // Elite: highest quality
-            case TIER_3: return 7;   // Premium: high quality
-            case TIER_2: return 5;   // Standard: acceptable
-            case TIER_1: return 3;   // Low: will be filtered by quality gate
-            default:     return 5;
-        }
-    }
-
     // === Convex Payoff Optimization getters ===
     /** Entry order ids cancelled because their setup ended (their CANCELED callback must not release a latch). */
     private final java.util.Set<String> setupCancelledOrderIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -2215,6 +2173,17 @@ public class LiveEngineRunner {
     public AccountLifecycle getLifecycle() { return lifecycle; }
     public PhaseAwareRiskCalculator getRiskCalculator() { return riskCalculator; }
     public RiskProfile getRiskProfile() { return riskProfile; }
+    /** AGENT-05.10: the LIVE risk section (STATIC / PHASE_AWARE). */
+    public com.topstep.trading.risk.LiveRiskPath getLiveRiskPath() { return livePath; }
+
+    /**
+     * AGENT-05.10: the LIVE runner's risk-path wiring. The tape harness calls
+     * the same factory, so the two decide with the same calculator, profile,
+     * lifecycle and flags.
+     */
+    public static com.topstep.trading.risk.LiveRiskPath newLiveRiskPath() {
+        return com.topstep.trading.risk.LiveRiskPath.topstep50kLive(System.out::println);
+    }
     /** The runner's in-memory chart (30m candles + OTE overlay per symbol). */
     public com.topstep.trading.chart.ChartEngine getChartEngine() { return chartEngine; }
 

@@ -40,6 +40,8 @@ public class AccountLifecycle {
     private volatile int consecutiveLosses;
     private volatile int consecutiveCruiseDays;
     private volatile boolean tradingPausedForDay;
+    /** AGENT-05.10: true once {@link #syncTrackedPnl} drives the equity (the LIVE engine). */
+    private volatile boolean trackedPnlMode;
 
     // History
     private final List<Double> dailyPnlHistory;
@@ -153,7 +155,14 @@ public class AccountLifecycle {
         this.tradingDaysElapsed++;
 
         dailyPnlHistory.add(dayPnl);
-        currentEquity = startingBalance + dailyPnlHistory.stream().mapToDouble(Double::doubleValue).sum();
+        if (!trackedPnlMode) {
+            currentEquity = startingBalance + dailyPnlHistory.stream().mapToDouble(Double::doubleValue).sum();
+        }
+        // AGENT-05.10: in tracked-P&L mode the equity IS the tracked P&L since
+        // start (synced every candle); re-deriving it from the day-P&L history
+        // double counted (the caller's day P&L is sampled at the CT date change,
+        // not at the 17:00 CT session roll) and inflated the HWM -> a phantom
+        // drawdown / DANGER zone on the tape.
         equityPathHistory.add(currentEquity);
 
         // Update high water mark
@@ -306,8 +315,10 @@ public class AccountLifecycle {
     // ==================== Live Equity Sync ====================
 
     /**
-     * Sync equity from the live AccountState.
-     * Called periodically (e.g., on each candle) to keep lifecycle metrics current.
+     * Sync equity from an absolute equity figure.
+     * NOTE (AGENT-05.10): the LIVE engine no longer calls this with the broker
+     * balance - see {@link #syncTrackedPnl(double)}. Kept for callers that own
+     * an equity figure on the profile's own baseline.
      * Updates currentEquity and high water mark based on live balance.
      *
      * @param liveEquity The current equity from AccountState
@@ -317,6 +328,50 @@ public class AccountLifecycle {
         if (liveEquity > currentHighWaterMark) {
             currentHighWaterMark = liveEquity;
         }
+    }
+
+    /**
+     * AGENT-05.10 (V5): sync equity from the engine's OWN tracked P&L since
+     * engine start, against the profile's STARTING balance baseline:
+     * {@code currentEquity = startingBalance + pnlSinceStart}.
+     *
+     * <p>This is the only equity sync the LIVE engine uses. The raw broker
+     * balance is never fed to the lifecycle: a $150K practice account run
+     * under the 50K profile would otherwise read as +$100K vs a $3K profit
+     * target (= CRUISE at boot), which is what the 2026-09-29 PRAC log showed.
+     *
+     * <p>The high-water mark is raised only at {@link #onDayEnd} (end-of-day
+     * equity), matching Topstep's highest-EOD-balance MLL rule.
+     *
+     * @param pnlSinceStart realized + unrealized P&L the engine booked since it started
+     */
+    public void syncTrackedPnl(double pnlSinceStart) {
+        this.trackedPnlMode = true;
+        this.currentEquity = startingBalance + (Double.isNaN(pnlSinceStart) ? 0.0 : pnlSinceStart);
+        // The high-water mark moves only at day end (onDayEnd), like Topstep's
+        // highest END-OF-DAY balance: an intraday unrealized peak is not a
+        // new baseline for the drawdown zones.
+    }
+
+    /** P&L since start as the lifecycle sees it ({@code currentEquity - startingBalance}). */
+    public double trackedPnlSinceStart() {
+        return currentEquity - startingBalance;
+    }
+
+    /**
+     * AGENT-05.10: the zone and every input it is computed from, one line
+     * (logged at boot and on every zone change).
+     */
+    public String zoneInputs() {
+        return String.format(java.util.Locale.ROOT,
+            "zone=%s phase=%s | baseline=$%.2f (profile starting balance) trackedPnL=$%.2f equity=$%.2f"
+                + " | target=$%.2f -> %.1f%% (CRUISE >= 85%%, PROTECTION >= 50%%)"
+                + " | HWM=$%.2f DD=$%.2f of MLL $%.2f -> %.1f%% (CAUTION >= 40%%, DANGER >= 60%%)"
+                + " | dailyPnL=$%.2f consecLoss=%d",
+            getCurrentRiskZone(), currentPhase, startingBalance, trackedPnlSinceStart(), currentEquity,
+            profitTarget, targetCompletionPct() * 100,
+            currentHighWaterMark, currentHighWaterMark - currentEquity, maxLossLimit, drawdownUsagePct() * 100,
+            dailyPnl, consecutiveLosses);
     }
 
     /**
