@@ -188,6 +188,18 @@ public class BracketOrderManager {
         default void onPositionAdopted(BracketOrder bracket) {
             // Default no-op
         }
+
+        /**
+         * AGENT-05.13: the bracket was dropped because the BROKER is flat for
+         * its symbol (reconciliation saw no position on two consecutive passes
+         * and no fill callback arrived). Distinct from a plain cancel: the
+         * position is gone at the broker, so the runner must release it from
+         * AccountState. The exit price is NOT known on this path. The default
+         * delegates to {@link #onBracketCanceled} (pre-05.13 behaviour).
+         */
+        default void onBrokerFlat(BracketOrder bracket, String reason) {
+            onBracketCanceled(bracket, reason);
+        }
     }
 
     /** Outcome of a cancel, as the broker answered it. */
@@ -1322,7 +1334,8 @@ public class BracketOrderManager {
                 }
                 sweepSymbolOrders(bracket.symbol, "broker flat (reconciliation)");
                 if (listener != null) {
-                    listener.onBracketCanceled(bracket, "BROKER_FLAT: broker shows no position (reconciliation)");
+                    // AGENT-05.13: typed callback so the runner releases the position.
+                    listener.onBrokerFlat(bracket, "BROKER_FLAT: broker shows no position (reconciliation)");
                 }
                 continue;
             }

@@ -1063,6 +1063,41 @@ public class ExecutionEngine {
     }
 
     /**
+     * AGENT-05.13: drop the symbol's order levels once its LIVE position is
+     * closed at the broker (bracket stop / final TP / broker-flat release).
+     * Live exits bypass {@link #closePosition}, so the previous trade's levels
+     * used to linger and were reported by /api/positions as the stop of the
+     * NEXT (adopted) position. Kept while an entry order is still resting for
+     * the symbol (those levels belong to that order).
+     */
+    public synchronized void clearOrderLevelsIfIdle(String symbol) {
+        List<Order> orders = activeOrders.get(symbol);
+        if (orders == null || orders.isEmpty()) {
+            orderLevels.remove(symbol);
+        }
+    }
+
+    /**
+     * AGENT-05.13: levels for a position ADOPTED from the broker: the adopted
+     * broker stop (no engine target). A non-positive stop clears the levels so
+     * nothing stale is reported (the API then shows stopPrice null). No-op
+     * while an entry order is resting for the symbol (its levels are live).
+     */
+    public synchronized void setAdoptedOrderLevels(String symbol, double entryPrice, double stopPrice,
+                                                   OrderSide side, int quantity) {
+        List<Order> orders = activeOrders.get(symbol);
+        if (orders != null && !orders.isEmpty()) {
+            return;
+        }
+        if (stopPrice > 0 && !Double.isNaN(stopPrice)) {
+            orderLevels.put(symbol, new EnhancedOrderLevels(entryPrice, stopPrice, 0.0, side, quantity,
+                    TradeTier.TIER_1, null));
+        } else {
+            orderLevels.remove(symbol);
+        }
+    }
+
+    /**
      * Enhanced order levels with partial profit and trailing stop support.
      */
     public static class EnhancedOrderLevels {
