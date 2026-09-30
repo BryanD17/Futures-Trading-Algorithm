@@ -41,6 +41,8 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -98,6 +100,7 @@ class AdoptedPositionReleaseTest {
     }
 
     FakeBroker broker;
+    TopstepConnector connector;
     BracketOrderManager manager;
     AccountState account;
     ExecutionEngine exec;
@@ -108,7 +111,7 @@ class AdoptedPositionReleaseTest {
     @BeforeEach
     void setUp() throws Exception {
         broker = new FakeBroker();
-        TopstepConnector connector = mock(TopstepConnector.class);
+        connector = mock(TopstepConnector.class);
         when(connector.submitStopOrder(anyString(), any(), anyInt(), anyDouble(), any())).thenAnswer(inv ->
                 broker.place(TopstepConnector.ORDER_TYPE_STOP, inv.getArgument(0), inv.getArgument(1),
                         inv.getArgument(2), inv.getArgument(3), inv.getArgument(4)));
@@ -405,6 +408,50 @@ class AdoptedPositionReleaseTest {
         assertThat(exec.getOrderLevels(SYM)).isNotNull();
         exec.setAdoptedOrderLevels(SYM, ADOPT_ENTRY, ADOPT_STOP, OrderSide.SELL, 45);
         assertThat(exec.getOrderLevels(SYM).getCurrentStopPrice()).isEqualTo(20990.0);
+    }
+
+    @Test
+    @DisplayName("AGENT-05.14 REPRO 15:34 PT: owner's LONG 45 MNQ, target only, NO stop -> OBSERVE-ONLY: registered adopted, entries blocked, NO order of any kind, released when flat")
+    void ownersFortyFiveLotObserveOnlyEndToEnd() throws Exception {
+        broker.position = new BrokerPosition(SYM, CONTRACT, true, 45, 30761.0);
+        broker.open.put("3588724603", new BrokerOrder("3588724603", SYM, CONTRACT,
+                TopstepConnector.ORDER_TYPE_LIMIT, OrderSide.SELL, 45, Double.NaN, 30778.5));
+        manager.onLastPrice(SYM, 30761.25);
+        String err = captureErr(this::reconcileTwice);
+
+        assertThat(err).contains("[BRACKET] OBSERVE-ONLY adopted MNQ LONG 45 @ 30761.0 (size > maxContracts 5):"
+                + " engine will NOT place stops or flatten it");
+        assertThat(manager.getBracket(SYM).observeOnly).isTrue();
+        Position p = account.getPosition(SYM);
+        assertThat(p).isNotNull();
+        assertThat(p.isAdopted()).isTrue();
+        assertThat(p.getQuantity()).isEqualTo(45);
+        assertThat(account.hasPosition(SYM)).as("runner's per-symbol entry gate").isTrue();
+        assertThat(account.getTotalContracts()).isEqualTo(45);
+        RiskDecision blocked = new PropFirmRiskEngine().evaluate(newMnqSignal(), account, RiskLimits.topstep50k());
+        assertThat(blocked.isAllowed()).isFalse();
+
+        // price runs away, many passes: still no stop, no flatten, no cancel
+        for (int i = 0; i < 4; i++) {
+            manager.onLastPrice(SYM, 30700.0 - 10 * i);
+            manager.reconcileWithBroker();
+        }
+        verify(connector, never()).submitStopOrder(anyString(), any(), anyInt(), anyDouble(), any());
+        verify(connector, never()).submitTakeProfitOrder(anyString(), any(), anyInt(), anyDouble(), any());
+        verify(connector, never()).submitOrder(any(), any());
+        verify(connector, never()).cancelOrder(anyString());
+        assertThat(manager.getUnprotectedFlattenCount()).isZero();
+        assertThat(broker.open).containsKey("3588724603");
+
+        // the owner closes it -> released by the #174 path, nothing booked
+        broker.ownerClosesEverything();
+        reconcileTwice();
+        assertThat(manager.getBracket(SYM)).isNull();
+        assertThat(account.getPosition(SYM)).isNull();
+        assertThat(account.getTotalContracts()).isZero();
+        assertThat(account.getRealizedPnL()).isZero();
+        assertThat(closedEvents).isEmpty();
+        verify(connector, never()).cancelOrder(anyString());
     }
 
     @SuppressWarnings("unused")

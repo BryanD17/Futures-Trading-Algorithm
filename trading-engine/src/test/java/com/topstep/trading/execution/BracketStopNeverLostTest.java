@@ -63,6 +63,23 @@ class BracketStopNeverLostTest {
         int failStops = 0;            // next N stop submissions are rejected
         boolean rejectSecondStop = false;
         boolean snapshotAvailable = true;
+        // AGENT-05.14: Order/searchOpen lags the acknowledgement (LIVE: ~100 ms).
+        long now = 1_000_000L;               // fake clock (ms), shared with the manager
+        long visibilityLagMs = 0;            // a new order is listed only this long after placement
+        final Map<String, Long> placedAt = new LinkedHashMap<>();
+        final java.util.Set<String> hidden = new java.util.HashSet<>(); // acknowledged, never listed
+
+        /** Orders Order/searchOpen lists right now. */
+        List<BrokerOrder> listed() {
+            List<BrokerOrder> out = new ArrayList<>();
+            for (BrokerOrder o : open.values()) {
+                if (hidden.contains(o.orderId)) continue;
+                Long t = placedAt.get(o.orderId);
+                if (t != null && now < t + visibilityLagMs) continue;
+                out.add(o);
+            }
+            return out;
+        }
 
         String placeStop(String sym, OrderSide side, int qty, double px, OrderListener l) throws IOException {
             stopQuantities.add(qty);
@@ -78,6 +95,7 @@ class BracketStopNeverLostTest {
             }
             String id = String.valueOf(nextId++);
             open.put(id, new BrokerOrder(id, sym, "CON.F.US.MNQ.Z26", TopstepConnector.ORDER_TYPE_STOP, side, qty, px, Double.NaN));
+            placedAt.put(id, now);
             listeners.put(id, l);
             ops.add("PLACE STOP " + id + " " + side + " " + qty + "@" + px);
             return id;
@@ -86,6 +104,7 @@ class BracketStopNeverLostTest {
         String placeLimit(String sym, OrderSide side, int qty, double px, OrderListener l) {
             String id = String.valueOf(nextId++);
             open.put(id, new BrokerOrder(id, sym, "CON.F.US.MNQ.Z26", TopstepConnector.ORDER_TYPE_LIMIT, side, qty, Double.NaN, px));
+            placedAt.put(id, now);
             listeners.put(id, l);
             ops.add("PLACE LIMIT " + id + " " + side + " " + qty + "@" + px);
             return id;
@@ -102,7 +121,7 @@ class BracketStopNeverLostTest {
         BrokerSnapshot snapshot() {
             if (!snapshotAvailable) return null;
             List<BrokerPosition> ps = position == null ? List.of() : List.of(position);
-            return new BrokerSnapshot(ps, new ArrayList<>(open.values()));
+            return new BrokerSnapshot(ps, listed());
         }
 
         List<BrokerOrder> stops() {
@@ -156,6 +175,7 @@ class BracketStopNeverLostTest {
 
         manager = new BracketOrderManager(connector);
         manager.setRetryBackoffMs(0);
+        manager.setClock(() -> broker.now);
         EventBus bus = mock(EventBus.class);
         when(bus.isRunning()).thenReturn(true);
         doAnswer(inv -> {
@@ -322,6 +342,7 @@ class BracketStopNeverLostTest {
         String be = b.stopOrderId;
         // The LIVE end state: the broker has the position but NO stop.
         broker.open.remove(be);
+        broker.now += BracketOrderManager.STOP_ACK_GRACE_MS + 1; // AGENT-05.14: past the ack grace
         manager.reconcileWithBroker();
         dumpOps("RECONCILE");
         assertThat(broker.stops()).singleElement().satisfies(s -> {
@@ -355,6 +376,7 @@ class BracketStopNeverLostTest {
         broker.fill(tpId(b, 0), 30630.75);
         broker.open.remove(b.stopOrderId);                       // engine's stop is gone
         String manual = broker.placeStop(SYM, OrderSide.BUY, 3, 30647.5, null); // the hand-placed one
+        broker.now += BracketOrderManager.STOP_ACK_GRACE_MS + 1; // AGENT-05.14: past the ack grace
         manager.reconcileWithBroker();
         assertThat(b.stopOrderId).isEqualTo(manual);
         assertThat(broker.stops()).singleElement().satisfies(s -> assertThat(s.orderId).isEqualTo(manual));
@@ -388,17 +410,20 @@ class BracketStopNeverLostTest {
     }
 
     @Test
-    @DisplayName("restart: untracked broker position without a stop is adopted with a stop at breakeven")
-    void restartAdoptsUntrackedPositionWithBreakevenStop() {
+    @DisplayName("restart: untracked 3-lot without a stop is adopted with a stop at a REAL risk distance (AGENT-05.14: was breakeven)")
+    void restartAdoptsUntrackedPositionWithRiskDistanceStop() {
         broker.position = new BrokerPosition(SYM, "CON.F.US.MNQ.Z26", false, 3, ENTRY);
+        manager.onLastPrice(SYM, ENTRY);
         manager.reconcileOnStartup();
         dumpOps("ADOPT");
         assertThat(manager.hasBracket(SYM)).isTrue();
         assertThat(manager.getBracket(SYM).adopted).isTrue();
+        assertThat(manager.getBracket(SYM).observeOnly).isFalse();
+        // topstep50k riskPerTrade $250 / (3 x $0.50) = 166 ticks = 41.50 pts above the short's entry
         assertThat(broker.stops()).singleElement().satisfies(s -> {
             assertThat(s.side).isEqualTo(OrderSide.BUY);
             assertThat(s.size).isEqualTo(3);
-            assertThat(s.stopPrice).isEqualTo(ENTRY);
+            assertThat(s.stopPrice).isEqualTo(ENTRY + 41.50).isNotEqualTo(ENTRY);
         });
         assertThat(adopted).hasSize(1);
         assertThat(events).anyMatch(e -> e.getReason().startsWith("BRACKET: untracked broker position adopted"));

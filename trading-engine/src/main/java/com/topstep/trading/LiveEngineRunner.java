@@ -262,6 +262,9 @@ public class LiveEngineRunner {
                 Position p = accountState.getPosition(sym);
                 return p == null ? 0 : Math.abs(p.getQuantity());
             });
+            // AGENT-05.14: maxContracts (observe-only adoption) and riskPerTrade
+            // (adopted stop distance) come from the ACTIVE risk limits.
+            this.bracketManager.setRiskLimitsProvider(() -> this.riskLimits);
         } else {
             this.bracketManager = null;
         }
@@ -775,6 +778,8 @@ public class LiveEngineRunner {
         if (bracketManager != null) {
             String symbol = candle.getSymbol();
             double tickSize = InstrumentCharacteristics.getProfile(symbol).getTickSize();
+            // AGENT-05.14: last price = side reference for adopted stops.
+            bracketManager.onLastPrice(symbol, candle.getClose());
             bracketManager.checkPriceBreakevenTrigger(symbol, candle.getClose(), tickSize);
         }
 
