@@ -12,6 +12,14 @@ public class Position {
     private double avgEntryPrice;
     private Instant openedAt;
     private Instant updatedAt;
+    /**
+     * AGENT-05.13: a broker position the engine did NOT open (adopted by
+     * BracketOrderManager reconciliation, e.g. a manual order by the account
+     * owner). Its unrealized gain is kept out of the engine's tracked P&amp;L
+     * ({@link AccountState#updateUnrealizedPnL}) and its broker-flat release
+     * books no realized P&amp;L.
+     */
+    private volatile boolean adopted;
 
     public Position(String symbol, int quantity, double avgEntryPrice) {
         this.symbol = Objects.requireNonNull(symbol, "symbol cannot be null");
@@ -38,6 +46,13 @@ public class Position {
     public double getAvgEntryPrice() { return avgEntryPrice; }
     public Instant getOpenedAt() { return openedAt; }
     public Instant getUpdatedAt() { return updatedAt; }
+    /** AGENT-05.13: true when this position was adopted from the broker (not opened by the engine). */
+    public boolean isAdopted() { return adopted; }
+    /** AGENT-05.13: mark this position as adopted from the broker; returns this. */
+    public Position markAdopted() {
+        this.adopted = true;
+        return this;
+    }
 
     public boolean isLong() {
         return quantity > 0;

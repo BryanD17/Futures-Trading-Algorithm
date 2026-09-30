@@ -224,6 +224,8 @@ public class AccountState {
 
     /**
      * Update unrealized PnL based on current market prices with explicit trading day.
+     * AGENT-05.13: an adopted position ({@link Position#isAdopted()}) contributes
+     * only its unrealized LOSS, min(0, uPnL), never an unrealized gain.
      *
      * @param currentPrices Current market prices by symbol
      * @param tickValues Tick values by symbol
@@ -239,7 +241,13 @@ public class AccountState {
             Double tickValue = tickValues.get(position.getSymbol());
 
             if (currentPrice != null && tickValue != null) {
-                totalUnrealized += position.getUnrealizedPnL(currentPrice, tickValue);
+                double u = position.getUnrealizedPnL(currentPrice, tickValue);
+                // AGENT-05.13: an ADOPTED (non-engine) position's open GAIN must
+                // not inflate the engine's tracked P&L / DLL room (LIVE
+                // 2026-09-30: +$7,650 phantom on a manual SHORT 45 MNQ). Its
+                // open LOSS still counts: dropping it would loosen the DLL/MLL
+                // view of an account that really is losing (never weaken risk).
+                totalUnrealized += position.isAdopted() ? Math.min(0.0, u) : u;
             }
         }
 

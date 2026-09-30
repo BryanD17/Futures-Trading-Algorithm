@@ -253,112 +253,9 @@ public class LiveEngineRunner {
         if (this.connector instanceof TopstepConnector) {
             this.bracketManager = new BracketOrderManager((TopstepConnector) this.connector);
             this.bracketManager.setEventBus(eventBus); // AGENT-05: protective failures -> telemetry
-            this.bracketManager.setListener(new BracketOrderManager.BracketListener() {
-                @Override
-                public void onStopLossFilled(BracketOrderManager.BracketOrder bracket, double fillPrice) {
-                    // Calculate PnL based on remaining quantity (after partials)
-                    int qty = bracket.remainingQuantity > 0 ? bracket.remainingQuantity : bracket.totalQuantity;
-                    double pnl = calculatePnl(bracket.symbol, bracket.entryPrice, fillPrice,
-                                             qty, bracket.entrySide);
-                    System.out.println("  Stop PnL: $" + String.format("%.2f", pnl) + " (" + qty + " contracts)");
-                    notifyPositionClosed(bracket.symbol, pnl);
-                    recordLiveTrade(bracket, fillPrice, qty, pnl, "Stop loss filled");
-                    // Book realized P&L so the DLL guard (getNetDailyPnl) sees
-                    // live losses — live closes bypass ExecutionEngine.closePosition,
-                    // which is where SIM/backtest book it.
-                    accountState.recordRealizedPnL(pnl);
-                    // Clear position from account state
-                    accountState.closePosition(bracket.symbol);
-                    // Count the completed trade for the frequency gates
-                    // (live closes bypass ExecutionEngine.closePosition).
-                    accountState.recordTradeCompleted(pnl);
-                    // Same funnel: notify subscribers (scalp re-arm) of the close.
-                    eventBus.publish(new com.topstep.trading.event.PositionClosedEvent(
-                            bracket.symbol, pnl, pnl > 0, java.time.Instant.now()));
-                }
-
-                @Override
-                public void onTakeProfitFilled(BracketOrderManager.BracketOrder bracket, double fillPrice) {
-                    // This is called when ALL take profits are filled (position fully closed)
-                    double pnl = calculatePnl(bracket.symbol, bracket.entryPrice, fillPrice,
-                                             bracket.totalQuantity, bracket.entrySide);
-                    System.out.println("  Total PnL: $" + String.format("%.2f", pnl));
-                    notifyPositionClosed(bracket.symbol, pnl);
-                    // Multi-level TPs already booked/recorded every level via
-                    // onPartialTakeProfitFilled (which also fires for the last
-                    // level); only the legacy single-TP path arrives here with
-                    // an unbooked remainder. Book just that portion or the DLL
-                    // guard would double-count partials.
-                    int unbookedQty = bracket.totalQuantity - bracket.getTotalFilledTpQuantity();
-                    if (unbookedQty > 0) {
-                        double unbookedPnl = calculatePnl(bracket.symbol, bracket.entryPrice, fillPrice,
-                                                          unbookedQty, bracket.entrySide);
-                        recordLiveTrade(bracket, fillPrice, unbookedQty, unbookedPnl, "Take profit filled");
-                        accountState.recordRealizedPnL(unbookedPnl);
-                    } else {
-                        // AGENT-05.3: every level was a partial — the position
-                        // is flat now: journal the ONE merged Trade.
-                        executionEngine.finalizeExternalTrade(bracket.symbol);
-                    }
-                    // Clear position from account state
-                    accountState.closePosition(bracket.symbol);
-                    // Count the completed trade for the frequency gates.
-                    accountState.recordTradeCompleted(pnl);
-                    // Same funnel: notify subscribers (scalp re-arm) of the close.
-                    eventBus.publish(new com.topstep.trading.event.PositionClosedEvent(
-                            bracket.symbol, pnl, pnl > 0, java.time.Instant.now()));
-                }
-
-                @Override
-                public void onPartialTakeProfitFilled(BracketOrderManager.BracketOrder bracket,
-                                                       BracketOrderManager.TakeProfitLevel level, double fillPrice) {
-                    // Partial take profit filled - position still open but reduced
-                    double partialPnl = calculatePnl(bracket.symbol, bracket.entryPrice, fillPrice,
-                                                     level.quantity, bracket.entrySide);
-                    System.out.println("  Partial PnL: $" + String.format("%.2f", partialPnl) +
-                                      " (" + level.quantity + " contracts at " + level.rMultiple + "R)");
-                    recordLiveTrade(bracket, fillPrice, level.quantity, partialPnl,
-                        "Partial take profit (" + level.rMultiple + "R)", true);
-                    // Update realized PnL but don't close position
-                    accountState.recordRealizedPnL(partialPnl);
-                    // Update position quantity
-                    if (accountState.hasPosition(bracket.symbol)) {
-                        Position pos = accountState.getPosition(bracket.symbol);
-                        int newQty = bracket.remainingQuantity;
-                        if (bracket.entrySide == OrderSide.BUY) {
-                            pos.updateWithFill(-level.quantity, fillPrice);  // Reduce long
-                        } else {
-                            pos.updateWithFill(level.quantity, fillPrice);   // Reduce short
-                        }
-                    }
-                }
-
-                @Override
-                public void onStopMovedToBreakeven(BracketOrderManager.BracketOrder bracket, double newStopPrice) {
-                    System.out.println("  [RISK FREE] Stop moved to breakeven: " + newStopPrice);
-                    // This is informational - position is now risk-free
-                }
-
-                @Override
-                public void onBracketCanceled(BracketOrderManager.BracketOrder bracket, String reason) {
-                    System.out.println("[BRACKET] Bracket canceled for " + bracket.symbol + ": " + reason);
-                }
-
-                @Override
-                public void onPositionAdopted(BracketOrderManager.BracketOrder bracket) {
-                    // AGENT-05.11: an untracked broker position was adopted
-                    // (restart). Register it so the entry gates see the
-                    // symbol as IN POSITION (no second entry) and its exit
-                    // books P&L through the normal bracket funnel.
-                    if (!accountState.hasPosition(bracket.symbol)) {
-                        int signed = bracket.isLong() ? bracket.totalQuantity : -bracket.totalQuantity;
-                        accountState.addPosition(new Position(bracket.symbol, signed, bracket.entryPrice));
-                    }
-                    System.err.println("[LIVE] ADOPTED broker position registered: " + bracket.symbol + " "
-                            + (bracket.isLong() ? "LONG " : "SHORT ") + bracket.totalQuantity + " @ " + bracket.entryPrice
-                            + " (stop " + bracket.stopOrderId + " @ " + bracket.stopPrice + ")");
-                }
-            });
+            // AGENT-05.13: the bracket funnel lives in LiveBracketListener (unit tested).
+            this.bracketManager.setListener(new LiveBracketListener(accountState, executionEngine, eventBus,
+                    this::notifyPositionClosed));
             // AGENT-05.11: the stop protects the POSITION's size, never a
             // bookkeeping counter (LIVE 2026-09-29: qty 0 after a partial).
             this.bracketManager.setPositionQuantityProvider(sym -> {
@@ -1443,53 +1340,7 @@ public class LiveEngineRunner {
     /**
      * Calculate PnL for a closed position.
      */
-    /**
-     * Record a Trade for a live broker-side exit (bracket SL/TP/partial).
-     * Live fills bypass ExecutionEngine.closePosition, so without this the
-     * Trades tab / journal / metrics never see live trades. Journaling only:
-     * AccountState P&L and frequency gates are updated by the callers.
-     */
-    private void recordLiveTrade(BracketOrderManager.BracketOrder bracket, double exitPrice,
-                                 int quantity, double pnl, String reason) {
-        recordLiveTrade(bracket, exitPrice, quantity, pnl, reason, false);
-    }
-
-    /**
-     * AGENT-05.3: {@code partial=true} holds the leg until the position is
-     * flat; the closing leg (stop / final TP) merges every held leg into ONE
-     * journaled Trade (quantity sum, VWAP exit, P&amp;L sum, R on the initial risk).
-     */
-    private void recordLiveTrade(BracketOrderManager.BracketOrder bracket, double exitPrice,
-                                 int quantity, double pnl, String reason, boolean partial) {
-        try {
-            double stopForRisk = bracket.originalStopPrice > 0 ? bracket.originalStopPrice : bracket.stopPrice;
-            double riskAmount = Math.abs(calculatePnl(bracket.symbol, bracket.entryPrice,
-                stopForRisk, quantity, bracket.entrySide));
-            com.topstep.trading.domain.Trade leg = com.topstep.trading.domain.Trade.builder()
-                .symbol(bracket.symbol)
-                .side(bracket.entrySide)
-                .quantity(quantity)
-                .entryPrice(bracket.entryPrice)
-                .exitPrice(exitPrice)
-                .entryTime(bracket.createdAt)
-                .exitTime(java.time.Instant.now())
-                .realizedPnL(pnl)
-                .riskAmount(riskAmount)
-                .tier(bracket.tier)
-                .notes(reason)
-                .build();
-            if (partial) {
-                executionEngine.recordExternalPartial(leg);
-            } else {
-                executionEngine.recordExternalTrade(leg);
-            }
-        } catch (Exception e) {
-            com.topstep.trading.event.EngineTelemetry.error("LiveEngineRunner.journal", e);
-            System.err.println("Failed to record live trade for " + bracket.symbol + ": " + e.getMessage());
-        }
-    }
-
-    private double calculatePnl(String symbol, double entryPrice, double exitPrice, int quantity, OrderSide entrySide) {
+    static double calculatePnl(String symbol, double entryPrice, double exitPrice, int quantity, OrderSide entrySide) {
         double tickValue = getTickValue(symbol);
         double priceDiff = (entrySide == OrderSide.BUY)
             ? (exitPrice - entryPrice)
@@ -1501,7 +1352,7 @@ public class LiveEngineRunner {
     /**
      * Get tick value for a symbol.
      */
-    private double getTickValue(String symbol) {
+    static double getTickValue(String symbol) {
         switch (symbol.toUpperCase()) {
             case "ES": return 12.50;
             case "MES": return 1.25;
@@ -1517,7 +1368,7 @@ public class LiveEngineRunner {
     /**
      * Get the tick size (minimum price increment) for a symbol. (Other in on line 786)
      */
-    private double getTickSize(String symbol) {
+    static double getTickSize(String symbol) {
         switch (symbol.toUpperCase()) {
             case "ES":
             case "MES":
