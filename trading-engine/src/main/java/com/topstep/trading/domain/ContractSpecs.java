@@ -24,6 +24,23 @@ public final class ContractSpecs {
         }
     }
 
+    /**
+     * AGENT-05.14: dollar value of one TICK for one contract of a root symbol
+     * (same table as LiveEngineRunner.getTickValue); 0 when unknown.
+     */
+    public static double tickValue(String symbol) {
+        if (symbol == null) return 0.0;
+        switch (symbol.trim().toUpperCase()) {
+            case "ES": return 12.50;
+            case "MES": return 1.25;
+            case "NQ": return 5.00;
+            case "MNQ": return 0.50;
+            case "GC": return 10.00;
+            case "MGC": return 1.00;
+            default: return 0.0;
+        }
+    }
+
     /** Dollar value of one full POINT given a per-tick value. */
     public static double pointValue(String symbol, double tickValue) {
         return tickValue / tickSize(symbol);
