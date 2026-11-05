@@ -103,7 +103,15 @@ i_smtEnabled  = input.bool(true, "SMT enabled", group = G_SMT, tooltip = "Correl
 i_smtSymbol   = input.symbol("CME_MINI:MES1!", "smtSymbol", group = G_SMT, tooltip = "SMT correlate (Java: MES). Data only.")
 i_smtLookback = input.int(20, "SMT lookback (1m closes)", minval = 3, group = G_SMT, tooltip = "EngineConfig: StdvOteRunnerStrategy hasSMTDivergence lookback = 20")
 
-// ---- [Relay] (Agent 04)
+// ---- [Relay] (Agent 04, tasks 04.2/04.3; docs/v6/RELAY_SETUP.md). R5 / AP-9: the secret and the account
+// names are typed by the owner in the Settings dialog ONLY; defaults are placeholders, both inputs are
+// display.none (never in the status line / Data Window) and never plotted or logged (75_payload masks them).
+i_relay          = input.string("CROSSTRADE", "relay", options = ["CROSSTRADE", "PICKMYTRADE", "TRADERSPOST"], group = G_RELAY, tooltip = "Payload format (PLATFORM_FACTS C3). CROSSTRADE = default: Tradovate-native OSO bracket + strategy sync with out_of_sync=flatten. The others are documented fallbacks only.")
+i_relaySecret    = input.string("<RELAY_SECRET>", "relay secret (CrossTrade key / PickMyTrade token)", group = G_RELAY, display = display.none, tooltip = "CrossTrade: My Account secret (no spaces). PickMyTrade: token. TradersPost: unused (its secret is in the webhook address). While this is the placeholder, every payload is a DRY RUN the relay rejects.")
+i_relayAccounts  = input.string("<ACCOUNT_1>", "accounts (comma list, exact Tradovate names)", group = G_RELAY, display = display.none, tooltip = "Comma list of the Lucid accounts this ONE strategy trades, e.g. two names separated by a comma. Same side, same qty on every account (I1). Never list an account another strategy/alert trades.")
+i_relaySymbol    = input.string("", "relay instrument (empty = chart symbol)", group = G_RELAY, tooltip = "Empty = CrossTrade: the chart ticker (MNQ1! accepted, resolved to the front month); PickMyTrade: the root (MNQ); TradersPost: the chart ticker, which MUST be a dated contract (e.g. MNQZ2026) - continuous symbols are not resolved there.")
+i_tradingEnabled = input.bool(false, "tradingEnabled (send LIVE payloads)", group = G_RELAY, tooltip = "OFF = every order alert carries a DRY RUN payload (key=<DRY_RUN>) that the relay rejects, so the alert log can be inspected safely (payload_check.py). ON + real secret = live orders.")
+i_relayLog       = input.bool(false, "log masked payloads to Pine Logs", group = G_RELAY, tooltip = "Writes every payload to Pine Logs with the secret replaced by <RELAY_SECRET> and accounts by <ACCOUNT_n>. Safe to copy into tools/payload_check.py.")
 
 // ---- [Debug]
 i_dbgOverlay = input.bool(false, "debug overlay (raids, OTE band, MSS, range)", group = G_DEBUG, tooltip = "Off by default (task 02.5). Draws raid markers with score, the OTE band, the MSS line and the dealing-range eq.")

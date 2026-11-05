@@ -378,4 +378,39 @@ blocking.
 | ID | Action |
 |---|---|
 | OA-0 (refined) | TradingView **Premium** (open-ended alerts) + 2FA + CME Group real-time (non-pro) data; CrossTrade **Pro** ($49/mo). |
-| OA-5 (refined) | Link Demo per Lucid account; Account Manager: session-loss = softDailyLoss$, auto-flatten 16:42 ET (15:42 CT), trading window 09:30–16:30 ET; keep Block Signals as kill switch. |
+| OA-5 (refined) | Link Demo per Lucid account; Account Manager: session-loss = softDailyLoss$, auto-flatten 16:42 ET (15:42 CT), trading window 18:00–16:30 ET (17:00–15:30 CT; must cover the London killzone, RELAY_SETUP §7); keep Block Signals as kill switch. |
+
+---
+
+## B11. Fable re-verification for Agent 04 (2026-11-05, every page re-fetched)
+Appended at the end so that the `PF:<line>` references in `pine/src/75_payload.pine`,
+`tools/payload_check.py` and `docs/v6/RELAY_SETUP.md` stay valid.
+- `strategy_exit_block` — exact text: *"Reject the payload when `prev_market_position` is not `flat`."*;
+  *"This is a field-validation gate, not a separate position or order-side calculation."*; *"It does not
+  inspect the broker's live position by itself; that remains the job of Strategy Sync."* Exit/reversal/
+  scaling signals *"are rejected before dispatch."*
+  https://crosstrade.io/docs/webhooks/advanced-options/strategy-synchronization
+  Sync comparison: the live position is tested against `prev_market_position`; a flat account with
+  `prev_market_position=long|short` is out of sync (new-entry rule). On Tradovate the check runs on
+  CrossTrade's servers *"immediately before the entry leg"*.
+- Value casing: CrossTrade's own Tradovate first-trade guide uses `command=PLACE; action=BUY;
+  order_type=MARKET; tif=DAY;` (uppercase values, lowercase field names), while other pages use lowercase.
+  Only `destination` is stated to be case-insensitive. V6 keeps the Tradovate guide's uppercase form.
+  https://crosstrade.io/docs/tradovate/your-first-automated-trade
+- `flatten` on Tradovate: *"`account`, `instrument`, and `market_position` (long or short) are each
+  optional"*; *"Instrument matching is per exact contract (for example `ESZ6`, `ES 12-26`, or `ES1!`
+  resolved to the front month)"*; with an account or instrument named it *"cancels the working orders
+  that go with them"*; with both filters it is *"equivalent to a generic `CLOSEPOSITION`"*, whose full
+  close *"uses Tradovate's liquidate endpoint, which also cancels the contract's working orders."*
+  https://crosstrade.io/docs/webhooks/commands/flatten-positions ,
+  https://crosstrade.io/docs/webhooks/commands/close-position
+- `flatten_first=true`: *"flattens any existing positions or open orders for the underlying
+  instrument"*; *"Regardless of whether or not a position existed, the PLACE order command will then
+  proceed"*; on Tradovate it *"uses Tradovate's server-side liquidation, which cancels working orders."*
+  Its ordering relative to the Strategy Sync gate is NOT documented (CONSERVATIVE-UNVERIFIED → drill D7).
+  https://crosstrade.io/docs/webhooks/advanced-options/flatten-first
+- `strategy_tag`: *"accepted but ignored"* on Tradovate (destinations page); `custom_tag` rejected.
+- `take_profit` / `stop_loss`: *"Attaches a Tradovate-native OSO bracket. Absolute prices always work."*;
+  legs created `Suspended`, activated on the entry's first fill, sent GTC. (B3 confirmed unchanged.)
+- Invalid key: alert status *"Secret key missing, invalid, or inactive"* (first-trade guide) — the
+  behaviour V6's DRY RUN `key=<DRY_RUN>` relies on.

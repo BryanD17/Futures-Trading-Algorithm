@@ -51,6 +51,15 @@ class SecretScanTest(unittest.TestCase):
     def test_allow_marker(self):
         self.assertEqual(hit("key=" + TOK + "  # secret-scan: allow"), [])
 
+    def test_allow_marker_scoped_to_tests_docs_md(self):
+        """The marker must not smuggle a real value through shipped code (R5 / AP-9)."""
+        line = "key=" + TOK + "  // secret-scan: allow"
+        for ok_path in ("tools/tests/test_x.py", "docs/v6/RELAY_SETUP.md", ".githooks/README.md", "README.md"):
+            self.assertEqual(ss.scan_text(ok_path, line), [], ok_path)
+        for bad_path in ("pine/src/75_payload.pine", "pine/dist/LucidICT_v6.pine", "tools/payload_check.py",
+                         "trading-engine/src/main/java/X.java", "config/lucid_profiles.yaml"):
+            self.assertEqual(len(ss.scan_text(bad_path, line)), 1, bad_path)
+
     def test_redaction_never_prints_the_secret(self):
         found = ss.scan_text("f.txt", "key=" + TOK)
         self.assertEqual(len(found), 1)

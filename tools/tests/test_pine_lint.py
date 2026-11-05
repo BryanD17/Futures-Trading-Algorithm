@@ -20,7 +20,7 @@ GOOD_80 = ("// ==== file: 80_strategy.pine ====\n"
            "if barstate.isconfirmed\n"
            "    if go and strategy.position_size == 0\n"
            "        strategy.entry(\"L\", strategy.long, qty = 1, alert_message = msg)\n"
-           "        strategy.exit(\"L-x\", from_entry = \"L\", stop = sp, limit = tp)\n")
+           "        strategy.exit(\"L-x\", from_entry = \"L\", stop = sp, limit = tp, alert_message = msgx)\n")
 
 
 def rules(text):
@@ -125,7 +125,7 @@ class LintTest(unittest.TestCase):
 
     def test_secrets(self):
         for bad in ("u = \"https://hooks.example.com/abc\"\n",
-                    "// key=abcdef123456\n",
+                    "// key=abcdef123456\n",  # lint L8 fixture, not a value  secret-scan: allow
                     "s = input.string(\"realSecretValue\", \"relay secret\")\n",
                     "t = \"AbCdEfGhIjKlMnOpQrStUvWxYz0123456789\"\n"):
             ok, r = rules(HEAD + bad)

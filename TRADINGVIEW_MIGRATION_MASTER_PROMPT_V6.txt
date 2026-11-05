@@ -191,7 +191,12 @@ PHASE 1 — OPUS BUILD  (sequential: 02 → 03 → 04; 05 parallel with 02–04)
        `simple string` ?: chains — the series/simple mismatch at strategy.risk.max_intraday_loss was
        real and is fixed), v6_drawdown_buffer_usd in the YAML, I1–I8 re-verified, all 8 oracle sizes,
        lint 9/9, 61 tool tests, Java 1,029 green; ENTRY-CAP mismatch (09-23 06:37) documented for 06)
-  [⬜] Agent 04 — Opus — Relay Payload Adapter + Order Lifecycle
+  [✅] Agent 04 — Opus — Relay Payload Adapter + Order Lifecycle  COMPLETE (Fable-verified 2026-11-05,
+       PR #182, static; compile pending ⛔ OA-1, relay behaviour pending drills D2–D4): 75_payload.pine
+       builders (CROSSTRADE|PICKMYTRADE|TRADERSPOST) + [Relay] inputs (display.none, placeholder defaults,
+       DRY RUN unless tradingEnabled + real key + real accounts), every CrossTrade field re-verified against
+       the vendor pages; Fable hardened the BRACKET message (no action/qty/order_type → rejected twice over),
+       scoped the secret-scan allow marker, corrected lifecycle L3b/L5; lint 10/10, 83 tool tests, Java 1,029
   [✅] Agent 05 — Opus — Java Repurpose: Topstep Out, Lucid Profiles, Parity Harness
        COMPLETE (Fable-verified 2026-11-05, PR #179): TopstepX → trading-engine/legacy (not compiled),
        LIVE fails loud + api 410, Lucid profiles from YAML, EOD-trailing MLL + lock, pine_parity.py, .githooks
@@ -886,7 +891,87 @@ APPENDIX A — PER-AGENT VERIFICATION LOG  (append-only; never delete)
         statically): compile itself (OA-1); strategy.risk.* session-reset moment (C-14, OA-2);
         max_intraday_filled_orders = 6 also counts bracket exits (3 round trips) — by design; TV emulator
         bracket semantics vs Tradovate OSO = Agent 04/07 | ⛔ OA-1/OA-2/OA-3 unchanged
-  A-04  payload_check results: __ | lifecycle table rows: __
+  A-04  (Opus, 2026-11-05, branch feat/agent-04-v6-relay; READY-FOR-FABLE, not self-stamped)
+        files: pine/src/75_payload.pine (NEW, sorted before 80: OrderEvent UDT + ctPayload/pmtPayload/
+        tpPayload + the orderAlert hook moved out of 80 with the SAME signature; 80 keeps a pointer
+        comment), pine/src/10_inputs.pine [Relay] group (relay CROSSTRADE default; secret + accounts
+        input.string "<RELAY_SECRET>"/"<ACCOUNT_1>" with display = display.none; relay instrument;
+        tradingEnabled default OFF = DRY RUN key=<DRY_RUN>; masked Pine-Logs switch), 90_alerts.pine
+        (config warnings only, never the secret), docs/v6/RELAY_SETUP.md, tools/payload_check.py,
+        tools/pine_lint.py L10 alert-message, tests | payload fields: every CrossTrade field cites a
+        PLATFORM_FACTS line (RELAY_SETUP §4 table): ENTRY = PLACE MARKET DAY + absolute take_profit/
+        stop_loss (native OSO, PF:185-198) + flatten_first + sync_strategy/market_position/
+        prev_market_position=flat/target_quantity + out_of_sync=flatten + strategy_exit_block=true +
+        strategy_tag=LucidICT_v6-<BUILD_ID>-<KIND> (accepted-but-ignored PF:154 -> D8) +
+        destination=tradovate; FLATTEN/SOFT_STOP = command=FLATTEN (PF:149-152, not sync-gated) |
+        EXIT-FILL DECISION: TV strategy.exit fill alerts (BRACKET) are sync-only messages REJECTED by
+        CrossTrade strategy_exit_block (prev_market_position != flat, PF:217-218; vendor pairing for
+        broker-managed exits PF:229-232); second layer out_of_sync=flatten on a flat broker withholds
+        (PF:219-221) -> never a duplicate/opposite order vs the broker OSO; fallbacks: BRACKET message
+        made non-actionable (PickMyTrade no token/data PF:333, TradersPost no ticker PF:350) |
+        payload_check results: --sample (G1 SELL 3, stop 30674.00, T1 30558.00) ENTRY/BRACKET/FLATTEN/
+        SOFT_STOP 4/4 PASS; negative cases FAIL as required (no stop, relative/wrong-side stop, qty 6 >
+        cap 5, out_of_sync=wait, no exit block, prev long, MES instrument, oco_id, cycle_accounts,
+        duplicate account, REVERSE, BRACKET with prev flat or stop_loss, FLATTEN with sync, stale
+        BUILD_ID, --live placeholders, key whitespace); secret never printed | lifecycle table rows: 11
+        (L1 entry fill, L2 T1, L3 broker stop TV-unaware, L3b TV-first bracket, L4 relay down, L5
+        duplicate alert, L6 TV alert stopped, L7 Tradovate rejection, L8 16:40 ET flatten, L9 kill
+        switch, L10 soft stop / built-in halt), each TV / relay / broker / owner action | evidence:
+        pine_build -> 2,887 lines, src-sha256 / BUILD_ID d51871d400152dd9, --check OK; lint 10/10 PASS
+        (L10: 6 order calls, all non-empty alert_message); python3 -m unittest discover -s tools/tests ->
+        81 tests OK (20 new: Pine<->Python CrossTrade field-set parity, 75 before 80 in dist, secret
+        inputs display.none + placeholder defaults, secret never in plot/label/table/log/alert args,
+        secret_scan clean on Agent 04 files, L10 negative cases); `./gradlew :trading-engine:clean
+        :trading-engine:build :api-backend:clean :api-backend:build` (JDK 21) BUILD SUCCESSFUL, 1,029
+        tests (1 skipped) / 0 failures | residual: compile (OA-1); FLATTEN field set + OSO-leg cancel
+        on flatten (drill D4); exit-block rejection visible in Alert History (D2/D3); duplicate ENTRY
+        flattens the live trade (safe, trade lost); built-in strategy.risk halts send no payload (L2
+        session-loss covers); fallback relays unverified | OA-5 issued (Appendix D)
+  A-04v FABLE-VERIFIED 2026-11-05 (independent, PR #182 head efb2b5b + Fable fixes; static — compile OA-1,
+        relay behaviour D2–D4) | CrossTrade docs RE-FETCHED (strategy-synchronization, destinations,
+        order-types-and-exits, automating-tradingview-strategies, tradovate/webhooks, flatten-positions,
+        close-position, flatten-first, json-format, your-first-automated-trade; alert-syntax 404) — every
+        payload field confirmed: key / command / account / instrument (`ES1!`-style continuous accepted and
+        resolved to the front month for PLACE and FLATTEN) / action / qty / order_type / tif (DAY valid) /
+        take_profit + stop_loss absolute = native OSO, legs Suspended → activated on first fill, GTC /
+        flatten_first (position + working orders, proceeds even if flat) / sync_strategy + market_position +
+        prev_market_position + target_quantity (live tested against prev; flat-vs-prev-nonflat = out of sync)
+        / out_of_sync=flatten (withhold + flatten if not flat) / strategy_exit_block=true = "Reject the payload
+        when prev_market_position is not flat", "field-validation gate ... rejected before dispatch" (the PR's
+        claim is CORRECT) / strategy_tag accepted-but-ignored / destination=tradovate; uppercase values are the
+        form of CrossTrade's own Tradovate guide (only `destination` is stated case-insensitive) | WORST-CASE
+        BRACKET TABLE (broker flat / same-side / opposite × exit block honoured / ignored): with the exit block
+        honoured every cell = rejected. DEFECT found in the PR's second layer: "out_of_sync=flatten on an
+        already-flat broker withholds" is only true for the flat cell — in the same-side cell (TV filled first)
+        prev == live is IN SYNC and the old payload would close at market and orphan the GTC OSO legs (a later
+        leg fill OPENS an unprotected position). FIX: BRACKET now omits action/qty/order_type/tif (a PLACE
+        without its required foundation PF:139-140 cannot build an order) → every cell rejected under both
+        columns; payload_check rejects a BRACKET carrying any of them; new tests pin the Pine builder | I2:
+        both ENTRY calls pass sigStop/sigT1 → stop_loss + take_profit absolute (format.mintick); payload_check
+        fails on missing stop, relative stop, wrong side, qty > cap, qty 0 (tests) | DRY RUN: relayLive() =
+        tradingEnabled AND key non-empty AND key != <RELAY_SECRET> AND accounts without "<ACCOUNT_" — any
+        other state sends key=<DRY_RUN> ("Secret key missing, invalid, or inactive", vendor-confirmed) |
+        secrets: i_relaySecret / i_relayAccounts display.none + placeholder defaults; only use of the live
+        secret is `sec` inside orderAlert's payload string; Pine Logs get the masked copy (test
+        test_secret_never_plotted_or_logged over dist: plot/label/table/log/alert args never reference them);
+        secret_scan --all was RED on Main (tools/tests/test_pine_lint.py:128 L8 fixture, pre-existing, not
+        this PR) → marker added; allow-marker HARDENED: honoured only under tools/tests/, docs/, .githooks/
+        and *.md — ignored in pine/, tools/*.py, Java, config (test_allow_marker_scoped_to_tests_docs_md) |
+        L10: negative tests (missing alert_message on strategy.exit; alert_message = "") FAIL, real dist 6/6
+        | Pine compile scan of 75_payload: UDT + .new ok; str.format_time(timenow, pattern, "UTC") ok; nested
+        ?: in relayInstrument/relayPayload ok; `for i = 1 to accs.size()-1` guarded by size > 1 (Pine loops
+        run downward otherwise); display = display.none valid on input.string; no series/simple hazard (all
+        inputs read as simple); log.info("{0}", …) ok — residual = OA-1 | lifecycle: 11 rows cover 04.4's
+        nine events, ET+CT added where missing (L3, L3b, §1 roll 18:00 ET / 17:00 CT); L3b corrected
+        (flatten_first clears stale position + legs then enters), L5 corrected (duplicate ENTRY = re-place
+        once OR withhold+flatten — ordering flatten_first vs sync gate undocumented → D7), R-2 now documented
+        (flatten with filters cancels working orders), R-7 added (MNQ1! roll-week drift → dated contract) |
+        PLATFORM_FACTS: OA-5 trading window 09:30–16:30 ET contradicted RELAY_SETUP §7 / London killzone →
+        18:00–16:30 ET (17:00–15:30 CT); §B11 appended (end of file, so PF:<line> refs stay valid) | evidence
+        after fixes: SOURCE_DATE_EPOCH=0 build ×2 identical sha256, --check OK, lint 10/10, python3 -m unittest
+        discover -s tools/tests → 83 OK (2 new), secret_scan --all clean, dist 2,891 lines BUILD_ID c9bdf95eeb3bb52f, `./gradlew :trading-engine:clean
+        :trading-engine:build :api-backend:clean :api-backend:build` (JDK 21) BUILD SUCCESSFUL 1,029 tests
+        (1 skipped) / 0 failures | ⛔ OA-1 unchanged; OA-5 issued (Appendix D)
   A-05  tests before/after: trading-engine 1,038 (1 skipped) + api-backend 8 = 1,046 / trading-engine 1,015
         (1 skipped) + api-backend 11 = 1,026, all green (`./gradlew clean build`, JDK 21) + 14 Python tool tests
         (`python3 -m unittest discover -s tools/tests`) | removed 43 = TopstepX wire tests moved to
@@ -1035,6 +1120,28 @@ APPENDIX D — OWNER CLICK-BY-CLICK STEPS  (Agents 02/03/06/07 fill in)
         5. PASTE BACK into the PR thread: both CSVs (attach) + your chart time zone. Fable commits them
            as parity/tv_bars_mnq_1m.csv and parity/tv_bars_mes_1m.csv for the Agent 06 data-drift check
            (06.1) against parity/bars_mnq_1m.csv / bars_mes_1m.csv.
+
+  OA-5  RELAY SETUP — CrossTrade Pro + Lucid accounts  (Agent 04, issued 2026-11-05; RELAY_SETUP.md §2/§6/§7)
+        Needs: CrossTrade Pro ($49/mo, PLATFORM_FACTS B9), the Tradovate login(s) Lucid issued, OA-0/OA-1
+        done. ~20 minutes. Tradovate practice account first (drills), Lucid eval at 1 micro last.
+        1. crosstrade.io -> sign in -> My Account -> Brokers -> Tradovate -> **Link Demo** -> sign in with
+           the Lucid-issued Tradovate username/password (NOT Link Live). Repeat per Lucid login. Note each
+           account name exactly as listed (names must be unique across logins).
+        2. My Account -> copy your secret key and the webhook URL. Keep both OUT of the repo, chat and PRs.
+        3. Account Manager (per Lucid account) -> enable monitoring and set: Session loss = the profile's
+           softDailyLoss$ (Pine [Account] group value); Trailing drawdown = MLL - drawdownBuffer$;
+           Trading window 18:00-16:30 ET (17:00-15:30 CT); Auto-flatten **16:42 ET (15:42 CT)**; on trip:
+           block signals + close positions. Confirm the **Block Signals** toggle is there (kill switch).
+        4. TradingView -> chart MNQ1! 5m with LucidICT_v6 -> Settings -> Relay: relay = CROSSTRADE, relay
+           secret = the key, accounts = name1,name2 (exact), tradingEnabled = OFF for the first pass.
+        5. Create ONE alert: condition "Order fills and alert() function calls", Message
+           {{strategy.order.alert_message}} only, Notifications -> Webhook URL = the CrossTrade URL,
+           Expiration Open-ended, name "LucidICT_v6 <BUILD_ID>" (dist line 2 src-sha256).
+        6. Relay -> "log masked payloads" ON; after 3 order events copy them from Pine Logs into
+           samples.txt and run: python3 tools/payload_check.py samples.txt --build-id <BUILD_ID>
+        7. When Agent 07's drills say so: tradingEnabled = ON -> delete + re-create the alert (snapshot).
+        8. PASTE BACK into the PR thread: the payload_check output, the account names (or <ACCOUNT_n>),
+           and a screenshot of each Account Manager settings panel. NEVER paste the key or the webhook URL.
 
 ================================================================================
 APPENDIX E — PARITY TOLERANCES

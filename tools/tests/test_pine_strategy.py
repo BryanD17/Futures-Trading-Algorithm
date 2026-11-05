@@ -268,9 +268,13 @@ class StrategyContractTest(unittest.TestCase):
                       slurp(SRC80))
 
     def test_hook_never_returns_empty(self):
-        m = re.search(r"^orderAlert\([^)]*\) =>\n    (.+)$", slurp(SRC80), re.M)
-        self.assertIsNotNone(m)
-        self.assertTrue(m.group(1).startswith('"LucidICT_v6 '))
+        """The hook moved to 75_payload.pine (Agent 04): same signature, last line falls back to a tag."""
+        src75 = slurp(os.path.join(REPO, "pine", "src", "75_payload.pine"))
+        self.assertRegex(src75, r"(?m)^orderAlert\(string kind, int dir, int qty, float stopPx, float tpPx, string why\) =>$")
+        body = src75[src75.index("\norderAlert("):]
+        last = [ln for ln in body.split("\n") if ln.startswith("    ")][-1].strip()
+        self.assertEqual(last, 'str.length(p) > 0 ? p : PAYLOAD_TAG + " " + BUILD_ID + " " + kind')
+        self.assertNotRegex(pine_lint.strip_comments(slurp(SRC80)), r"(?m)^orderAlert\(")
 
     def test_invariant_guards_present(self):
         src = slurp(SRC80)
