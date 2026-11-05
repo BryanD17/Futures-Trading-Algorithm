@@ -188,6 +188,24 @@ class LucidProfilesTest {
     }
 
     @Test
+    @DisplayName("Fable A-05: once locked, the floor is 50,100 regardless of later highs; touching it = breach (LUCID_RULES §8)")
+    void lucidLifecycleLockedTouchIsBreach() {
+        AccountLifecycle lc = AccountLifecycle.lucidFlex50kEvaluation();
+        assertThat(lc.onDayEnd(2_100.0)).isNull();   // close 52,100 = Initial Trail Balance: equal is NOT "exceeds"
+        assertThat(lc.isMllLocked()).isFalse();
+        assertThat(lc.getMllFloor()).isEqualTo(50_100.0); // 52,100 − 2,000 happens to equal the locked level
+        assertThat(lc.onDayEnd(0.25)).isNull();      // close 52,100.25 -> locked
+        assertThat(lc.isMllLocked()).isTrue();
+        assertThat(lc.onDayEnd(4_000.0)).isNull();   // 56,100.25: a locked floor never trails up
+        assertThat(lc.getMllFloor()).isEqualTo(50_100.0);
+        assertThat(lc.distanceToBlowup()).isEqualTo(6_000.25);
+        assertThat(lc.onDayEnd(-6_000.0)).isNull();  // 50,100.25: one tick above the locked MLL survives
+        assertThat(lc.getCurrentPhase()).isNotEqualTo(AccountPhase.BLOWN);
+        assertThat(lc.onDayEnd(-0.25)).isNotNull();  // 50,100.00 = touch = breach
+        assertThat(lc.getCurrentPhase()).isEqualTo(AccountPhase.BLOWN);
+    }
+
+    @Test
     @DisplayName("Monte Carlo on the Lucid default runs and is deterministic per seed")
     void monteCarloLucidDefault() {
         StrategyMetrics m = StrategyMetrics.fromParameters(0.45, 3.0, -1.0, 2.0);

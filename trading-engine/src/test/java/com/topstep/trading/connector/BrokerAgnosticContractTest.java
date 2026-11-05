@@ -1,9 +1,12 @@
 package com.topstep.trading.connector;
 
+import com.topstep.trading.domain.Order;
 import com.topstep.trading.domain.OrderSide;
+import com.topstep.trading.domain.OrderType;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -79,5 +82,43 @@ class BrokerAgnosticContractTest {
         MockConnector mc = new MockConnector(50_000.0);
         assertThatThrownBy(() -> mc.cancelOrder("")).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> mc.cancelOrder(null)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // Fable A-05: the two remaining connector-agnostic cases of the legacy
+    // ConnectorFailLoudTest / ContractBindingGuardTest, ported verbatim.
+
+    @Test
+    @DisplayName("OrderListener defaults: a lambda listener receives fills and rejections (not a silent no-op)")
+    void lambdaListenerReceivesFillAndReject() {
+        // OrderListener.onOrderFilled used to be a no-op default: every
+        // MockConnector-driven fill vanished for lambda listeners.
+        List<String> seen = new ArrayList<>();
+        OrderListener lambda = (id, status, price, qty) -> seen.add(status + "@" + price + "x" + qty);
+        Order o = Order.builder().symbol("MNQ").side(OrderSide.BUY).type(OrderType.LIMIT)
+                .quantity(2).limitPrice(20000.0).build();
+        lambda.onOrderFilled(o, 2, 20000.0);
+        lambda.onOrderRejected(o, "nope");
+        assertThat(seen).containsExactly("FILLED@20000.0x2", "REJECTED@nullx0");
+    }
+
+    @Test
+    @DisplayName("the default TradingConnector.submitEntryOrder is a plain submitOrder")
+    void defaultEntryIsPlainSubmit() throws Exception {
+        List<Order> submitted = new ArrayList<>();
+        TradingConnector plain = new TradingConnector() {
+            @Override public void connect() { }
+            @Override public void disconnect() { }
+            @Override public boolean isConnected() { return true; }
+            @Override public void subscribeMarketData(String symbol, MarketDataListener listener) { }
+            @Override public void unsubscribeMarketData(String symbol) { }
+            @Override public String submitOrder(Order order, OrderListener listener) { submitted.add(order); return "X-1"; }
+            @Override public void cancelOrder(String orderId) { }
+            @Override public double getAccountBalance() { return 0; }
+            @Override public String getName() { return "plain"; }
+        };
+        Order entry = new Order("MNQ", OrderSide.BUY, OrderType.MARKET, 5, 0.0);
+        OrderListener noop = (id, status, price, qty) -> { };
+        assertThat(plain.submitEntryOrder(entry, noop)).isEqualTo("X-1");
+        assertThat(submitted).hasSize(1);
     }
 }

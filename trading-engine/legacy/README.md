@@ -12,6 +12,9 @@ is not a source set, and nothing in `src/` can reference it.
   `src/test` and retargeted at `BracketBroker` / `MockConnector`:
   - the `Bracket*` and `AdoptedPositionRelease` tests now mock `BracketBroker`
   - `BrokerAgnosticContractTest` covers the snapshot, the not-working cancel
-    exception and the fail-loud cancel without an id
+    exception, the fail-loud cancel without an id, the `OrderListener` lambda
+    defaults (ex `ConnectorFailLoudTest.mockConnectorFillReachesALambdaListener`)
+    and the default `TradingConnector.submitEntryOrder`
+    (ex `ContractBindingGuardTest.defaultEntryIsPlainSubmit`)
 
 These files are kept for history only and may be deleted in V7.
