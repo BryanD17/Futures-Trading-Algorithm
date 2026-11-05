@@ -811,7 +811,7 @@ method tryEmit(Machine this, int t, float rHi, float rLo, float rEq, bool rDec) 
             Zone z = this.zone
             bool bull = z.bullish
             // OteEntryCalculator.chooseEntry: the PD-array level when inside the band, else the 0.705
-            entry := z.contains(this.alarmEntry) ? roundTick(this.alarmEntry) : z.f705
+            entry := z.zoneContains(this.alarmEntry) ? roundTick(this.alarmEntry) : z.f705
             // StdvOteStrategy.anchoredStop (ote.stopMode = BAND)
             float far = z.f79
             bool impulse = this.model == "IMPULSE_LEG"
@@ -845,7 +845,7 @@ method tryEmit(Machine this, int t, float rHi, float rLo, float rEq, bool rDec) 
                 m2b := bull ? entry < rEq - band : entry > rEq + band
             bool m3 = not sessionBlocksEntry(t)
             bool m4 = not na(this.raidScore) and this.raidScore >= i_minRaidScore
-            bool m7 = z.contains(entry) and rrT1 >= i_rrMin - 1e-9 and rrFin <= i_rrMax + 1e-9 and (bull ? stop < entry : stop > entry)
+            bool m7 = z.zoneContains(entry) and rrT1 >= i_rrMin - 1e-9 and rrFin <= i_rrMax + 1e-9 and (bull ? stop < entry : stop > entry)
             if not m2b
                 this.lastGate := "GATE-M2b premium/discount"
             else if not m3
@@ -936,13 +936,13 @@ if barstate.isconfirmed
         float l1m = useLtf ? ltL.get(i) : low
         float c1m = useLtf ? ltC.get(i) : close
         // 1. LiquidityDetector.updatePrimary
-        feed.add(t1m, o1m, h1m, l1m, c1m)
+        feed.addCandle(t1m, o1m, h1m, l1m, c1m)
         raids.detectSwingSweep(feed)
         // 2. LevelEngine.processCandle
-        levels.processCandle(t1m, h1m, l1m)
+        levels.processLevelCandle(t1m, h1m, l1m)
         // 3. the 5m anatomy bar completed by the first 1m of this bucket: displacement, MSS, PD arrays
         if i == 0 and bar_index > 0
-            buf.add(time[1], open[1], high[1], low[1], close[1])
+            buf.addBar(time[1], open[1], high[1], low[1], close[1])
             anat.detectDisplacement(buf)
             [nh, nhp, nl, nlp] = anat.updateMss(buf)
             if nh
@@ -970,7 +970,7 @@ if barstate.isconfirmed
         int scoringBias = mach.htfBias != 0 ? mach.htfBias : mach.lastBias
         bool dispEntry = scoringBias != 0 and anat.dispEntryTrigger(buf, scoringBias > 0)
         ScoreCtx ctx = ScoreCtx.new(scoringBias, smtNow, dispEntry, rdec ? re : na, isRaidKillzone(t1m), isSilverBullet(t1m))
-        raids.processCandle(levels, feed, t1m, o1m, h1m, l1m, c1m, ctx)
+        raids.processRaidCandle(levels, feed, t1m, o1m, h1m, l1m, c1m, ctx)
         // 8. core.onCandle (expiry) + re-arm
         mach.expiry()
         mach.processRearm(t1m)

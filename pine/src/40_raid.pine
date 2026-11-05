@@ -20,7 +20,7 @@ type Feed1
 newFeed1() =>
     Feed1.new(t = array.new<int>(), o = array.new<float>(), h = array.new<float>(), l = array.new<float>(), c = array.new<float>())
 
-method add(Feed1 this, int t, float o, float h, float l, float c) =>
+method addCandle(Feed1 this, int t, float o, float h, float l, float c) =>
     this.t.push(t)
     this.o.push(o)
     this.h.push(h)
@@ -136,7 +136,7 @@ newRaidState() =>
     RaidState.new(lastLow = Raid.new(), lastHigh = Raid.new(), dbgT = array.new<int>(), dbgP = array.new<float>(), dbgS = array.new<int>(), dbgLow = array.new<bool>())
 
 // RaidDetector.processCandle over every unraided known level (1m)
-method processCandle(RaidState this, LevelState lvs, Feed1 f, int t, float o, float h, float l, float c, ScoreCtx ctx) =>
+method processRaidCandle(RaidState this, LevelState lvs, Feed1 f, int t, float o, float h, float l, float c, ScoreCtx ctx) =>
     float tol = i_raidTolTicks * TICK
     float pen = i_raidPenTicks * TICK
     for x in lvs.lv

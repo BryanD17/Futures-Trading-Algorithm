@@ -138,7 +138,7 @@ hiOf(float a, float b) => na(a) ? b : math.max(a, b)
 loOf(float a, float b) => na(a) ? b : math.min(a, b)
 
 // LevelEngine.processCandle (1m)
-method processCandle(LevelState this, int t, float h, float l) =>
+method processLevelCandle(LevelState this, int t, float h, float l) =>
     if not inHalt(t)
         int d = tradingDayKey(t)
         int w = weekKey(t)
