@@ -125,7 +125,7 @@ class LintTest(unittest.TestCase):
 
     def test_secrets(self):
         for bad in ("u = \"https://hooks.example.com/abc\"\n",
-                    "// key=abcdef123456\n",
+                    "// key=abcdef123456\n",  # lint L8 fixture, not a value  secret-scan: allow
                     "s = input.string(\"realSecretValue\", \"relay secret\")\n",
                     "t = \"AbCdEfGhIjKlMnOpQrStUvWxYz0123456789\"\n"):
             ok, r = rules(HEAD + bad)

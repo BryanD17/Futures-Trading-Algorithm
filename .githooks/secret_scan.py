@@ -110,9 +110,22 @@ def _redact(s: str) -> str:
     return s[:6] + "…" + f"({len(s)} chars)" if len(s) > 10 else "…"
 
 
-def scan_line(line: str) -> list[tuple[str, str]]:
+# Where the allow marker is honoured: tests, docs, the hooks themselves and Markdown. In shipped code
+# (pine/, trading-engine/, api-backend/, dashboard-frontend/, config/, tools/*.py) the marker is IGNORED,
+# so it cannot be appended to a real secret to smuggle it past the hook (Fable A-04v hardening).
+ALLOW_SCOPES = ("tools/tests/", "docs/", ".githooks/")
+
+
+def _marker_allowed(path: str | None) -> bool:
+    if path is None:
+        return True  # bare line scan (unit tests)
+    p = path.replace("\\", "/").lstrip("./")
+    return p.endswith(".md") or any(p.startswith(s) or ("/" + s) in p for s in ALLOW_SCOPES)
+
+
+def scan_line(line: str, path: str | None = None) -> list[tuple[str, str]]:
     """Return [(rule, redacted match)] for one line."""
-    if ALLOW_MARKER in line:
+    if ALLOW_MARKER in line and _marker_allowed(path):
         return []
     hits: list[tuple[str, str]] = []
     for name, rx in KEY_SHAPES + WEBHOOK_URLS:
@@ -132,7 +145,7 @@ def scan_text(path: str, text: str, line_numbers: list[int] | None = None) -> li
     lines = text.splitlines()
     for i, line in enumerate(lines):
         n = line_numbers[i] if line_numbers else i + 1
-        for rule, red in scan_line(line):
+        for rule, red in scan_line(line, path):
             out.append(f"{path}:{n}: {rule}: {red}")
     return out
 

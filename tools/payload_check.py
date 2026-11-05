@@ -17,8 +17,9 @@ Checks field-by-field against docs/PLATFORM_FACTS.md (line numbers cited as PF:<
     ENTRY     stop_loss AND take_profit present, absolute prices (PF:192-198), on the correct sides,
               qty 1..cap (I4), sync_strategy=true, out_of_sync=flatten, strategy_exit_block=true,
               prev_market_position=flat, market_position matches action, target_quantity=qty (PF:215-233).
-    BRACKET   (TV-side exit fill) MUST be rejected by the relay: strategy_exit_block=true with
-              prev_market_position != flat (PF:217-218), no take_profit/stop_loss.
+    BRACKET   (TV-side exit fill) MUST be rejected by the relay twice over: strategy_exit_block=true with
+              prev_market_position != flat (PF:217-218) AND no action/qty/order_type/tif (a PLACE without its
+              required foundation PF:139-140 cannot build an order), no take_profit/stop_loss/flatten_first.
     FLATTEN / SOFT_STOP  command=FLATTEN.
   PickMyTrade / TradersPost: entry carries sl+tp / stopLoss+takeProfit (I2) and quantity <= cap; the
   bracket-fill message is non-actionable (no token+data / no ticker).
@@ -45,7 +46,7 @@ PRICE_RE = re.compile(r"^\d+(?:\.\d+)?$")
 # names; tools/tests/test_payload_check.py pins the CrossTrade field set to the Pine source).
 def ct_fields(kind, direction, qty, stop=None, tp=None, sec="<RELAY_SECRET>", accounts="<ACCOUNT_1>",
               instrument="MNQ1!", build_id="<BUILD_ID>"):
-    side, xside = ("BUY", "SELL") if direction > 0 else ("SELL", "BUY")
+    side = "BUY" if direction > 0 else "SELL"
     pos = "long" if direction > 0 else "short"
     head = [("key", sec)]
     acct = [("account", accounts), ("instrument", instrument)]
@@ -57,8 +58,8 @@ def ct_fields(kind, direction, qty, stop=None, tp=None, sec="<RELAY_SECRET>", ac
             ("sync_strategy", "true"), ("market_position", pos), ("prev_market_position", "flat"),
             ("target_quantity", str(qty)), ("out_of_sync", "flatten"), ("strategy_exit_block", "true")] + tail
     if kind == "BRACKET":
+        # no action/qty/order_type/tif on purpose: see 75_payload.pine BRACKET comment (Fable A-04v)
         return head + [("command", "PLACE")] + acct + [
-            ("action", xside), ("qty", str(qty)), ("order_type", "MARKET"), ("tif", "DAY"),
             ("sync_strategy", "true"), ("market_position", "flat"), ("prev_market_position", pos),
             ("target_quantity", "0"), ("out_of_sync", "flatten"), ("strategy_exit_block", "true")] + tail
     return head + [("command", "FLATTEN")] + acct + tail
@@ -241,7 +242,11 @@ def check_crosstrade(fields, cap=None, build_id=None, live=False):
         for f in ("take_profit", "stop_loss", "flatten_first"):
             if f in d:
                 res.errors.append("bracket-fill payload must not carry " + f)
-        res.notes.append("expected relay outcome: REJECTED by strategy_exit_block (broker OSO owns the exit)")
+        for f in ("action", "qty", "order_type", "tif"):
+            if f in d:
+                res.errors.append("bracket-fill payload must not carry {} (must stay non-actionable even if the "
+                                  "exit block were ignored: a market close would orphan the GTC OSO legs)".format(f))
+        res.notes.append("expected relay outcome: REJECTED (strategy_exit_block + missing PLACE foundation); broker OSO owns the exit")
     elif kind in ("FLATTEN", "SOFT_STOP"):
         if cmd != "flatten":
             res.errors.append("{} must use command=FLATTEN (PF:149-152)".format(kind))

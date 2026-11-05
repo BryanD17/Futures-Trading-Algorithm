@@ -30,7 +30,7 @@ The six order calls in 80 and the event each produces:
 |---|---|---|---|
 | `strategy.entry("LONG"/"SHORT")` | ENTRY | entry fills at the confirmed 5m close | market order + OSO (stop + T1) |
 | `strategy.exit("LONG_BRK"/"SHORT_BRK")` | BRACKET | TV's emulator sees SL or T1 touched | **rejected on purpose** (§3) |
-| `strategy.close_all(comment="FLATTEN")` | FLATTEN | 16:40 ET (15:40 CT) bar close, or stale position after the 18:00 ET roll | `command=FLATTEN` |
+| `strategy.close_all(comment="FLATTEN")` | FLATTEN | 16:40 ET (15:40 CT) bar close, or stale position after the 18:00 ET (17:00 CT) roll | `command=FLATTEN` (with account + instrument filters: closes the position AND cancels its working orders, PF:§B11) |
 | `strategy.close_all(comment="SOFT_STOP")` | SOFT_STOP | soft daily loss reached | `command=FLATTEN` |
 
 The `strategy.risk.max_intraday_loss` / `max_intraday_filled_orders` built-ins close WITHOUT
@@ -68,16 +68,29 @@ order-fill alert for the exit as well (PF:84). If that alert sent a closing orde
 - if TV filled first (data or tick differences), the market close would leave the OSO legs working,
   and a later leg fill would open an unprotected position.
 
-**Decision: the exit-fill payload is sync-only and is rejected by the relay.** The relay must never
-act on it. The BRACKET payload carries `sync_strategy=true`, `prev_market_position=long|short`,
-`market_position=flat` and **`strategy_exit_block=true`**. CrossTrade documents that this flag *rejects
-payloads whose prev_market_position ≠ flat, so only fresh entries from flat pass* (PF:217-218). It is
-also the vendor's documented pairing for broker-managed exits: `flatten_first=true` +
-`strategy_exit_block=true` + `out_of_sync=flatten`, where *"when a broker-side stop or target closes the position, the
-next signal reports out-of-sync — expected; `flatten` is the recommended pairing"* (PF:229-232).
-Second layer: if the payload were evaluated anyway, `out_of_sync=flatten` against an already-flat
-broker withholds the order. It "withholds order and flattens the instrument if not flat" (PF:219-221),
-so the worst case is a flatten and never a new position.
+**Decision: the exit-fill payload is sync-only and is rejected by the relay — twice over.** The relay
+must never act on it. The BRACKET payload carries `command=PLACE`, `sync_strategy=true`,
+`prev_market_position=long|short`, `market_position=flat`, `target_quantity=0` and
+**`strategy_exit_block=true`**, and **deliberately omits `action`, `qty`, `order_type` and `tif`**.
+1. CrossTrade documents that `strategy_exit_block` *"Reject[s] the payload when prev_market_position is
+   not flat"* and that it *"is a field-validation gate ... rejected before dispatch"* (PF:217-218, re-fetched
+   2026-11-05 by Fable, PF:§B11). It is the vendor's pairing for broker-managed exits: `flatten_first=true` +
+   `strategy_exit_block=true` + `out_of_sync=flatten` (PF:229-232).
+2. Independently, a `PLACE` without its required foundation `action/qty/order_type` (PF:139-140) has no
+   order to build, so a relay that somehow ignored rule 1 still has nothing to send.
+
+Why two rules (Fable A-04v worst-case table). The sync layer alone is **not** a safe fallback: if TV's
+emulator filled the bracket first while the broker is still in the position, `prev_market_position`
+equals the live position, the payload is *in sync*, and a market close would leave the GTC OSO legs
+working (PF:190-191) — a later leg fill would OPEN an unprotected position. Removing the order
+foundation closes that hole without relying on the exit block.
+
+| Broker state when the BRACKET message arrives | exit block honoured | exit block ignored (hypothetical) |
+|---|---|---|
+| flat (OSO leg already filled) | rejected, nothing sent | PLACE has no action/qty → rejected; nothing sent |
+| same side, still open (TV filled first) | rejected; position stays under its OSO until a leg fills or the next ENTRY's `flatten_first` clears it | rejected (no foundation). With the old payload this case would have closed at market and orphaned the GTC legs |
+| opposite side (should be impossible: one strategy, pyramiding 0) | rejected | rejected (no foundation) |
+In no cell can the message open or reverse a position.
 
 Why not suppress the alert? An order call without `alert_message` produces an empty message, and an empty
 message fails the alert (PF:81-83). That is noisy, and it would break lint L10's guarantee for the
@@ -116,16 +129,12 @@ strategy_exit_block=true;
 strategy_tag=LucidICT_v6-<BUILD_ID>-ENTRY;
 destination=tradovate;
 ```
-**BRACKET** (TV-side exit fill; rejected by design)
+**BRACKET** (TV-side exit fill; rejected by design — no action/qty/order_type/tif on purpose, §3)
 ```
 key=<RELAY_SECRET>;
 command=PLACE;
 account=<ACCOUNT_1>,<ACCOUNT_2>;
 instrument=MNQ1!;
-action=BUY;
-qty=3;
-order_type=MARKET;
-tif=DAY;
 sync_strategy=true;
 market_position=flat;
 prev_market_position=short;
@@ -148,11 +157,11 @@ destination=tradovate;
 | Field | Value / source in Pine | Citation |
 |---|---|---|
 | `key` | input `relay secret` (display.none); `<DRY_RUN>` when not live | PF:142-143 |
-| `command` | `PLACE` (ENTRY, BRACKET), `FLATTEN` (FLATTEN/SOFT_STOP) | PF:139, PF:149-152 |
+| `command` | `PLACE` (ENTRY, BRACKET), `FLATTEN` (FLATTEN/SOFT_STOP). Uppercase values are the form CrossTrade's own Tradovate guide uses | PF:139, PF:149-152, PF:§B11 |
 | `account` | input `accounts`, spaces stripped; fan-out `a,b` | PF:144, PF:241-243 |
-| `instrument` | chart `syminfo.ticker` (`MNQ1!` or a dated MNQ) unless overridden | PF:145-147 |
-| `action` / `qty` / `order_type` | BUY/SELL, Pine `entryQty` (I4-capped), MARKET | PF:139-140, PF:165-167 |
-| `tif` | DAY. The OSO legs are GTC regardless | PF:148, PF:190-191 |
+| `instrument` | chart `syminfo.ticker` (`MNQ1!` or a dated MNQ) unless overridden; `MNQ1!` is resolved to the front month for PLACE and for FLATTEN | PF:145-147, PF:§B11 |
+| `action` / `qty` / `order_type` | ENTRY only: BUY/SELL, Pine `entryQty` (I4-capped), MARKET. Absent from BRACKET (§3) and FLATTEN | PF:139-140, PF:165-167 |
+| `tif` | ENTRY only: DAY. The OSO legs are GTC regardless | PF:148, PF:190-191 |
 | `take_profit` / `stop_loss` | **absolute** `sigT1` / `sigStop` (format.mintick) | PF:185-198 (fixed at submission, PF:196-197) |
 | `flatten_first` | true (ENTRY only) | PF:155, PF:229 |
 | `sync_strategy`, `market_position`, `prev_market_position`, `target_quantity` | Pine values (placeholders are not expanded inside alert_message, PF:178-180) | PF:215-218 |
@@ -170,11 +179,11 @@ PF:153-154), `cycle_accounts` (PF:252-253), `atm_*` (cannot combine with take_pr
 | # | Event | TradingView state | Relay (CrossTrade) state | Broker (Tradovate) state | Owner action |
 |---|---|---|---|---|---|
 | L1 | **Entry fill** | position ±q at the 5m close; LONG_BRK/SHORT_BRK working | ENTRY payload passes the sync gate (prev flat = broker flat) → PLACE; Alert History row green (PF:294-296) | market fill ±q; OSO stop + T1 activated on the first fill, sized to it, GTC (PF:188-191) | none. Spot-check the bracket on the first trades (D2) |
-| L2 | **T1 hit** (V6 has no partials: T1 = full exit, Agent 03 X2) | TV exit fill → BRACKET payload | rejected by `strategy_exit_block` (§3). Alert History shows the rejection (expected) | OSO limit leg fills, stop leg cancelled by the OSO; flat | none. A rejected BRACKET row is normal |
-| L3 | **Stop fill at the broker, TV does not see it** (or sees it later/never) | TV still ±q (until its own emulator fills → L2) | next ENTRY: prev flat vs broker flat → in sync. If TV is still in a position it sends no entry (pyramiding 0, flatOk) | flat (stop leg filled) | none. If TV stays in a position the broker no longer holds, the 16:40 ET FLATTEN (no-op at the broker) realigns it. D3 drills this |
-| L3b | **TV bracket fills, broker leg not yet** (data difference) | flat | BRACKET payload rejected; next ENTRY from flat while the broker is still ±q → out_of_sync → **withhold + flatten** (PF:219-221) | still ±q under its OSO until a leg fills, or the relay flattens it on the next signal | none. If it persists to 16:40 ET, FLATTEN closes it |
+| L2 | **T1 hit** (V6 has no partials: T1 = full exit, Agent 03 X2) | TV exit fill → BRACKET payload | rejected by `strategy_exit_block` and by the missing order foundation (§3). Alert History shows the rejection (expected) | OSO limit leg fills, stop leg cancelled by the OSO; flat | none. A rejected BRACKET row is normal |
+| L3 | **Stop fill at the broker, TV does not see it** (or sees it later/never) | TV still ±q (until its own emulator fills → L2) | next ENTRY: prev flat vs broker flat → in sync. If TV is still in a position it sends no entry (pyramiding 0, flatOk) | flat (stop leg filled) | none. If TV stays in a position the broker no longer holds, the 16:40 ET (15:40 CT) FLATTEN (no-op at the broker) realigns it. D3 drills this |
+| L3b | **TV bracket fills, broker leg not yet** (data difference) | flat | BRACKET payload rejected; next ENTRY from flat while the broker is still ±q: `flatten_first=true` clears the stale position **and its working OSO legs** before the entry (PF:§B11), then the sync gate sees flat = flat and the entry proceeds | still ±q under its OSO until a leg fills, or the next ENTRY's flatten_first clears it | none. If it persists to 16:40 ET (15:40 CT), FLATTEN closes it |
 | L4 | **Relay down / webhook fails** | normal; Alert log "Webhook status" shows the failure (PF:57-59) | nothing received. No retry (PF:57-59); expired link signals are not queued (PF:235-236) | ENTRY missed → flat (safe). FLATTEN missed → position stays under its OSO stop (I2) | Check Alert log + Alert History. If a position is open at 16:40 ET with no FLATTEN, flatten it in Tradovate. Auto-flatten 16:42 ET (15:42 CT) is the L2 backstop (§7) |
-| L5 | **Duplicate alert** (same ENTRY twice) | one position | 2nd ENTRY: prev flat vs broker ±q → out_of_sync → withhold + flatten (PF:219-221). Placements are not de-duplicated (PF:286-289) | the 1st position is flattened: **no double position**, but the trade is lost | Check Alert History. Delete any second alert at once (I1, D6/D7) |
+| L5 | **Duplicate alert** (same ENTRY twice) | one position | 2nd ENTRY carries `flatten_first=true`. Two orderings are possible and the docs do not fix which runs first (PF:§B11): (a) flatten_first clears position + legs, then the sync gate sees flat = flat → the entry is **re-placed** (same side, same qty, new OSO at the original prices); (b) sync gate first: prev flat vs broker ±q → out_of_sync → withhold + flatten (PF:219-221). Placements are not de-duplicated (PF:286-289) | (a) same-side position re-opened once, still bracketed; (b) flat. **Never a double or opposite position** (I1 holds in both) | Check Alert History. Delete any second alert at once (I1, D6/D7). Drill D7 records which ordering CrossTrade applies |
 | L6 | **TradingView alert stopped** (expired / >15 triggers in 3 min / deleted, PF:37-45) | strategy keeps simulating; no messages | idle | open position keeps its OSO; no new entries | Re-create the alert (§2). Premium + Open-ended prevents expiry |
 | L7 | **Tradovate rejection** (margin, rate limit, contract) | TV believes ±q | row turns yellow with Tradovate's reason (PF:296-298) | flat (nothing placed). A stop-leg loss after a partial fill → Position Protection alert, remaining entry cancelled (PF:199-202) | Read the reason in Alert History. TV is now out of sync: the next ENTRY is refused by TV (not flat) until TV exits, and the next sync gate realigns. If unsure, disable the alert |
 | L8 | **Flatten at 16:40 ET (15:40 CT)** | close_all FLATTEN at the 16:35–16:40 bar close (I3) | `command=FLATTEN` (not sync-gated) | flat. Flatten unconfirmed in ~6 s is reported success + warning (PF:297-298) | none. Lucid's own forced flat is 16:45 ET / 15:45 CT (LUCID_RULES:124-125). Account Manager auto-flatten 16:42 ET is the backstop |
@@ -240,11 +249,17 @@ sync, no flatten-on-desync, PF:361-373). Switch only if CrossTrade loses Tradova
 
 - R-1 Compile: `75_payload.pine` (UDT, `log.info("{0}", …)`, `str.format_time`, `display.none` on
   input.string) is static-only until OA-1.
-- R-2 `command=FLATTEN` field set: PF:149 lists the command, but no flatten-specific field list is
-  quoted. D4 must confirm it flattens and cancels the OSO legs on every listed account.
+- R-2 `command=FLATTEN` with `account` + `instrument` filters is documented to close the position and
+  *"cancel the working orders that go with them"* (PF:§B11, flatten-positions page). D4 still confirms it
+  on every listed account, on the demo side, before any Lucid account.
 - R-3 `strategy_exit_block` rejects the BRACKET message: drill D2/D3 must show the Alert History rejection
-  and no order.
-- R-4 L5 duplicate ENTRY flattens the live trade (safe, but the trade is lost). L3b relies on the next
-  signal or the 16:40 FLATTEN.
+  and no order (the row may read "missing action/qty" instead of "exit blocked" — both are the expected rejection).
+- R-4 L5 duplicate ENTRY either re-places the same-side trade once or withholds + flattens (ordering of
+  flatten_first vs the sync gate is not documented, PF:§B11); D7 records which. Neither outcome breaks I1.
+- R-7 Contract roll: `MNQ1!` is resolved to the front month by CrossTrade at each message, while TradingView
+  rolls its continuous symbol on its own schedule. Entry and 16:40 ET (15:40 CT) flatten on the same day
+  resolve to the same contract, but in roll week (the Thursday before the 3rd Friday of Mar/Jun/Sep/Dec)
+  set the `relay instrument` input to the dated contract (e.g. `MNQZ6`) so PLACE and FLATTEN name the
+  contract the position actually holds. Agent 08 runbook item.
 - R-5 Built-in `strategy.risk` halts send no payload (§1). L2 session-loss is the hard stop.
 - R-6 Fallback relays: OSO-ness and sync are not documented (PF:334-335, PF:352-353).

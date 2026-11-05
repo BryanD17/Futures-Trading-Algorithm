@@ -78,6 +78,17 @@ class CrossTradeTest(unittest.TestCase):
         d["prev_market_position"] = "flat"
         self.assertFalse(one(list(d.items())).ok)
         self.assertFalse(one(good + [("stop_loss", "1.00")]).ok)
+        # Fable A-04v: the message must be non-actionable on its own — no order foundation at all
+        for f, v in (("action", "SELL"), ("qty", "2"), ("order_type", "MARKET"), ("tif", "DAY")):
+            self.assertFalse(one(good + [(f, v)]).ok, f)
+        self.assertFalse(any(k in ("action", "qty", "order_type", "tif") for k, _ in good))
+
+    def test_pine_bracket_builder_has_no_order_foundation(self):
+        src = slurp(SRC75)
+        body = src[src.index('e.kind == "BRACKET"'):src.index("    else\n", src.index('e.kind == "BRACKET"'))]
+        for f in ("action", "qty", "order_type", "tif", "take_profit", "stop_loss", "flatten_first"):
+            self.assertNotIn('ctLine("{}"'.format(f), body, f)
+        self.assertIn('ctLine("strategy_exit_block", "true")', body)
 
     def test_flatten_not_gated(self):
         f = pc.ct_fields("FLATTEN", 1, 2, build_id=BID)

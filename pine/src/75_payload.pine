@@ -70,7 +70,6 @@ ctLine(string k, string v) =>
     k + "=" + v + ";\n"
 ctPayload(OrderEvent e, string sec, string accounts) =>
     string side  = e.dir > 0 ? "BUY" : "SELL"
-    string xside = e.dir > 0 ? "SELL" : "BUY"
     string pos   = e.dir > 0 ? "long" : "short"
     string head  = ctLine("key", sec) // PF:142
     string acct  = ctLine("account", accounts) + ctLine("instrument", relayInstrument("CROSSTRADE")) // PF:144-147, fan-out PF:241
@@ -80,9 +79,14 @@ ctPayload(OrderEvent e, string sec, string accounts) =>
         p := head + ctLine("command", "PLACE") + acct + ctLine("action", side) + ctLine("qty", str.tostring(e.qty)) + ctLine("order_type", "MARKET") + ctLine("tif", "DAY") + ctLine("take_profit", pxStr(e.tpPx)) + ctLine("stop_loss", pxStr(e.stopPx)) + ctLine("flatten_first", "true") + ctLine("sync_strategy", "true") + ctLine("market_position", pos) + ctLine("prev_market_position", "flat") + ctLine("target_quantity", str.tostring(e.qty)) + ctLine("out_of_sync", "flatten") + ctLine("strategy_exit_block", "true") + tail
         // B2 minimal V6 entry PF:159-177; absolute OSO prices PF:185-198; flatten_first PF:155 + PF:229; sync PF:215-223
     else if e.kind == "BRACKET"
-        // sync-only, REJECTED by strategy_exit_block (prev_market_position != flat, PF:217-218). Even if it
-        // were evaluated, out_of_sync=flatten on an already-flat broker withholds the order (PF:219-221).
-        p := head + ctLine("command", "PLACE") + acct + ctLine("action", xside) + ctLine("qty", str.tostring(e.qty)) + ctLine("order_type", "MARKET") + ctLine("tif", "DAY") + ctLine("sync_strategy", "true") + ctLine("market_position", "flat") + ctLine("prev_market_position", pos) + ctLine("target_quantity", "0") + ctLine("out_of_sync", "flatten") + ctLine("strategy_exit_block", "true") + tail
+        // sync-only, REJECTED by two independent documented rules (Fable A-04v, RELAY_SETUP §3):
+        //  (1) strategy_exit_block=true rejects any payload whose prev_market_position != flat (PF:217-218,
+        //      "a field-validation gate ... before dispatch");
+        //  (2) the required PLACE foundation action/qty/order_type (PF:139-140) is DELIBERATELY ABSENT, so even
+        //      a relay that ignored (1) has no order to build. The sync layer alone would NOT be safe: with the
+        //      broker still in the position (TV's emulator filled first) prev == live is "in sync" and a market
+        //      close would orphan the GTC OSO legs (PF:190-191) — a later leg fill would OPEN a position.
+        p := head + ctLine("command", "PLACE") + acct + ctLine("sync_strategy", "true") + ctLine("market_position", "flat") + ctLine("prev_market_position", pos) + ctLine("target_quantity", "0") + ctLine("out_of_sync", "flatten") + ctLine("strategy_exit_block", "true") + tail
     else
         // FLATTEN / SOFT_STOP: `flatten` is a supported Tradovate command (PF:149-152); no sync fields so the
         // sync gate / exit block never withhold a risk-reducing close.
