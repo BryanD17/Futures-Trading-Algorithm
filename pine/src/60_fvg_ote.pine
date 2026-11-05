@@ -30,7 +30,7 @@ type Zone
 
 method bandLo(Zone this) => math.min(this.f62, this.f79)
 method bandHi(Zone this) => math.max(this.f62, this.f79)
-method contains(Zone this, float p) => not na(p) and p >= this.bandLo() and p <= this.bandHi()
+method zoneContains(Zone this, float p) => not na(p) and p >= this.bandLo() and p <= this.bandHi()
 
 buildZone(float lo, float hi, bool bullish) =>
     Zone z = Zone.new()

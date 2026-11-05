@@ -22,7 +22,7 @@ type Buf5
 newBuf5() =>
     Buf5.new(t = array.new<int>(), o = array.new<float>(), h = array.new<float>(), l = array.new<float>(), c = array.new<float>())
 
-method add(Buf5 this, int t, float o, float h, float l, float c) =>
+method addBar(Buf5 this, int t, float o, float h, float l, float c) =>
     this.t.push(t)
     this.o.push(o)
     this.h.push(h)
