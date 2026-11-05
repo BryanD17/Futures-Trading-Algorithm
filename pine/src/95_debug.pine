@@ -54,3 +54,59 @@ if i_dbgTable and barstate.islast
     table.cell(gateTbl, 1, 9, lastGateFailed, text_color = color.white)
     table.cell(gateTbl, 0, 10, "impulse", text_color = color.white)
     table.cell(gateTbl, 1, 10, impulseVerdict, text_color = color.white)
+
+// ---- funnel table (Debug: "funnel table"): ONE screenshot shows where the chain dies. Cumulative
+// history counters from 70 (engine) / 80 (strategy) on the last bar. Reads only; never gates orders.
+funnelDate(int t) =>
+    na(t) ? "never" : str.format_time(t, "yyyy-MM-dd HH:mm", TZ) + " ET"
+
+// top n entries of a reason -> count map, "reason xN; ..." (descending count)
+funnelTop(map<string, int> m, int n) =>
+    array<string> ks = m.keys()
+    array<int> vs = m.values()
+    string out = ""
+    int shown = 0
+    while shown < n and vs.size() > 0
+        int bi = 0
+        for j = 0 to vs.size() - 1
+            if vs.get(j) > vs.get(bi)
+                bi := j
+        out := out + (shown > 0 ? "\n" : "") + (ks.get(bi) == "" ? "(blank)" : ks.get(bi)) + " x" + str.tostring(vs.get(bi))
+        ks.remove(bi)
+        vs.remove(bi)
+        shown += 1
+    out == "" ? "none" : out
+
+var table fnTbl = table.new(position.middle_right, 2, 24, bgcolor = color.black, border_color = color.gray, border_width = 1)
+funnelRow(table tb, int r, string k, string v, bool bad) =>
+    table.cell(tb, 0, r, k, text_color = color.white, text_size = size.normal, text_halign = text.align_left)
+    table.cell(tb, 1, r, v, text_color = bad ? color.rgb(255, 80, 80) : color.rgb(120, 255, 120), text_size = size.normal, text_halign = text.align_left)
+    true
+
+if i_dbgFunnel and barstate.islast
+    array<string> stF = selfTestCases()
+    int stN = stF.size() + selfTestFails
+    string stTxt = stN == 0 ? "PASS " + BUILD_ID : "FAIL x" + str.tostring(stN) + ": " + (stF.size() > 0 ? array.join(stF, "; ") : "live invariants (enable selfTest for labels)")
+    funnelRow(fnTbl, 0, "FUNNEL " + BUILD_ID, "cumulative since first bar", false)
+    funnelRow(fnTbl, 1, "5m bars processed / first", str.tostring(fnBars) + " / " + funnelDate(fnFirstBarT), fnBars == 0)
+    funnelRow(fnTbl, 2, "1m intrabars: bars full / empty", str.tostring(fnLtfFull) + " / " + str.tostring(fnLtfEmpty), fnLtfFull == 0)
+    funnelRow(fnTbl, 3, "1m candles replayed / first 1m", str.tostring(fn1mReplayed) + " / " + funnelDate(fnFirstLtfT), fn1mReplayed == 0)
+    funnelRow(fnTbl, 4, "MES intrabars empty (bars)", str.tostring(fnMesEmpty), fnMesEmpty == fnBars)
+    funnelRow(fnTbl, 5, "bars PDH known / level regs", str.tostring(fnPdhBars) + " / " + str.tostring(levels.regCount), fnPdhBars == 0)
+    funnelRow(fnTbl, 6, "raids registered / max score", str.tostring(raids.nRaids) + " / " + str.tostring(raids.maxScore), raids.nRaids == 0)
+    funnelRow(fnTbl, 7, "bars bias!=0 / rangeDecisive", str.tostring(fnBiasBars) + " / " + str.tostring(fnDecBars), fnBiasBars == 0)
+    funnelRow(fnTbl, 8, "15m bias reads long / short", str.tostring(fnBiasLong) + " / " + str.tostring(fnBiasShort), fnBiasLong + fnBiasShort == 0)
+    funnelRow(fnTbl, 9, "-> BIAS_SET", str.tostring(fnStateCnt.get(ST_BIAS_SET)), fnStateCnt.get(ST_BIAS_SET) == 0)
+    funnelRow(fnTbl, 10, "-> SWEEP_DONE", str.tostring(fnStateCnt.get(ST_SWEEP_DONE)), fnStateCnt.get(ST_SWEEP_DONE) == 0)
+    funnelRow(fnTbl, 11, "-> DISPLACED", str.tostring(fnStateCnt.get(ST_DISPLACED)), fnStateCnt.get(ST_DISPLACED) == 0)
+    funnelRow(fnTbl, 12, "-> MSS_CONFIRMED", str.tostring(fnStateCnt.get(ST_MSS)), fnStateCnt.get(ST_MSS) == 0)
+    funnelRow(fnTbl, 13, "-> OTE_ARMED", str.tostring(fnStateCnt.get(ST_OTE_ARMED)), fnStateCnt.get(ST_OTE_ARMED) == 0)
+    funnelRow(fnTbl, 14, "-> IN_TRADE (emitted)", str.tostring(fnStateCnt.get(ST_IN_TRADE)), fnStateCnt.get(ST_IN_TRADE) == 0)
+    funnelRow(fnTbl, 15, "-> INVALIDATED", str.tostring(fnStateCnt.get(ST_INVALIDATED)), false)
+    funnelRow(fnTbl, 16, "top invalidate reasons", funnelTop(fnInvReasons, 3), false)
+    funnelRow(fnTbl, 17, "now: state / last gate", setupStateName + " / " + (lastGateFailed == "" ? "-" : lastGateFailed), false)
+    funnelRow(fnTbl, 18, "coreSignal long / short / last", str.tostring(fnSigLong) + " / " + str.tostring(fnSigShort) + " / " + funnelDate(fnLastSigT), fnSigLong + fnSigShort == 0)
+    funnelRow(fnTbl, 19, "strategy rejects", funnelTop(fnRejects, 5), fnRejects.size() > 0)
+    funnelRow(fnTbl, 20, "strategy.entry issued", str.tostring(fnEntries), fnEntries == 0)
+    funnelRow(fnTbl, 21, "closed / open trades", str.tostring(strategy.closedtrades) + " / " + str.tostring(strategy.opentrades), strategy.closedtrades + strategy.opentrades == 0)
+    funnelRow(fnTbl, 22, "selfTest", stTxt, stN != 0)

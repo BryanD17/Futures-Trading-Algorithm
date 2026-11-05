@@ -10,6 +10,9 @@
 //   calc_on_every_tick      = false (AP-3 / I5: no intrabar entries)
 //   calc_on_order_fills     = false
 //   pyramiding              = 0     (I1 / AP-10: one position, never added to)
-strategy("LucidICT V6", shorttitle = "LucidICTv6", overlay = true, pyramiding = 0, process_orders_on_close = true, calc_on_every_tick = false, calc_on_order_fills = false, initial_capital = 50000, currency = currency.USD, default_qty_type = strategy.fixed, default_qty_value = 1, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 100, max_bars_back = 500)
+//   margin_long/short       = 0     (v6 defaults to 100% margin: one MNQ (~$61k notional) exceeds the $50k
+//                                    initial_capital, so the emulator filled NOTHING -> 0 trades. Lucid sizing is
+//                                    enforced by 80_strategy caps, not by a cash-margin model.)
+strategy("LucidICT V6", shorttitle = "LucidICTv6", overlay = true, pyramiding = 0, process_orders_on_close = true, calc_on_every_tick = false, calc_on_order_fills = false, initial_capital = 50000, currency = currency.USD, default_qty_type = strategy.fixed, default_qty_value = 1, margin_long = 0, margin_short = 0, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 100, max_bars_back = 500)
 // Build identity (tools/pine_build.py replaces the next line with: const string BUILD_ID = "<src sha256[:16]>")
 // @@BUILD_ID@@

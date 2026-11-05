@@ -118,6 +118,7 @@ type LevelState
     int   eqHiCount  = 0
     float eqLoRef    = na
     int   eqLoCount  = 0
+    int   regCount   = 0   // funnel: level registrations
 
 newLevelState() =>
     array<Level> a = array.new<Level>()
@@ -132,6 +133,7 @@ method register(LevelState this, int kind, float price) =>
         x.active  := true
         x.raided  := false
         x.cluster := 1
+        this.regCount := this.regCount + 1
     true
 
 hiOf(float a, float b) => na(a) ? b : math.max(a, b)

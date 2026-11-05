@@ -909,7 +909,44 @@ int    sigRaidScore    = na
 int    sigTs1m         = na    // open time of the 1m candle on which Java would emit
 int    sigSession      = na
 
+// ---- funnel counters (95_debug "funnel table"; read-only diagnostics, never gate anything)
+var int    fnBars        = 0      // confirmed 5m bars processed
+var int    fnFirstBarT   = na
+var int    fnLtfEmpty    = 0      // 5m bars with no 1m intrabars (5m pseudo-candle fallback)
+var int    fnLtfFull     = 0
+var int    fn1mReplayed  = 0
+var int    fnFirstLtfT   = na
+var int    fnMesEmpty    = 0
+var int    fnPdhBars     = 0      // 5m bars with PDH active
+var int    fnBiasBars    = 0      // 5m bars with lastBias != 0
+var int    fnBiasLong    = 0      // 15m bias reads +1
+var int    fnBiasShort   = 0      // 15m bias reads -1
+var int    fnDecBars     = 0      // 5m bars with rangeDecisive
+var int    fnSigLong     = 0
+var int    fnSigShort    = 0
+var int    fnLastSigT    = na
+var array<int> fnStateCnt = array.new<int>(10, 0)     // entries into each ST_* code
+var map<string, int> fnInvReasons = map.new<string, int>()
+
+// count every entry into a chain state (an IMPULSE_LEG jump SWEEP_DONE -> OTE_ARMED also counts the
+// DISPLACED / MSS states it passes) and every INVALIDATED with its reason; returns the new state
+funnelTrack(array<int> cnt, map<string, int> reasons, int prevS, int newS, string gate) =>
+    if newS != prevS
+        if newS == ST_INVALIDATED
+            cnt.set(ST_INVALIDATED, cnt.get(ST_INVALIDATED) + 1)
+            reasons.put(gate, (reasons.contains(gate) ? reasons.get(gate) : 0) + 1)
+        else if newS >= ST_BIAS_SET and newS <= ST_IN_TRADE
+            int kFrom = (prevS >= ST_BIAS_SET and prevS < newS and prevS <= ST_IN_TRADE) ? prevS + 1 : newS
+            for k = kFrom to newS
+                if k != 2
+                    cnt.set(k, cnt.get(k) + 1)
+    newS
+
 if barstate.isconfirmed
+    int fnS = mach.state
+    fnBars += 1
+    if na(fnFirstBarT)
+        fnFirstBarT := time
     raids.dbgT.clear()
     raids.dbgP.clear()
     raids.dbgS.clear()
@@ -924,10 +961,20 @@ if barstate.isconfirmed
             else
                 mach.closedAwaitingRearm := true
                 mach.rearmCD := i_rearmCooldown
+    fnS := funnelTrack(fnStateCnt, fnInvReasons, fnS, mach.state, mach.lastGate)
     int nLtf = na(ltT) ? 0 : ltT.size()
     bool useLtf = nLtf > 0
     int cnt = useLtf ? nLtf : 1
     int nMes = na(mesT) ? 0 : mesT.size()
+    if useLtf
+        fnLtfFull += 1
+        fn1mReplayed += nLtf
+        if na(fnFirstLtfT)
+            fnFirstLtfT := time
+    else
+        fnLtfEmpty += 1
+    if nMes == 0
+        fnMesEmpty += 1
     int mesPtr = 0
     for i = 0 to cnt - 1
         int   t1m = useLtf ? ltT.get(i) : time
@@ -973,13 +1020,20 @@ if barstate.isconfirmed
         raids.processRaidCandle(levels, feed, t1m, o1m, h1m, l1m, c1m, ctx)
         // 8. core.onCandle (expiry) + re-arm
         mach.expiry()
+        fnS := funnelTrack(fnStateCnt, fnInvReasons, fnS, mach.state, mach.lastGate)
         mach.processRearm(t1m)
+        fnS := funnelTrack(fnStateCnt, fnInvReasons, fnS, mach.state, mach.lastGate)
         // 9. bias on each completed 15m/30m bar (= the first 1m of a new 15m bucket)
         int b15 = math.floor(t1m / (15 * MS_MIN))
         if not na(last15Bucket) and b15 != last15Bucket
             int biasNow = rdec ? rd : 0       // bias.source = RANGE; the vote is cold-start only (PORT_MAP B2)
             mach.recordHtfBias(biasNow)
             mach.lastBias := biasNow
+            fnS := funnelTrack(fnStateCnt, fnInvReasons, fnS, mach.state, mach.lastGate)
+            if biasNow > 0
+                fnBiasLong += 1
+            else if biasNow < 0
+                fnBiasShort += 1
         last15Bucket := b15
         // 10. OTE window (ote.windowBars x 5 feed bars)
         if mach.state == ST_OTE_ARMED
@@ -989,21 +1043,26 @@ if barstate.isconfirmed
                 mach.barsInOte := 0
         else
             mach.barsInOte := 0
+        fnS := funnelTrack(fnStateCnt, fnInvReasons, fnS, mach.state, mach.lastGate)
         // 11. state transitions (one candle may chain several, exactly like the runner)
         if mach.state == ST_BIAS_SET
             mach.tryRecordSweep(raids, levels, feed, ctx)
         else if mach.state == ST_SWEEP_DONE
             mach.tryRefreshSweep(raids, levels, feed, ctx)
+        fnS := funnelTrack(fnStateCnt, fnInvReasons, fnS, mach.state, mach.lastGate)
         if mach.state == ST_SWEEP_DONE
             bool took = false
             if i_entryModel == "IMPULSE_LEG"
                 took := mach.tryImpulseLeg(buf, anat, feed, rh, rl, t1m, o1m, h1m, l1m, c1m)
             if not took and mach.state == ST_SWEEP_DONE
                 mach.tryRecordDisplacement(buf, anat)
+            fnS := funnelTrack(fnStateCnt, fnInvReasons, fnS, mach.state, mach.lastGate)
         if mach.state == ST_DISPLACED
             mach.tryRecordMss(buf, anat)
+            fnS := funnelTrack(fnStateCnt, fnInvReasons, fnS, mach.state, mach.lastGate)
         if mach.state == ST_MSS
             mach.tryArmOte(buf, rh, rl, t1m, h1m, l1m, c1m)
+            fnS := funnelTrack(fnStateCnt, fnInvReasons, fnS, mach.state, mach.lastGate)
         if mach.state == ST_OTE_ARMED
             if mach.alarm(buf, t1m, o1m, h1m, l1m, c1m)
                 [ok, en, sp, a1, a2, a3, fi, r1, rf] = mach.tryEmit(t1m, rh, rl, re, rdec)
@@ -1024,8 +1083,20 @@ if barstate.isconfirmed
                     sigRaidScore := mach.raidScore
                     sigTs1m      := t1m
                     sigSession   := sessionWindow(t1m)
+                    fnLastSigT   := t1m
+                    if mach.zone.bullish
+                        fnSigLong += 1
+                    else
+                        fnSigShort += 1
+        fnS := funnelTrack(fnStateCnt, fnInvReasons, fnS, mach.state, mach.lastGate)
         // 12. OteSetupDriver.afterCandle
         mach.afterCandle()
+    if levels.lv.get(LV_PDH).active
+        fnPdhBars += 1
+    if mach.lastBias != 0
+        fnBiasBars += 1
+    if rDecNow
+        fnDecBars += 1
 
 // =============================================================================
 // EXPORTS — named series for Agent 03 (80_strategy) and the debug overlay (95).
