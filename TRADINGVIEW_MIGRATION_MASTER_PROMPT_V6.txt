@@ -1,0 +1,781 @@
+================================================================================
+================================================================================
+     TOPSTEP → TRADINGVIEW + LUCID (TRADOVATE) • PINE PORT • WEBHOOK RELAY •
+       JAVA BECOMES THE LAB • HEDGE-PROOF BY CONSTRUCTION • PARITY-PROVEN
+               FABLE MAP → OPUS BUILD → FABLE VERIFY → OWNER GO-LIVE
+                 MASTER MIGRATION PROMPT — V6 (TRADINGVIEW MIGRATION)
+================================================================================
+================================================================================
+
+--------------------------------------------------------------------------------
+HOW IT WORKS — THE 30-SECOND VERSION (plain English, for the owner)
+--------------------------------------------------------------------------------
+  1. The strategy is rewritten in Pine Script and runs on a TradingView chart
+     (MNQ). TradingView's servers watch the chart around the clock. Your
+     computer can be OFF.
+  2. When every rule lines up (raid → MSS → displacement → FVG/OTE, inside a
+     killzone, bias agrees), the script fires an ALERT. An alert is just a
+     short text message: "BUY 2 MNQ, stop X, target Y".
+  3. TradingView sends that message to a RELAY (CrossTrade by default). The
+     relay is logged into your Lucid Tradovate account(s).
+  4. The relay places the order on Tradovate WITH the stop and target attached,
+     on every Lucid account you linked. Same direction on all of them.
+  5. You see the trade in TradingView's Tradovate panel like any other trade.
+  6. Your Java engine stops trading. It becomes the TEST LAB: it replays real
+     data and proves the TradingView version takes the SAME trades.
+
+  The account plan doesn't matter to the strategy. A setup is a setup. The
+  plan only sets the hard caps (max contracts, flat-by time), and those
+  live in ONE settings block.
+--------------------------------------------------------------------------------
+
+DOCUMENT NAME:    TRADINGVIEW_MIGRATION_MASTER_PROMPT_V6.txt
+VERSION:          V6 (platform migration: Topstep/ProjectX → TradingView/Lucid)
+REPOSITORY:       https://github.com/BryanD17/Futures-Trading-Algorithm.git
+DEFAULT BRANCH:   Main   (CAPITAL M — every PR targets --base Main.)
+PREDECESSORS:     V1/V2 (CHART_FIX), V3 (TOPDOWN_OTE), V4 (ICT_STACK),
+                  V5 (TRADE_FLOW_UNBLOCK).
+LAST COMMIT SEEN: f9180ea (2026-09-30) "agent-05.14-v5: one stop per position,
+                  observe-only foreign adopted positions, real stop distance
+                  for adopted positions (#175)"
+TRIGGER EVENT:    2026-11-05 — owner's Topstep access permanently revoked.
+                  TopstepX / ProjectX API, credentials and market data are GONE.
+                  Every live path through TopstepConnector is dead.
+NEW VENUE:        Lucid Trading, LucidFlex 50K accounts, on Tradovate.
+                  Lucid permits automated systems and trade copiers, provided
+                  all activity follows its rules (HFT, microscalping and
+                  hedging are prohibited and auto-detected).
+NEW EXECUTION:    TradingView Pine v6 strategy → alert webhook → relay
+                  (CrossTrade, Tradovate cloud destination) → Lucid accounts.
+                  Tradovate's own API add-on is NOT available for prop or
+                  evaluation accounts, so a direct connector is impossible; the
+                  relay links prop accounts via Tradovate's sign-in ("Link Demo").
+PURPOSE:          Port the proven V5 entry chain to Pine, wire it to Lucid
+                  through a relay with broker-side brackets, make hedging
+                  impossible by construction, keep the Java engine as the
+                  parity oracle + research lab, and hand the owner a runbook
+                  that goes from zero to a live Lucid eval safely.
+TOTAL AGENTS:     9  (00–01 Fable map → 02–05 Opus build → 06–07 Fable verify
+                  → 08 Fable sign-off)
+MODEL TOPOLOGY:   Fable 5.1 = MAP + VERIFY + SIGN-OFF (00, 01, 06, 07, 08).
+                  Opus = BUILD (02–05). Opus never marks its own work ✅.
+                  Fable never merges an Opus PR it has not re-verified.
+TARGET END STATE:
+  (a) dist/LucidICT_v6.pine compiles on TradingView with zero errors/warnings
+      and repaints NOTHING (bar-close entries, lookahead_off HTF).
+  (b) On the real MNQ tape, Pine trades vs Java golden signals agree within
+      Appendix E tolerance (≥ 90 % signal match, 0 opposite-direction
+      disagreements, every mismatch explained in PARITY_REPORT.md).
+  (c) Every order the relay receives carries a stop at submission.
+  (d) Opposing exposure across instruments OR accounts is impossible by design
+      (Invariant I1), proven by test + by relay configuration.
+  (e) Flat by 16:40 ET every day, no entries after 16:30 ET, proven in demo.
+  (f) Topstep live path is removed from runtime and fails loud if invoked.
+  (g) docs/RUNBOOK_TRADINGVIEW.md lets the owner go live without asking Claude.
+
+ARCHITECTURE (V6):
+
+        ┌──────────────────────── TradingView (cloud) ────────────────────────┐
+        │  Pine v6 strategy on MNQ1! (5m exec / 1m+HTF via request.security)  │
+        │   sessions → levels → raid score → MSS → displacement → FVG/OTE     │
+        │   → bias → SMT(MES, data only) → sizing → AccountProfile caps       │
+        │   strategy.entry/exit(alert_message = relay payload)                │
+        └──────────────────────────────┬──────────────────────────────────────┘
+                                       │ webhook (HTTPS POST, on order fill)
+                                       ▼
+        ┌──────────────── Relay (CrossTrade, cloud) ──────────────────────────┐
+        │  auth (secret key) → strategy sync (flatten on desync) →            │
+        │  account controls (max qty, daily loss, kill switch) →              │
+        │  native Tradovate bracket (SL/TP at broker) → N linked accounts     │
+        └──────────────────────────────┬──────────────────────────────────────┘
+                                       ▼
+                     Tradovate (Lucid LucidFlex accounts)
+
+        Java (local, NOT in the live path): backtest, Monte Carlo, optimisation,
+        GOLDEN SIGNAL export, PARITY harness vs TradingView trade export.
+
+================================================================================
+SECTION 0 — THE EXECUTION PROTOCOL  ("READ THIS FIRST")
+================================================================================
+
+You are Claude Code operating as a PRINCIPAL-LEVEL quant + platform engineer
+who has shipped Pine Script strategies to real money. "It compiles" is not
+evidence. A parity diff against the Java tape is evidence. A demo fill with
+the bracket visible at the broker is evidence. A doc citation with a URL and
+a retrieval date is evidence.
+
+0.1  THE GOLDEN LOOP  (Fable → Opus → Fable)
+  STEP 1  Read the PROGRESS LEDGER (Section 1).
+  STEP 2  Find the FIRST agent whose status is not ✅ COMPLETE (an agent
+          marked ⛔ OWNER-ACTION is skipped until the owner supplies input;
+          agents that do not depend on it continue).
+  STEP 3  Obey the agent's MODEL ROLE (Fable maps/verifies and may write only
+          harnesses, fixtures, tests, docs; Opus builds inside its ownership
+          map and marks 🔄 READY-FOR-FABLE, never ✅).
+  STEP 4  Execute EVERY task of that agent, in order, end-to-end.
+  STEP 5  Run EVERY acceptance criterion; paste real evidence into Appendix A.
+  STEP 6  Commit on the agent's branch → push → PR --base Main → squash-merge
+          (Opus PRs merge ONLY after a Fable agent stamps FABLE-VERIFIED).
+  STEP 7  Update the LEDGER.
+  STEP 8  RETURN TO STEP 1. Do NOT stop. Do NOT ask "shall I continue?".
+  ONLY STOPPING CONDITION: all nine agents ✅ AND Appendix F fully green,
+  OR every remaining agent is blocked on a ⛔ OWNER-ACTION — then print the
+  OWNER ACTION LIST (Appendix D) and stop.
+  RESUME: re-read the ledger + Appendix A, `git fetch && git checkout Main &&
+  git pull`, resume at the first agent that is not ✅. Never trust memory
+  over the ledger.
+
+0.2  CRITICAL RULES
+  R1  NEVER skip an agent. NEVER reorder phases.
+  R2  NEVER mark a criterion ✅ without evidence in Appendix A.
+  R3  NEVER weaken a SACRED INVARIANT (Section 2). If a task appears to need
+      it, mark ⛔ and explain; do not improvise.
+  R4  NEVER state a Lucid, Tradovate, TradingView or relay rule from memory.
+      Every rule used in code cites docs/LUCID_RULES.md or
+      docs/PLATFORM_FACTS.md, which cite the vendor URL + retrieval date.
+  R5  NEVER commit a secret: relay keys, webhook URLs, Tradovate logins,
+      account IDs. Use placeholders (<RELAY_SECRET>, <ACCOUNT_1>). Add a
+      pre-commit grep (Agent 05) that fails on key-shaped strings.
+  R6  NEVER let any code path place a Topstep order. Removed or fail-loud.
+  R7  ALWAYS build both Java modules + run the full test suite before every
+      PR. Red build = no PR. A regression is a blocker.
+  R8  ALWAYS keep Pine as modular source in /pine/src and ship ONE pasteable
+      artefact /pine/dist/LucidICT_v6.pine produced by the build script
+      (Agent 02). Never hand-edit dist/.
+  R9  ALWAYS write times in America/New_York in code. Owner's chart is CT
+      (ET − 1 h). Every doc that shows a time shows ET and CT.
+  R10 A ⛔ never halts the loop; it names an exact owner action.
+  R11 After every agent: "Return to the GOLDEN LOOP STEP 1."
+
+0.3  GIT + PR WORKFLOW (one branch per agent)
+  git checkout Main && git pull
+  git checkout -b feat/agent-NN-v6-<short-name>
+  ... work ...  build both modules ... run pine build ... run tests ...
+  git add -A && git commit -m "agent-NN-v6: <summary>"
+  git push -u origin feat/agent-NN-v6-<short-name>
+  gh pr create --base Main --head feat/agent-NN-v6-<short-name> \
+               --title "agent-NN-v6: <summary>" --body "<evidence summary>"
+  Fable merge: gh pr merge <n> --squash --delete-branch ; git checkout Main && git pull
+  MERGE ORDER for Opus PRs: 02 → 03 → 04 → 05 (rebase each on Main).
+
+0.4  RUN COMMANDS
+  Java:   cd trading-engine && ./gradlew clean build ; cd ../api-backend && ./gradlew build
+  Pine:   python3 tools/pine_build.py            # → pine/dist/LucidICT_v6.pine
+          python3 tools/pine_lint.py pine/dist/LucidICT_v6.pine   # static checks (Agent 02)
+  Golden: ./gradlew :trading-engine:test --tests '*GoldenSignalExport*'   # → parity/java_signals.csv
+  Parity: python3 tools/pine_parity.py parity/java_signals.csv parity/tv_trades.csv
+  Pine CANNOT be executed in this environment. TradingView is the only
+  compiler/runtime. Any step that needs a compile or a Strategy Tester run is
+  an OWNER-ACTION with exact click-by-click steps (Appendix D).
+
+================================================================================
+SECTION 1 — PROGRESS LEDGER
+================================================================================
+
+Status markers: ⬜ NOT STARTED | 🔄 IN PROGRESS | 🔄 READY-FOR-FABLE (Opus only)
+                | ✅ COMPLETE (Fable stamps) | ⛔ OWNER-ACTION (with exact ask)
+
+PHASE 0 — FABLE MAP  (00 and 01 have zero dependencies → may run in parallel)
+  [⬜] Agent 00 — Fable — Port Map + Golden Signal Oracle
+  [⬜] Agent 01 — Fable — Venue Truth: Lucid + TradingView + Relay facts
+
+PHASE 1 — OPUS BUILD  (sequential: 02 → 03 → 04; 05 parallel with 02–04)
+  [⬜] Agent 02 — Opus — Pine Core Library (ICT detectors)
+  [⬜] Agent 03 — Opus — Pine Strategy, Sizing + AccountProfile Envelope
+  [⬜] Agent 04 — Opus — Relay Payload Adapter + Order Lifecycle
+  [⬜] Agent 05 — Opus — Java Repurpose: Topstep Out, Lucid Profiles, Parity Harness
+
+PHASE 2 — FABLE VERIFY
+  [⬜] Agent 06 — Fable — Parity Verification (Java tape vs TradingView)
+  [⬜] Agent 07 — Fable — Relay + Demo Safety Drill
+
+PHASE 3 — SIGN-OFF
+  [⬜] Agent 08 — Fable — Runbook, Go-Live Gate, Final Sign-off
+
+DEPENDENCY GRAPH:
+  00 ─┬─▶ 02 ─▶ 03 ─▶ 04 ─┬─▶ 06 ─▶ 07 ─▶ 08
+  01 ─┘                   │
+  00 ─────▶ 05 ───────────┘   (05 needs 00's golden export; 01's Lucid facts)
+
+================================================================================
+SECTION 2 — SACRED INVARIANTS  (never weakened; each has a named test)
+================================================================================
+
+  I1  NO OPPOSING EXPOSURE, EVER. Across every instrument AND every linked
+      account, net exposure is one direction or flat. V6 enforces this BY
+      CONSTRUCTION:
+        • exactly ONE Pine strategy instance trades, on ONE root (MNQ);
+        • correlated symbols (MES/ES) are read via request.security for SMT
+          and NEVER traded;
+        • that one instance feeds ALL linked accounts, same side, same time;
+        • no reversal in one action: an exit must fill (strategy flat) before
+          an opposite entry is allowed, and never on the same bar;
+        • the owner must not trade those accounts manually while the bot is on.
+      Why this is sacred: the owner's Topstep account was revoked on a hedging
+      suspicion. Lucid also bans hedging and detects it automatically. The Java
+      TradingRiskManager blocked opposite ES/NQ positions inside one engine.
+      Separate TradingView charts share NO state, so that protection does not
+      carry over on its own. A second traded root requires the V7 exposure
+      gateway (Section 9, deferred) — not a second chart.
+      TEST: tools/pine_lint.py asserts exactly one strategy() and zero
+      order calls on any request.security symbol; Agent 07 drill D6.
+  I2  EVERY ENTRY CARRIES A BROKER-SIDE STOP AT SUBMISSION. The stop lives at
+      Tradovate (native bracket via the relay), not only in TradingView. If
+      TradingView or the relay goes dark, the stop is still working.
+      TEST: Agent 04 payload unit tests; Agent 07 drill D2.
+  I3  FLAT-BY TIME. No new entries at or after 16:30 ET (15:30 CT). Flatten
+      everything at 16:40 ET (15:40 CT). Lucid's own forced flat is 16:45 ET
+      on Tradovate (verify in Agent 01). Never rely on Lucid's liquidation.
+      TEST: Pine time-gate unit cases (Agent 03); Agent 07 drill D4.
+  I4  SIZE CAP. contracts ≤ min(AccountProfile.maxContracts,
+      AccountProfile.scalingCap, risk-derived size). Micro-equivalent math is
+      explicit (1 mini = 10 micros).
+  I5  NO HFT SIGNATURE. Max entries per session (default 3), min 60 s between
+      any two orders from the strategy, entries only on confirmed bar close.
+  I6  NO MICROSCALPING SIGNATURE. Lucid flags when > 50 % of profit comes from
+      trades held ≤ 5 s. Guards: min stop distance and min T1 distance in
+      ticks (per instrument), no strategy-initiated exit within 30 s of a fill,
+      Agent 06 reports hold-time distribution from the parity run.
+  I7  ACCOUNT-AGNOSTIC STRATEGY CORE. Detector and entry logic never read the
+      account plan. The plan exists ONLY in the AccountProfile input group and
+      only affects caps (I3, I4) and soft loss limits. Switching Flex → Pro →
+      anything else = change one dropdown (or "CUSTOM" numbers). Nothing else.
+  I8  NO REPAINT. Entries evaluate on barstate.isconfirmed. Every HTF series
+      uses request.security(..., lookahead = barmerge.lookahead_off) on the
+      previous completed HTF bar ([1]) unless the logic is proven safe.
+  I9  NO SECRETS IN GIT (R5). NO TOPSTEP ORDERS (R6).
+
+DEFENCE IN DEPTH (all four layers are required; never rely on a lower one):
+  L1 Pine (soft): sizing, session gates, strategy.risk.max_intraday_loss,
+     max entries/day, flat-by.
+  L2 Relay (hard): strategy sync with out-of-sync → flatten, max position
+     size per account, daily loss auto-flatten (if offered), kill switch.
+  L3 Broker (per trade): native bracket SL/TP at Tradovate.
+  L4 Lucid (last resort): its own liquidation. Reaching L4 = incident.
+
+================================================================================
+SECTION 3 — PRE-FLIGHT FINDINGS  (from the 2026-11-05 repo survey; Agent 00 confirms)
+================================================================================
+  PF-01 connector/TopstepConnector.java (2,439 lines) + TopstepCredentials are
+        the ONLY live execution path. Tests depend on FakeTopstepX
+        (ContractBindingGuardTest, ConnectorFailLoudTest, CancelOrderTruthTest,
+        BarsBackoffTest, Bracket*Test, AdoptedPositionReleaseTest …).
+  PF-02 Risk profiles are Topstep-hardcoded: RiskProfile.topstep50k*()
+        selected in EngineFacade (≈ lines 756–759), SimEngineRunner (≈ 122),
+        MonteCarloSimulator (≈ 378), MonteCarloScalpComparison (≈ 109).
+  PF-03 risk/TradingRiskManager.java blocks opposite positions across
+        correlation groups (ES↔NQ, GC↔SI↔MGC, inverse GC↔DX). This is
+        engine-internal state that Pine cannot share across charts → I1.
+  PF-04 engine/MultiInstrumentEngine.java trades ALL instruments at once
+        (max 1 per instrument, 3 total). This model must NOT be reproduced
+        in Pine V6 (I1). V6 = single traded root.
+  PF-05 Real tape exists: trading-engine/src/test/resources/tape/
+        real_MNQ_1m.json, real_MES_1m.json → parity oracle input.
+  PF-06 GOLDEN CASES G1–G3 (V5 Appendix E) carry forward as parity targets.
+  PF-07 V5 R4's Topstep envelope (DLL/MLL, 14:45–17:00 CT block) is obsolete.
+        Replaced by I3/I4 + the Lucid AccountProfile.
+  PF-08 Package root is com.topstep.* across ~66k lines. Cosmetic. DO NOT
+        rename in V6 (blast radius, zero trading value). Deferred to V7.
+  PF-09 The dashboard reads engine state. With TradingView live, the engine is
+        not in the live path → the dashboard becomes a research/backtest
+        viewer in V6. Live monitoring = TradingView panel + relay Alert
+        History. (Deferred: relay REST → dashboard live view, V7.)
+  PF-10 Owner timezone is now America/Chicago (V5 notes said PT). All docs ET+CT.
+
+================================================================================
+SECTION 4 — THE AGENTS
+================================================================================
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ MAIN AGENT: Migration Architect (this prompt, executed via the Golden Loop)  │
+│ Goal: the owner pastes ONE Pine file, creates ONE alert, links accounts in   │
+│       the relay, and the V5 entry chain trades Lucid safely and identically  │
+│       to the Java engine's proven logic.                                     │
+│ Depends on: 00 ∥ 01 → 02 → 03 → 04 (∥ 05) → 06 → 07 → 08                     │
+│ Final output: merged PRs, pine/dist/LucidICT_v6.pine, PARITY_REPORT.md,      │
+│       docs/RUNBOOK_TRADINGVIEW.md, Appendix F all green.                     │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+--------------------------------------------------------------------------------
+AGENT 00 — FABLE — PORT MAP + GOLDEN SIGNAL ORACLE
+--------------------------------------------------------------------------------
+ROLE:      Principal quant who knows both the Java engine and Pine's limits.
+QUESTION:  "Exactly which logic makes the V5 engine take a trade today, and
+            how does each piece map to Pine v6?"
+INPUTS:    Repo @ Main; V5 prompt + DIAGNOSIS_V5.md + RUNBOOK_V5.md;
+           Trade_Entry_Requirements.txt; EngineConfig (effective defaults);
+           tape real_MNQ_1m.json / real_MES_1m.json.
+TASKS:
+  00.1  Trace the REAL live decision path (LiveEngineRunner → strategy →
+        validation → risk → BracketOrderManager) with the EFFECTIVE config
+        that V5 proved trades (log it, cite file:line). Ignore dead code.
+  00.2  Build docs/v6/PORT_MAP.md: one row per gate/detector/parameter:
+          | Java class:method | what it decides | BLOCKING/SCORING | params |
+          | Pine plan: PORT_EXACT / PORT_APPROX / RELAY / DROP | reason |
+        Mandatory classifications to resolve explicitly:
+          • news gating (no news feed in Pine → DROP for LucidFlex, which
+            allows news; keep an optional manual blackout-window input),
+          • Monte Carlo / optimisation / journal (DROP from Pine, stay Java),
+          • adopted-position logic (RELAY: strategy sync replaces it),
+          • TrailingStopManager (PORT_APPROX via strategy.exit trail_* OR
+            relay ATM trailing — choose one, justify),
+          • TradingRiskManager correlation block (replaced by I1 by design).
+  00.3  Document Pine v6 constraints that bite this port, each with a doc URL:
+        request.security call limits, max_bars_back, loop/exec-time limits,
+        array/map limits, strategy order-fill alert timing, what
+        process_orders_on_close / calc_on_every_tick change.
+  00.4  Document the Java ENTRY TYPE (limit at OTE vs market on confirm). The
+        V6 default is MARKET_ON_CONFIRM (bar-close entry inside OTE after
+        confirmation) because a TradingView order-fill alert fires only after
+        TV's emulator fills — a TV limit order would reach the broker late as
+        a market order. Record the expected parity impact (entry price drift).
+  00.5  Write GoldenSignalExport (test-scope harness): replay real_MNQ_1m.json
+        (+ MES for SMT) through the REAL runner path, effective config, and
+        write parity/java_signals.csv:
+          ts_et, side, entry, stop, t1, t2, size_micros, raid_level_type,
+          raid_score, killzone, bias, gate_proof (pipe-joined)
+        Also export parity/bars_mnq_1m.csv and parity/bars_mes_1m.csv so the
+        owner can confirm TradingView shows the same bars (data-vendor drift
+        check).
+  00.6  Record G1–G3 expected values against the export (V5 App. E).
+OUTPUTS:   docs/v6/PORT_MAP.md, docs/v6/PINE_CONSTRAINTS.md,
+           GoldenSignalExport test, parity/java_signals.csv, bars CSVs.
+SUCCESS:   Every BLOCKING gate on the live path has a PORT_MAP row; export is
+           deterministic (two runs → byte-identical CSV, sha256 in App. A);
+           ≥ 1 signal exists (if 0, STOP: V5 regression, open ⛔ with evidence).
+HAND-OFF:  PORT_MAP + constraints → 02/03; java_signals.csv → 05/06.
+FAILURE:   If a gate's behaviour cannot be determined from code, write a
+           targeted test that pins it, then map it. Never guess.
+
+--------------------------------------------------------------------------------
+AGENT 01 — FABLE — VENUE TRUTH: LUCID + TRADINGVIEW + RELAY FACTS
+--------------------------------------------------------------------------------
+ROLE:      Compliance-minded platform researcher.
+QUESTION:  "What exactly do Lucid, TradingView and the relay allow, require
+            and enforce — today — and what are the precise numbers?"
+INPUTS:    Web (vendor docs only as primary sources), owner's plan: LucidFlex 50K.
+TASKS:
+  01.1  docs/LUCID_RULES.md from support.lucidtrading.com (URL + retrieval
+        date per rule). Required entries:
+          • automation / bots / copiers policy (exact wording, short quote);
+          • hedging definition (same instrument across accounts? correlated
+            instruments? long/short across accounts?) — if ambiguous, ⛔
+            OWNER-ACTION: "ask Lucid support in writing; paste reply";
+          • HFT and microscalping definitions + detection thresholds;
+          • forced flat time on Tradovate; overnight rule;
+          • LucidFlex 50K numbers for EVAL and FUNDED: profit target, Max Loss
+            Limit, drawdown type (EOD trailing?) + lock rule, daily loss limit
+            (none / optional?), max contracts (minis/micros), funded scaling
+            plan table, consistency rules, min days;
+          • news-trading rule for Flex; max accounts per household.
+        Third-party sites disagree on Flex 50K numbers (e.g. MLL $2,000 vs
+        $2,500; 4 minis vs 9 contracts). Lucid's own pages win. Record both
+        eval and funded values separately.
+  01.2  docs/PLATFORM_FACTS.md:
+          • TradingView: plan tier needed for webhooks; 2FA requirement;
+            alert limits per plan; whether alerts expire; that an alert
+            snapshots the script version + inputs at creation (editing the
+            script requires re-creating the alert) — verify; real-time CME
+            data requirement for MNQ/MES (delayed data = late alerts);
+            Strategy Tester trade-list export availability.
+          • Relay (CrossTrade default): Tradovate destination syntax, auth
+            key, strategy sync (sync_strategy / out_of_sync options),
+            bracket / take_profit / stop_loss fields, multi-account fan-out +
+            per-account qty multipliers, account controls (max qty, daily
+            loss, kill switch), rate limits, Alert History, cost per plan,
+            how prop accounts link ("Link Demo").
+          • Fallback relays (PickMyTrade, TradersPost): payload format and the
+            same feature checklist, so Agent 04's adapter can switch.
+  01.3  Produce config/lucid_profiles.yaml (data only, no code):
+          LUCID_FLEX_50K_EVAL, LUCID_FLEX_50K_FUNDED (+ 25K/100K/150K if
+          published), each with every number from 01.1 and a source URL.
+OUTPUTS:   docs/LUCID_RULES.md, docs/PLATFORM_FACTS.md, config/lucid_profiles.yaml.
+SUCCESS:   Every number has a vendor URL + date; every ambiguity is a ⛔ with
+           an exact question for the owner to send.
+HAND-OFF:  Profiles → 03 + 05; relay syntax → 04; TradingView facts → 06/07/08.
+FAILURE:   If a vendor page is unreachable, record that and use the most
+           conservative published value, flagged CONSERVATIVE-UNVERIFIED.
+
+--------------------------------------------------------------------------------
+AGENT 02 — OPUS — PINE CORE LIBRARY (ICT DETECTORS)
+--------------------------------------------------------------------------------
+ROLE:      Senior Pine v6 engineer; deterministic, non-repainting code only.
+QUESTION:  "Can every PORT_EXACT/PORT_APPROX detector be expressed in Pine v6
+            so it produces the same events as Java on the same bars?"
+INPUTS:    PORT_MAP.md, PINE_CONSTRAINTS.md, Java sources it references.
+OWNERSHIP: pine/src/**, tools/pine_build.py, tools/pine_lint.py.
+TASKS:
+  02.1  Layout (Pine has no #include; modular source + concatenation build):
+          pine/src/00_header.pine      //@version=6, strategy() declaration
+          pine/src/10_inputs.pine      input groups (Section 6 schema)
+          pine/src/20_time.pine        ET sessions, killzones, SB windows (DST-safe
+                                       via "America/New_York" tz args everywhere)
+          pine/src/30_levels.pine      PDH/PDL, PWH/PWL, Asia/London/NY H/L,
+                                       equal highs/lows (cluster tolerance in ticks)
+          pine/src/40_raid.pine        raid detection + quality score 1–10
+                                       (PRD FR3 weights, tick-based tolerance)
+          pine/src/50_structure.pine   swings, MSS, displacement (ATR multiple)
+          pine/src/60_fvg_ote.pine     FVG lifecycle, OTE band, PD array
+          pine/src/70_bias_smt.pine    HTF bias (lookahead_off, [1]), SMT vs MES
+          pine/src/80_strategy.pine    (Agent 03)
+          pine/src/90_alerts.pine      (Agent 04)
+          pine/src/95_debug.pine       optional labels/table, input-toggled
+        tools/pine_build.py concatenates in order → pine/dist/LucidICT_v6.pine,
+        stamps git sha + build time in a header comment.
+  02.2  Port each detector with the SAME parameters as Java's effective config;
+        every parameter is an input with the Java default and a tooltip naming
+        the Java key (EngineConfig key) it mirrors.
+  02.3  Tick math everywhere (syminfo.mintick); no percentage tolerances
+        (the PRD's 2 % tolerance is banned).
+  02.4  tools/pine_lint.py static checks (regex/AST-light, fails CI):
+          • exactly one strategy( call; //@version=6 present;
+          • every request.security has lookahead=barmerge.lookahead_off;
+          • no strategy.entry/order outside 80_strategy;
+          • no order call references a request.security symbol (I1);
+          • every strategy.entry is guarded by barstate.isconfirmed (I8);
+          • every strategy.entry has a paired strategy.exit with stop= (I2);
+          • no hard-coded secrets / URLs.
+  02.5  Debug overlay (off by default): raid markers with score, OTE band,
+        MSS line, gate table — so the owner can eyeball a G1 replay.
+OUTPUTS:   pine/src/*, pine/dist/LucidICT_v6.pine, build + lint tools, README
+           section "Building the Pine file".
+SUCCESS:   Lint passes; build deterministic; ⛔ OWNER-ACTION OA-1 (compile on
+           TradingView, screenshot of zero errors) issued with steps.
+HAND-OFF:  Detector series (raidScore, mssConfirmed, oteLow/High, bias, smt)
+           exposed as named variables for 03.
+FAILURE:   If a detector exceeds Pine limits, simplify per PORT_MAP's
+           PORT_APPROX row and record the expected parity impact.
+
+--------------------------------------------------------------------------------
+AGENT 03 — OPUS — PINE STRATEGY, SIZING + ACCOUNTPROFILE ENVELOPE
+--------------------------------------------------------------------------------
+ROLE:      Senior Pine engineer + risk engineer.
+QUESTION:  "Given a confirmed setup, what exact order (side, size, stop,
+            targets) is placed, and is every invariant enforced in Pine?"
+INPUTS:    Agent 02 series; config/lucid_profiles.yaml; PORT_MAP risk rows.
+OWNERSHIP: pine/src/10_inputs.pine (risk + AccountProfile groups),
+           pine/src/80_strategy.pine.
+TASKS:
+  03.1  Entry rule = V5 mandatory chain (raid score ≥ threshold → MSS →
+        displacement → price in OTE/PD array → bias agrees → killzone open),
+        evaluated on confirmed bar close only. ENTRY_MODE input:
+        MARKET_ON_CONFIRM (default) | BROKER_LIMIT (disabled in V6, stub +
+        TODO V7 — see Section 9).
+  03.2  Stops/targets from the Java StopCalculator/AdaptiveStop logic as
+        mapped; T1/T2 as in V5; RR band enforced (reject if RR(T1) outside
+        band). Enforce min stop + min T1 distance in ticks (I6).
+  03.3  Sizing: contracts = floor(riskPerTrade$ / (stopTicks × tickValue)),
+        then cap by I4. Micros by default (MNQ). Zero size → no trade (log).
+  03.4  AccountProfile input group (I7): dropdown LUCID_FLEX_50K_EVAL |
+        LUCID_FLEX_50K_FUNDED | LUCID_FLEX_25K | … | CUSTOM. Each preset sets
+        maxContracts, scalingCap, softDailyLoss$, drawdownBuffer$. CUSTOM
+        exposes raw numbers. Presets are generated from lucid_profiles.yaml
+        by pine_build.py (no hand-typed numbers in Pine).
+  03.5  Built-ins: strategy.risk.max_intraday_loss(softDailyLoss$,
+        strategy.cash) (default 30 % of MLL even though Flex has no DLL —
+        owner can raise it), strategy.risk.max_intraday_filled_orders,
+        max entries/session (I5), min seconds between orders (I5).
+  03.6  Time gates (I3): no entries ≥ 16:30 ET, strategy.close_all at 16:40 ET
+        with alert payload FLATTEN; also close at a configurable pre-weekend
+        time on Friday. Implement with time(timeframe.period, session,
+        "America/New_York") — never chart-timezone arithmetic.
+  03.7  I1 mechanics: pyramiding=0; opposite entry blocked unless
+        strategy.position_size == 0 AND the flat state has persisted ≥ 1
+        confirmed bar.
+  03.8  Unit-style verification: a Pine "self-test" mode (input) that plots
+        assertion failures as red labels for known bar sequences; document the
+        manual check in Appendix D OA-2.
+OUTPUTS:   80_strategy.pine, inputs, profile generation in pine_build.py.
+SUCCESS:   Lint passes; every invariant I1–I8 maps to a line range (table in
+           App. A); OA-2 (Strategy Tester run on MNQ1! with fixed date range,
+           export List of Trades → parity/tv_trades.csv) issued.
+HAND-OFF:  Order events (entry/exit/flatten) with fields → 04.
+FAILURE:   If a Java risk rule cannot be expressed, move it to L2 (relay) and
+           record it in PORT_MAP as RELAY with the exact relay setting.
+
+--------------------------------------------------------------------------------
+AGENT 04 — OPUS — RELAY PAYLOAD ADAPTER + ORDER LIFECYCLE
+--------------------------------------------------------------------------------
+ROLE:      Integration engineer who assumes every network hop fails.
+QUESTION:  "What exact message reaches the relay for every order event, and
+            does it keep TradingView, relay and broker in sync under failure?"
+INPUTS:    PLATFORM_FACTS.md relay syntax; Agent 03 order events.
+OWNERSHIP: pine/src/90_alerts.pine, docs/v6/RELAY_SETUP.md,
+           tools/payload_check.py.
+TASKS:
+  04.1  Build the payload INSIDE Pine and pass it via alert_message= on every
+        strategy.entry / strategy.exit / strategy.close_all; the alert's
+        message field is {{strategy.order.alert_message}} with condition
+        "Order fills and alert() function calls". If the relay docs say an
+        empty alert_message fails the alert, lint must forbid order calls
+        without alert_message.
+  04.2  Payload contents (CrossTrade Tradovate syntax verified in 01.2):
+        key=<RELAY_SECRET input>; destination=tradovate; account(s) from input;
+        instrument mapping MNQ1! → the relay's contract form; action; qty;
+        stop_loss / take_profit (native bracket, I2); sync_strategy=true;
+        out_of_sync=flatten; market_position fields for sync. Secret is an
+        input with display=display.none and never logged/plotted.
+  04.3  Adapter abstraction: RELAY input = CROSSTRADE (default) | PICKMYTRADE
+        | TRADERSPOST; one builder function per relay, same order-event struct.
+  04.4  Lifecycle table in RELAY_SETUP.md for: entry fill, T1 partial, stop
+        fill at broker (TV doesn't know → sync handles), relay down, duplicate
+        alert, TradingView alert stopped, Tradovate rejection, flatten at
+        16:40 ET, owner kill switch. Each row: expected state at TV / relay /
+        broker + the owner's action.
+  04.5  tools/payload_check.py: parses sample payloads emitted by the Pine
+        debug mode (owner copies 3 from Alert log) and validates field-by-field
+        against the relay spec (required keys, stop present, qty ≤ cap).
+  04.6  Multi-account: one strategy → N accounts via the relay's fan-out with
+        per-account qty multiplier; document setting LucidFlex accounts in the
+        relay. NEVER two strategies on overlapping accounts (I1).
+OUTPUTS:   90_alerts.pine, RELAY_SETUP.md, payload_check.py + tests.
+SUCCESS:   Every order path in 80_strategy emits a payload with a stop (lint +
+           payload_check tests green); lifecycle table complete.
+HAND-OFF:  Payload spec + relay settings → 07; RELAY_SETUP.md → 08.
+FAILURE:   If the relay lacks native brackets for Tradovate, ⛔ and switch the
+           default relay via 04.3 — never ship entries without broker stops.
+
+--------------------------------------------------------------------------------
+AGENT 05 — OPUS — JAVA REPURPOSE: TOPSTEP OUT, LUCID PROFILES, PARITY HARNESS
+--------------------------------------------------------------------------------
+ROLE:      Senior Java engineer; minimal blast radius.
+QUESTION:  "How does the Java engine stop being a Topstep trader and become
+            a Lucid-calibrated lab and parity oracle, without breaking tests?"
+INPUTS:    PF-01/02/09; config/lucid_profiles.yaml; Agent 00 harness.
+OWNERSHIP: trading-engine/** (connector, risk, config, test), api-backend
+           control endpoints, tools/pine_parity.py, .githooks/pre-commit.
+TASKS:
+  05.1  LIVE mode: remove TopstepConnector from runtime wiring; LIVE start
+        fails loud with "Topstep removed in V6 — live trading runs on
+        TradingView (see RUNBOOK_TRADINGVIEW.md)". Move TopstepConnector,
+        TopstepCredentials, FakeTopstepX + dependent tests to a `legacy/`
+        source set excluded from the build OR delete them; keep the tests
+        whose LOGIC is connector-agnostic by retargeting them at MockConnector.
+        Count tests before/after; any lost coverage is listed with reason.
+  05.2  RiskProfile.lucidFlex50kEval()/lucidFlex50kFunded() (+ sizes) loaded
+        from config/lucid_profiles.yaml — no hand-typed numbers. Replace the
+        topstep50k* selections (EngineFacade, SimEngineRunner, MonteCarlo*);
+        keep topstep50k* deprecated only if tests need them.
+  05.3  Backtests and Monte Carlo default to LUCID_FLEX_50K_EVAL; model EOD
+        trailing MLL + lock rule exactly per LUCID_RULES.md.
+  05.4  tools/pine_parity.py: match Java signals vs TradingView trades by
+        side + time window (± 1 exec bar) and report entry/stop/T1 deltas in
+        ticks, unmatched both ways, hold-time distribution (I6), and G1–G3.
+        Output PARITY_REPORT.md. Unit tests with synthetic CSVs.
+  05.5  .githooks/pre-commit + CI step: fail on key-shaped strings, webhook
+        URLs, "key=" with non-placeholder values (R5).
+  05.6  api-backend/dashboard: control endpoints for LIVE return 410 with the
+        V6 message; dashboard shows "Research mode — live trading on
+        TradingView". No dashboard redesign in V6.
+OUTPUTS:   PR with build + full test suite green, parity tool, hooks.
+SUCCESS:   ./gradlew build green in both modules; zero runtime references to
+           TopstepConnector (grep in App. A); parity tool tests green.
+HAND-OFF:  pine_parity.py → 06; Lucid-calibrated backtest numbers → 08.
+FAILURE:   If removing a Topstep test drops coverage of shared logic, port the
+           test to MockConnector first, then remove.
+
+--------------------------------------------------------------------------------
+AGENT 06 — FABLE — PARITY VERIFICATION (JAVA TAPE vs TRADINGVIEW)
+--------------------------------------------------------------------------------
+ROLE:      Skeptical verifier; trusts only diffs.
+QUESTION:  "On the same bars, does the Pine strategy take the same trades as
+            the Java engine — and where it doesn't, why, and is it safe?"
+INPUTS:    parity/java_signals.csv (00), parity/tv_trades.csv (OA-2), bars
+           CSVs, pine_parity.py (05), merged 02–05 PRs.
+TASKS:
+  06.1  Data drift check: compare owner-exported TradingView bars (OA-3) vs
+        tape bars; quantify; if > 1 tick median drift, results are judged
+        with that tolerance and noted.
+  06.2  Run pine_parity.py; produce PARITY_REPORT.md: match rate, tick
+        deltas, unmatched lists, G1–G3 verdicts, hold-time histogram (I6).
+  06.3  Every mismatch gets a root cause: DATA / ENTRY_MODE / PORT_APPROX /
+        BUG. BUG → reject the owning Opus PR with a failing case; the loop
+        returns to that agent.
+  06.4  Hard fails: ANY opposite-direction disagreement on a matched setup;
+        ANY trade without a stop; ANY entry after 16:30 ET; ANY size above cap.
+OUTPUTS:   PARITY_REPORT.md, verdict in App. A, FABLE-VERIFIED stamps on 02–05.
+SUCCESS:   Target end-state (b) met; zero hard fails.
+HAND-OFF:  Verified dist/LucidICT_v6.pine sha → 07.
+FAILURE:   Without OA-2/OA-3 → ⛔ with exact steps; continue to 07 tasks that
+           don't need it (relay drill on demo can run in parallel).
+
+--------------------------------------------------------------------------------
+AGENT 07 — FABLE — RELAY + DEMO SAFETY DRILL
+--------------------------------------------------------------------------------
+ROLE:      Release engineer running a failure drill before money is at risk.
+QUESTION:  "Does the full chain behave correctly — including when things
+            break — on a NON-Lucid demo first, then one Lucid eval at 1 micro?"
+INPUTS:    RELAY_SETUP.md, payload spec, verified Pine sha.
+TASKS (each is an owner-assisted drill with exact steps in App. D; Fable
+        writes the script, the owner clicks, Fable verifies screenshots/logs):
+  D1  Single entry via relay test tool → order at broker, correct qty.
+  D2  Bracket present at the broker immediately after fill (I2).
+  D3  Desync: manually close the position at the broker → next signal →
+      relay flattens/resyncs per out_of_sync setting.
+  D4  Flat-by: force the 16:40 ET flatten (replay or wait) → flat everywhere.
+  D5  Kill switch: relay pause + TradingView alert stop → no orders.
+  D6  I1 drill: confirm only one strategy alert exists for the linked
+      accounts; attempt an opposite signal while in a position → blocked.
+  D7  Duplicate alert / rejected order → no double position.
+  D8  Alert re-creation after a script edit → new version active (verify
+      the version stamp in the payload/header comment).
+OUTPUTS:   DRILL_REPORT.md with evidence per drill.
+SUCCESS:   D1–D8 PASS on demo; then D1, D2, D4 PASS on one Lucid eval at 1 micro.
+HAND-OFF:  Drill results → 08.
+FAILURE:   Any FAIL routes to the owning agent; never "accept with caveat".
+
+--------------------------------------------------------------------------------
+AGENT 08 — FABLE — RUNBOOK, GO-LIVE GATE, FINAL SIGN-OFF
+--------------------------------------------------------------------------------
+ROLE:      Principal engineer writing for an owner who will run this alone.
+QUESTION:  "Can the owner set up, run, pause, update and recover this system
+            from the docs alone?"
+TASKS:
+  08.1  docs/RUNBOOK_TRADINGVIEW.md (ET + CT on every time):
+          setup checklist (TradingView plan + 2FA + real-time CME data; relay
+          account; Link Demo for each Lucid account; paste dist file; create
+          the ONE alert with exact settings); daily pre-open checklist;
+          updating the script (re-create alert!); kill switch (3 ways);
+          incident playbook (from 04.4 lifecycle table); what NOT to do
+          (manual trades on bot accounts, second chart with the strategy,
+          editing payloads by hand).
+  08.2  Go-live ladder: Strategy Tester parity ✅ → demo drill ✅ →
+        1 Lucid eval @ 1 micro for 5 sessions with zero rule flags →
+        normal size on that eval → add accounts via relay fan-out.
+  08.3  Update README.md and docs/QUICK_START.md: Topstep sections marked
+        historical; V6 architecture diagram; where the Java lab fits.
+  08.4  Final sign-off: Appendix F all green; ledger all ✅; tag v6.0.0.
+SUCCESS:   Owner can follow the runbook without asking a question (Fable does
+           a cold read and lists any step that needs prior context — fix them).
+
+================================================================================
+SECTION 5 — DEFINITION OF DONE (Appendix F mirrors this)
+================================================================================
+  [ ] dist/LucidICT_v6.pine compiles on TradingView (OA-1 screenshot)
+  [ ] lint: one strategy, lookahead_off, isconfirmed entries, stop on every entry
+  [ ] parity ≥ 90 % match, 0 opposite-direction disagreements, G1 within tolerance
+  [ ] hold-time: < 10 % of trades ≤ 30 s; 0 % of profit from trades ≤ 5 s
+  [ ] D1–D8 PASS on demo; D1/D2/D4 PASS on a Lucid eval at 1 micro
+  [ ] zero runtime TopstepConnector refs; LIVE fails loud with V6 message
+  [ ] lucid_profiles.yaml fully sourced; Java backtests use Lucid profile
+  [ ] no secrets in git (hook + CI green)
+  [ ] RUNBOOK_TRADINGVIEW.md passes Fable cold read
+
+================================================================================
+SECTION 6 — PINE INPUT SCHEMA (Agent 02/03/04 implement exactly these groups)
+================================================================================
+  [Account]   AccountProfile (dropdown), CUSTOM: maxContracts, scalingCap,
+              softDailyLoss$, drawdownBuffer$
+  [Risk]      riskPerTrade$, minStopTicks, minT1Ticks, rrMin, rrMax,
+              maxEntriesPerSession, minSecondsBetweenOrders
+  [Time]      killzones on/off per session, noEntryAfter (16:30 ET),
+              flattenAt (16:40 ET), fridayFlattenAt, manualBlackout windows
+  [Strategy]  every V5 effective parameter, Java key in tooltip
+  [SMT]       smtSymbol (default MES1!), enabled
+  [Relay]     relay (CROSSTRADE|PICKMYTRADE|TRADERSPOST), secret (hidden),
+              accounts (comma list), tradingEnabled
+  [Debug]     overlays, gate table, selfTest
+
+================================================================================
+SECTION 7 — ANTI-PATTERNS (reject any PR that contains one)
+================================================================================
+  AP-1  One chart per instrument, each with its own strategy → hedge risk (I1).
+  AP-2  request.security with lookahead_on or current-bar HTF values → repaint.
+  AP-3  Entries on intrabar ticks (calc_on_every_tick entries) → HFT-like
+        bursts and backtest/live divergence.
+  AP-4  Stops managed only in Pine (strategy.exit) with no broker bracket.
+  AP-5  Hard-coded plan numbers in Pine or Java (must come from the YAML).
+  AP-6  Percentage tolerances for levels (tick-based only).
+  AP-7  Chart-timezone time math; any time not anchored to America/New_York.
+  AP-8  "Fixing" parity by tuning Pine to the tape instead of matching Java logic.
+  AP-9  Secrets in inputs' default values, comments, plots, or commits.
+  AP-10 Reversal in a single order (flip long→short) — always flat first.
+
+================================================================================
+SECTION 8 — OWNER ACTION LIST (Appendix D gives click-by-click steps)
+================================================================================
+  OA-0  Subscribe: TradingView plan with webhooks; enable 2FA; add real-time
+        CME data for MNQ/MES. Create relay account (CrossTrade default).
+  OA-1  Paste dist/LucidICT_v6.pine into Pine Editor → Save → Add to chart
+        (MNQ1!, 5m) → screenshot of compile result.
+  OA-2  Strategy Tester: fixed date range matching the tape → export List of
+        Trades → save as parity/tv_trades.csv (attach to the PR thread).
+  OA-3  Export chart data (MNQ1! and MES1!, 1m, same range) → parity/tv_bars_*.csv.
+  OA-4  Send Lucid support the hedging-definition question from 01.1;
+        paste the reply into docs/LUCID_RULES.md.
+  OA-5  Relay: Link Demo for each Lucid account; set account controls per
+        RELAY_SETUP.md; run drills D1–D8 with Fable's script.
+  OA-6  Do not trade the bot's accounts manually while the alert is active.
+
+================================================================================
+SECTION 9 — EXPLICIT DEFERRALS TO V7 (do NOT build in V6)
+================================================================================
+  • Multi-root trading (NQ + ES + GC …) — requires an owner-controlled
+    exposure gateway (small service between TradingView and the relay that
+    holds net exposure across roots/accounts and rejects opposing orders).
+  • BROKER_LIMIT entry mode (resting OTE limit at Tradovate + cancel on
+    invalidation) via the relay REST API.
+  • Live dashboard fed by the relay's REST API.
+  • Package rename com.topstep → neutral root.
+  • Java engine trading directly (needs a licensed live data feed + relay API).
+
+================================================================================
+APPENDIX A — PER-AGENT VERIFICATION LOG  (append-only; never delete)
+================================================================================
+  A-00  PORT_MAP rows: __ | export sha256 run1/run2: __ / __ | signals: __
+  A-01  Lucid rules sourced: __/__ | ⛔ ambiguities: __
+  A-02  lint output: __ | build sha: __ | OA-1: __
+  A-03  invariant → line-range table: __ | OA-2: __
+  A-04  payload_check results: __ | lifecycle table rows: __
+  A-05  tests before/after: __ / __ | TopstepConnector runtime grep: __
+  A-06  match rate __ % | opposite disagreements __ | G1/G2/G3 __/__/__
+  A-07  D1..D8: __ | Lucid eval D1/D2/D4: __
+  A-08  cold-read issues found/fixed: __ / __ | tag: __
+
+================================================================================
+APPENDIX B — OWNERSHIP MAP
+================================================================================
+  02  pine/src/00–70, 95; tools/pine_build.py; tools/pine_lint.py
+  03  pine/src/10 (risk/account groups), 80; profile generation in pine_build.py
+  04  pine/src/90; docs/v6/RELAY_SETUP.md; tools/payload_check.py
+  05  trading-engine/**; api-backend control; dashboard banner;
+      tools/pine_parity.py; .githooks/; CI
+  Fable (00/01/06/07/08): docs/**, parity/**, config/lucid_profiles.yaml,
+      test-scope harnesses only.
+
+================================================================================
+APPENDIX C — FACTS CARRIED IN FROM THE 2026-11-05 RESEARCH (re-verify in 01)
+================================================================================
+  • TradingView's broker panel is manual-only; strategy alerts are messages,
+    so a webhook relay must place the order.
+  • Tradovate API add-on: live funded brokerage account required; prop and
+    evaluation accounts are not eligible.
+  • Relays link prop accounts on Tradovate's Demo side via Tradovate sign-in.
+  • Lucid: bots and copiers permitted; HFT, microscalping (> 50 % of profit
+    from ≤ 5 s trades) and hedging prohibited; Tradovate positions closed by
+    4:45 PM ET; LucidFlex uses EOD drawdown; LucidFlex 50K is commonly listed
+    at $3,000 target / $2,000 MLL / 4 minis–40 micros (eval) — sources conflict.
+  • Webhooks need a paid TradingView plan and 2FA.
+
+================================================================================
+APPENDIX D — OWNER CLICK-BY-CLICK STEPS  (Agents 02/03/06/07 fill in)
+================================================================================
+  OA-1 … OA-6: exact menus, settings, file names, and what to paste back.
+
+================================================================================
+APPENDIX E — PARITY TOLERANCES
+================================================================================
+  Match window: same side, entry bar within ± 1 execution bar (5m).
+  Entry price: ± 4 ticks (MARKET_ON_CONFIRM vs Java entry type, per 00.4).
+  Stop / T1: ± 2 ticks.  Size: exact after caps.
+  G1 (V5 App. E): bias BEARISH, sweep of 30640 London high score ≥ 5, MSS
+  15:05 ET, entry ≈ 30635.75 (± 4 ticks under MARKET_ON_CONFIRM), T1 30558 ± 1.
+
+================================================================================
+APPENDIX F — FINAL GREEN BOARD  (Agent 08 fills; mirrors Section 5)
+================================================================================
+  [ ] compile  [ ] lint  [ ] parity  [ ] hold-time  [ ] demo drills
+  [ ] Lucid eval drills  [ ] Topstep removed  [ ] Lucid profiles sourced
+  [ ] secrets clean  [ ] runbook cold read  [ ] ledger all ✅  [ ] v6.0.0 tagged
+
+END OF FILE — Return to the GOLDEN LOOP STEP 1.
