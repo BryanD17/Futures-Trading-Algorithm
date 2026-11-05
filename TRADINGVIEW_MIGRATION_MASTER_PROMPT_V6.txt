@@ -177,7 +177,9 @@ Status markers: ⬜ NOT STARTED | 🔄 IN PROGRESS | 🔄 READY-FOR-FABLE (Opus 
 
 PHASE 0 — FABLE MAP  (00 and 01 have zero dependencies → may run in parallel)
   [⬜] Agent 00 — Fable — Port Map + Golden Signal Oracle
-  [⬜] Agent 01 — Fable — Venue Truth: Lucid + TradingView + Relay facts
+  [✅] Agent 01 — Fable — Venue Truth: Lucid + TradingView + Relay facts
+       (2026-11-05: docs/LUCID_RULES.md, docs/PLATFORM_FACTS.md,
+       config/lucid_profiles.yaml; ⛔ OA-4 hedging wording, ⛔ OA-7 DLL amount)
 
 PHASE 1 — OPUS BUILD  (sequential: 02 → 03 → 04; 05 parallel with 02–04)
   [⬜] Agent 02 — Opus — Pine Core Library (ICT detectors)
@@ -706,6 +708,9 @@ SECTION 8 — OWNER ACTION LIST (Appendix D gives click-by-click steps)
   OA-5  Relay: Link Demo for each Lucid account; set account controls per
         RELAY_SETUP.md; run drills D1–D8 with Fable's script.
   OA-6  Do not trade the bot's accounts manually while the alert is active.
+  OA-7  Ask Lucid support for the LucidFlex Daily Loss Limit dollar amount and
+        measurement basis (exact text in docs/LUCID_RULES.md §6); until answered
+        Agent 03 keeps softDailyLoss$ = $600 (30 % of MLL) CONSERVATIVE-UNVERIFIED.
 
 ================================================================================
 SECTION 9 — EXPLICIT DEFERRALS TO V7 (do NOT build in V6)
@@ -723,7 +728,17 @@ SECTION 9 — EXPLICIT DEFERRALS TO V7 (do NOT build in V6)
 APPENDIX A — PER-AGENT VERIFICATION LOG  (append-only; never delete)
 ================================================================================
   A-00  PORT_MAP rows: __ | export sha256 run1/run2: __ / __ | signals: __
-  A-01  Lucid rules sourced: __/__ | ⛔ ambiguities: __
+  A-01  Lucid rules sourced: 17/17 sections VERIFIED on support.lucidtrading.com
+        (lucidtrading.com HTTP 403 → eval price + DLL $ not published) | ⛔
+        ambiguities: 2 (OA-4 hedging wording; OA-7 Daily Loss Limit amount) |
+        Flex 50K eval: target $3,000 / MLL $2,000 EOD-trailing, locks at
+        $50,100 once close > $52,100 / 4 minis = 40 micros / DLL optional /
+        40 % consistency / 3 days; funded: same MLL, scaling 2→3→4 minis at
+        $0/$1k/$2k profit, no consistency, 90/10 | forced flat 16:45 ET
+        (15:45 CT) confirmed | CrossTrade native Tradovate OSO bracket: YES
+        (take_profit/stop_loss, GTC legs) + out_of_sync=flatten | TV: 2FA
+        required, Premium for open-ended alerts, alert snapshots script at
+        creation, CME real-time data sold separately, List-of-Trades CSV export.
   A-02  lint output: __ | build sha: __ | OA-1: __
   A-03  invariant → line-range table: __ | OA-2: __
   A-04  payload_check results: __ | lifecycle table rows: __
