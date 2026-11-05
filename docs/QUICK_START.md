@@ -1,4 +1,17 @@
-# Quick Start — Topstep Futures Trading Algorithm
+# Quick Start — Futures Trading Algorithm (Java lab) — V6
+
+> **V6 (2026-11-05): live trading moved to TradingView.** Topstep access was revoked; the Java engine is now
+> the **research lab and parity oracle**, not the trader. What that means for this guide:
+> - **BACKTEST / SIM** sections below still apply (defaults now use the `LUCID_FLEX_50K_EVAL` profile from
+>   `config/lucid_profiles.yaml`; the Topstep envelope numbers quoted in older sections are historical).
+> - **LIVE mode is removed**: `LIVE` prints "Topstep removed in V6 — live trading runs on TradingView (see
+>   RUNBOOK_TRADINGVIEW.md)" and exits; `POST /api/control/start?mode=LIVE`, `killswitch`, `flatten` return 410.
+>   The dashboard banner reads "Research mode — live trading on TradingView".
+> - **To trade:** `docs/RUNBOOK_TRADINGVIEW.md` (setup, daily checklist, kill switch, incidents, go-live
+>   ladder). Pine build/lint: `README.md` → "Building the Pine file". Parity: `tools/run_parity.sh`.
+> - Where the lab fits: the real-tape harnesses here (`FunnelAutopsyHarness`, `GoldenSignalExport`) are what
+>   proves the Pine port takes the same trades — `docs/v6/GOLDEN_SIGNALS.md`, `PARITY_REPORT.md`.
+> Everything mentioning Topstep, TopstepX, ProjectX or `~/.topstep/credentials.properties` is **historical**.
 
 This guide assumes you have cloned the repo and want to build, run, and
 work with the new STDV+OTE refactor (v2.0).
@@ -104,11 +117,16 @@ that has to land first.
 
 Boots `SimEngineRunner` with the MockConnector — safe for testing.
 
-### LIVE mode
+### LIVE mode — REMOVED IN V6 (historical text follows)
 
 ```bash
 ./gradlew :trading-engine:run --args="LIVE"
+# V6: prints "Topstep removed in V6 — live trading runs on TradingView (see RUNBOOK_TRADINGVIEW.md)" and exits 2.
+# Live execution: docs/RUNBOOK_TRADINGVIEW.md. TopstepConnector lives in trading-engine/legacy (not compiled).
 ```
+
+> Everything below this line in the LIVE section describes the V1–V5 Topstep connector and is kept only as
+> history. None of the `TOPSTEP_*` variables or `~/.topstep/credentials.properties` are read by V6.
 
 Credentials resolve in PRIORITY ORDER — higher sources silently win:
 
@@ -590,7 +608,10 @@ the prime killzones:
 - Expect `kzActive=true` in the `[GATES]` lines for most of the day now —
   the boost, not the entry permission, is what distinguishes killzones.
 
-## TOPSTEP AUTOMATION POLICY
+## TOPSTEP AUTOMATION POLICY (historical — V6 venue is Lucid Trading)
+
+> V6: Lucid's written automation / hedging / HFT / microscalping rules, with URLs and retrieval dates, are in
+> `docs/LUCID_RULES.md`; the two open questions to Lucid support (OA-4, OA-7) are printed there verbatim.
 
 Before pointing the engine at a **FUNDED** (non-eval) account, re-verify
 Topstep's current *written* policy on automated trading — policies change

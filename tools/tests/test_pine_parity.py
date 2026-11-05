@@ -123,6 +123,38 @@ class ParityTest(unittest.TestCase):
         self.assertIn("**83.3 %**", rep)
         self.assertIn("VIOLATION", rep)
 
+    def test_size_above_cap_is_a_hard_fail(self):
+        """Agent 06.4: ANY size above cap. G1 at 6 micros (cap 5) -> hard fail; same file with --cap 0 -> none."""
+        tv = os.path.join(self.d, "tv_cap.csv")
+        write(tv, TV_NEW, [tv_row_new("1", "Entry short", "2026-09-28 13:50", "S|sl=30674.00|tp=30558.00", "30638.25", "6", "1"),
+                           tv_row_new("1", "Exit short", "2026-09-28 14:20", "", "30558.00", "6", "1")])
+        rc = self.run_tool(tv)
+        rep = Path(self.out).read_text()
+        self.assertEqual(rc, 1, rep)
+        self.assertIn("SIZE ABOVE CAP: TV #1 SELL at 2026-09-28 14:50 ET size 6 > cap 5 micros (I4)", rep)
+        self.assertIn("| 2026-09-28 14:53 | SELL | 1 | 2026-09-28 14:50 | +0 | -9 | ENTRY_MODE | +0 | +0 | 3/6 |", rep)
+        self.assertEqual(self.run_tool(tv, "--cap", "0"), 0)
+        self.assertEqual(self.run_tool(tv, "--cap", "6"), 0)
+
+    def test_size_at_cap_passes(self):
+        tv = os.path.join(self.d, "tv_atcap.csv")
+        write(tv, TV_NEW, [tv_row_new("1", "Entry short", "2026-09-28 13:50", "S|sl=30674.00|tp=30558.00", "30638.25", "5", "1"),
+                           tv_row_new("1", "Exit short", "2026-09-28 14:20", "", "30558.00", "5", "1")])
+        self.assertEqual(self.run_tool(tv), 0)
+        self.assertNotIn("SIZE ABOVE CAP", Path(self.out).read_text())
+
+    def test_require_stop_makes_a_stopless_trade_a_hard_fail(self):
+        """Agent 06.4: ANY trade without a stop. Default = reported N/A (rc 0); --require-stop = hard fail."""
+        tv = os.path.join(self.d, "tv_nostop.csv")
+        write(tv, TV_NEW, [tv_row_new("1", "Entry short", "2026-09-28 13:50", "S|tp=30558.00", "30638.25", "3", "1"),
+                           tv_row_new("1", "Exit short", "2026-09-28 14:20", "", "30558.00", "3", "1")])
+        self.assertEqual(self.run_tool(tv), 0)
+        rc = self.run_tool(tv, "--require-stop")
+        rep = Path(self.out).read_text()
+        self.assertEqual(rc, 1, rep)
+        self.assertIn("NO STOP: TV #1 SELL at 2026-09-28 14:50 ET has no sl= in its Signal and no stop column (I2)", rep)
+        self.assertIn("stop required: yes", rep)
+
     def test_missing_levels_reported_na(self):
         tv = os.path.join(self.d, "tv_nolevels.csv")
         write(tv, TV_NEW, [tv_row_new("1", "Entry short", "2026-09-28 13:50", "S", "30638.25", "3", "1"),

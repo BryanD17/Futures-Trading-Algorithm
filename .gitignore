@@ -85,3 +85,7 @@ config/local/
 
 # Python
 __pycache__/
+
+# V6 parity run intermediates (embedded into PARITY_REPORT.md by tools/run_parity.sh)
+parity/parity_tool_output.md
+parity/drift_*.md
