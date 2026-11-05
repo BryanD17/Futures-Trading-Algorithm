@@ -19,6 +19,12 @@ hex16 = sha256 of the concatenated sources (content-addressed, so a relay payloa
 the exact version — drill D8). The only non-deterministic token is the build time; with
 SOURCE_DATE_EPOCH or --no-time two builds of the same tree are byte-identical.
 
+AccountProfile presets (V6 Agent 03, task 03.4 / AP-5): the marker "// @@ACCOUNT_PROFILES@@" in a
+source is replaced by Pine code GENERATED from config/lucid_profiles.yaml: the profile dropdown,
+the CUSTOM inputs (defaulting to the first profile's numbers), the I3 outer time limits and one
+switch-accessor per field. No plan number is typed into pine/src. When the marker is present the
+YAML bytes are part of the src-sha256 / BUILD_ID. The YAML subset reader is stdlib-only.
+
 Python 3.9+ standard library only.
 """
 import argparse
@@ -35,12 +41,234 @@ DEFAULT_OUT = os.path.join(REPO, "pine", "dist", "LucidICT_v6.pine")
 SRC_RE = re.compile(r"^(\d\d)_[A-Za-z0-9_]+\.pine$")
 VERSION_LINE = "//@version=6"
 BUILD_ID_MARKER = "// @@BUILD_ID@@"
+PROFILES_MARKER = "// @@ACCOUNT_PROFILES@@"
+DEFAULT_PROFILES = os.path.join(REPO, "config", "lucid_profiles.yaml")
+# drawdownBuffer$ is not a Lucid rule (LUCID_RULES.md has none). Until Fable adds
+# `v6_drawdown_buffer_usd` to a profile in lucid_profiles.yaml it is DERIVED from that profile's own
+# YAML MLL with this V6 policy fraction (CONSERVATIVE-UNVERIFIED; owner can override via CUSTOM).
+DRAWDOWN_BUFFER_FRACTION_OF_MLL = 0.10
 STAMP_PREFIX = "// BUILD: "
 FILE_MARKER = "// ==== file: {} ===="
 
 
 class BuildError(Exception):
     pass
+
+
+# ----------------------------------------------------------------------------- YAML subset reader
+def _scalar(tok):
+    tok = tok.strip()
+    if tok in ("null", "~", ""):
+        return None
+    if tok in ("true", "false"):
+        return tok == "true"
+    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "\"'":
+        return tok[1:-1]
+    try:
+        return int(tok)
+    except ValueError:
+        pass
+    try:
+        return float(tok)
+    except ValueError:
+        return tok
+
+
+def _strip_comment(line):
+    out, quote = [], None
+    for i, ch in enumerate(line):
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
+            break
+        out.append(ch)
+    return "".join(out).rstrip()
+
+
+def _flow_map(text):
+    body = text.strip()
+    if not (body.startswith("{") and body.endswith("}")):
+        raise BuildError("unsupported YAML flow value: " + text)
+    res = {}
+    for part in body[1:-1].split(","):
+        if part.strip():
+            if ":" not in part:
+                raise BuildError("bad YAML flow map entry: " + part)
+            k, v = part.split(":", 1)
+            res[k.strip()] = _scalar(v)
+    return res
+
+
+def parse_yaml_subset(text):
+    """Block mappings, `- item` lists (scalars or inline `{ k: v }` maps), scalars and # comments:
+    exactly the shape of config/lucid_profiles.yaml. Anything else raises BuildError."""
+    lines = []
+    for raw in text.replace("\r\n", "\n").split("\n"):
+        ln = _strip_comment(raw)
+        if ln.strip():
+            lead = ln[:len(ln) - len(ln.lstrip())]
+            if "\t" in lead:
+                raise BuildError("tab indentation in YAML")
+            lines.append((len(lead), ln.strip()))
+    pos = [0]
+
+    def block(indent):
+        ind, txt = lines[pos[0]]
+        if txt.startswith("- "):
+            out = []
+            while pos[0] < len(lines) and lines[pos[0]][0] == ind and lines[pos[0]][1].startswith("- "):
+                item = lines[pos[0]][1][2:].strip()
+                pos[0] += 1
+                if item.startswith("{"):
+                    out.append(_flow_map(item))
+                elif re.match(r"^[A-Za-z_][\w-]*\s*:(\s|$)", item):
+                    # "- key: value" followed by sibling keys indented deeper (block map in a list)
+                    k, v = item.split(":", 1)
+                    entry = {k.strip(): _scalar(v)}
+                    if pos[0] < len(lines) and lines[pos[0]][0] > ind:
+                        more = block(lines[pos[0]][0])
+                        if not isinstance(more, dict):
+                            raise BuildError("unsupported YAML list item near: " + item)
+                        entry.update(more)
+                    out.append(entry)
+                else:
+                    out.append(_scalar(item))
+            return out
+        out = {}
+        while pos[0] < len(lines) and lines[pos[0]][0] == ind:
+            txt = lines[pos[0]][1]
+            if txt.startswith("- ") or ":" not in txt:
+                raise BuildError("unsupported YAML line: " + txt)
+            k, v = txt.split(":", 1)
+            k, v = k.strip(), v.strip()
+            pos[0] += 1
+            if v == "":
+                if pos[0] < len(lines) and lines[pos[0]][0] > ind:
+                    out[k] = block(lines[pos[0]][0])
+                else:
+                    out[k] = None
+            elif v.startswith("{"):
+                out[k] = _flow_map(v)
+            else:
+                out[k] = _scalar(v)
+            if pos[0] < len(lines) and lines[pos[0]][0] > ind:
+                raise BuildError("bad YAML indentation near: " + lines[pos[0]][1])
+        return out
+
+    return block(lines[0][0]) if lines else {}
+
+
+# ----------------------------------------------------------------------------- AccountProfile codegen
+def _hhmm(s, what):
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", str(s or ""))
+    if not m:
+        raise BuildError("lucid_profiles.yaml common.{} must be HH:MM, got {!r}".format(what, s))
+    return int(m.group(1)) * 100 + int(m.group(2))
+
+
+def _flt(x):
+    """Pine float literal (always with a decimal point)."""
+    x = float(x)
+    return "{}.0".format(int(x)) if x == int(x) else repr(x)
+
+
+def load_profiles(path):
+    """-> (common, [(name, spec)]) with every field the Pine envelope needs, validated."""
+    with open(path, "r", encoding="utf-8") as fh:
+        data = parse_yaml_subset(fh.read())
+    common = data.get("common") or {}
+    profs = data.get("profiles") or {}
+    if not profs:
+        raise BuildError(path + ": no profiles")
+    out = []
+    for name, p in profs.items():
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", name) or name == "CUSTOM":
+            raise BuildError("bad profile name " + repr(name))
+
+        def need(key, _p=p, _n=name):
+            v = _p.get(key)
+            if v is None:
+                raise BuildError("profile {} lacks {}".format(_n, key))
+            return v
+        mll = float(need("max_loss_limit_usd"))
+        bands = sorted((float(b["profit_from_usd"]), int(b["micros"])) for b in (p.get("scaling_plan") or []))
+        dd = p.get("v6_drawdown_buffer_usd")
+        spec = {
+            "max_micros": int(need("max_contracts_micros")),
+            "scaling_cap_micros": int(need("scaling_cap_micros")),
+            "soft_daily_loss": float(need("v6_soft_daily_loss_usd")),
+            "drawdown_buffer": float(dd) if dd is not None else round(mll * DRAWDOWN_BUFFER_FRACTION_OF_MLL, 2),
+            "start_balance": float(need("starting_balance_usd")),
+            "mll": mll,
+            "locked_floor": float(need("locked_mll_balance_usd")),
+            "bands": bands,
+        }
+        if spec["scaling_cap_micros"] > spec["max_micros"] or any(m > spec["max_micros"] for _, m in bands):
+            raise BuildError("profile {}: scaling cap above max contracts".format(name))
+        out.append((name, spec))
+    return common, out
+
+
+def generate_profiles_block(path):
+    """Pine lines that replace // @@ACCOUNT_PROFILES@@ (10_inputs.pine, group G_ACCOUNT)."""
+    common, profs = load_profiles(path)
+    no_entry = _hhmm(common.get("v6_no_entry_after_et"), "v6_no_entry_after_et")
+    flatten = _hhmm(common.get("v6_flatten_at_et"), "v6_flatten_at_et")
+    if not no_entry < flatten:
+        raise BuildError("v6_no_entry_after_et must be before v6_flatten_at_et")
+    names = [n for n, _ in profs]
+    d0 = profs[0][1]
+    opts = ", ".join('"{}"'.format(n) for n in names + ["CUSTOM"])
+    L = [
+        "// ---- GENERATED by tools/pine_build.py from config/lucid_profiles.yaml. Do not hand-edit (AP-5).",
+        "// drawdownBuffer$ = profile key v6_drawdown_buffer_usd, else {:.0%} of that profile's YAML MLL".format(DRAWDOWN_BUFFER_FRACTION_OF_MLL),
+        "// (CONSERVATIVE-UNVERIFIED). softDailyLoss$ = v6_soft_daily_loss_usd (CONSERVATIVE-UNVERIFIED, OA-7).",
+        "const int V6_HARD_NO_ENTRY_HHMM = {}   // common.v6_no_entry_after_et (I3 outer limit)".format(no_entry),
+        "const int V6_HARD_FLATTEN_HHMM  = {}   // common.v6_flatten_at_et (I3 outer limit)".format(flatten),
+        'i_profile = input.string("{}", "Plan profile", options = [{}], group = G_ACCOUNT, tooltip = "AccountProfile (I7). Sets ONLY the caps (maxContracts, scalingCap) and the soft loss limits (softDailyLoss$, drawdownBuffer$, EOD-trailing MLL emulation). Entry logic never reads it. CUSTOM = the raw numbers below.")'.format(names[0], opts),
+        'i_cMaxMicros   = input.int({}, "CUSTOM maxContracts (micros)", minval = 0, group = G_ACCOUNT, tooltip = "CUSTOM only. Micro-equivalents: 1 mini = 10 micros.")'.format(d0["max_micros"]),
+        'i_cScaleMicros = input.int({}, "CUSTOM scalingCap (micros)", minval = 0, group = G_ACCOUNT, tooltip = "CUSTOM only.")'.format(d0["scaling_cap_micros"]),
+        'i_cSoftDL      = input.float({}, "CUSTOM softDailyLoss$", minval = 1, group = G_ACCOUNT, tooltip = "CUSTOM only. strategy.risk.max_intraday_loss + the Pine soft daily stop.")'.format(_flt(d0["soft_daily_loss"])),
+        'i_cDDBuffer    = input.float({}, "CUSTOM drawdownBuffer$", minval = 0, group = G_ACCOUNT, tooltip = "CUSTOM only. No entry when MLL room minus this trade\'s risk would fall below this.")'.format(_flt(d0["drawdown_buffer"])),
+        'i_cStartBal    = input.float({}, "CUSTOM starting balance$", minval = 0, group = G_ACCOUNT, tooltip = "CUSTOM only.")'.format(_flt(d0["start_balance"])),
+        'i_cMll         = input.float({}, "CUSTOM MLL$ (EOD trailing, 0 = off)", minval = 0, group = G_ACCOUNT, tooltip = "CUSTOM only.")'.format(_flt(d0["mll"])),
+        'i_cLockFloor   = input.float({}, "CUSTOM locked MLL floor$", minval = 0, group = G_ACCOUNT, tooltip = "CUSTOM only. The trailing floor never rises above this.")'.format(_flt(d0["locked_floor"])),
+    ]
+
+    def accessor(fn, typ, key, custom, conv):
+        L.append("{}(string p) =>".format(fn))
+        L.append("    {} v = switch p".format(typ))
+        for n, s in profs:
+            L.append('        "{}" => {}'.format(n, conv(s[key])))
+        L.append("        => {}".format(custom))
+        L.append("    v")
+
+    accessor("apMaxMicros", "int", "max_micros", "i_cMaxMicros", str)
+    accessor("apScalingCapBase", "int", "scaling_cap_micros", "i_cScaleMicros", str)
+    accessor("apSoftDailyLoss", "float", "soft_daily_loss", "i_cSoftDL", _flt)
+    accessor("apDrawdownBuffer", "float", "drawdown_buffer", "i_cDDBuffer", _flt)
+    accessor("apStartBalance", "float", "start_balance", "i_cStartBal", _flt)
+    accessor("apMll", "float", "mll", "i_cMll", _flt)
+    accessor("apLockedFloor", "float", "locked_floor", "i_cLockFloor", _flt)
+    L.append("// Scaling plan (funded profiles): micros allowed at EOD account profit `pr`; no plan -> scaling_cap_micros.")
+    L.append("apScalingCap(string p, float pr) =>")
+    L.append("    int v = apScalingCapBase(p)")
+    first = True
+    for n, s in profs:
+        if not s["bands"]:
+            continue
+        desc = sorted(s["bands"], reverse=True)
+        expr = str(desc[-1][1])
+        for frm, mic in reversed(desc[:-1]):
+            expr = "pr >= {} ? {} : {}".format(_flt(frm), mic, expr)
+        L.append('    {}if p == "{}"'.format("" if first else "else ", n))
+        L.append("        v := " + expr)
+        first = False
+    L.append("    v")
+    return L
 
 
 def list_sources(src_dir):
@@ -101,8 +329,9 @@ def build_time(no_time):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def assemble(src_dir, sha, built):
-    """Return (text, src_hash). Pure function of the source files + the two stamp strings."""
+def assemble(src_dir, sha, built, profiles_path=None):
+    """Return (text, src_hash). Pure function of the source files (+ the profiles YAML when a source
+    holds the // @@ACCOUNT_PROFILES@@ marker) + the two stamp strings."""
     names = list_sources(src_dir)
     per_file = [(n, read_source(os.path.join(src_dir, n))) for n in names]
     header_lines = per_file[0][1]
@@ -116,6 +345,15 @@ def assemble(src_dir, sha, built):
     for n, lines in per_file:
         h.update(n.encode("utf-8") + b"\n")
         h.update("\n".join(lines).encode("utf-8") + b"\n")
+    prof_count = sum(1 for _, lines in per_file for ln in lines if ln.strip() == PROFILES_MARKER)
+    if prof_count > 1:
+        raise BuildError("// @@ACCOUNT_PROFILES@@ may appear at most once")
+    prof_lines = []
+    if prof_count:
+        ppath = profiles_path or DEFAULT_PROFILES
+        prof_lines = generate_profiles_block(ppath)
+        with open(ppath, "rb") as fh:
+            h.update(b"lucid_profiles.yaml\n" + fh.read().replace(b"\r\n", b"\n"))
     src_hash = h.hexdigest()[:16]
     marker_count = sum(1 for _, lines in per_file for ln in lines if ln.strip() == BUILD_ID_MARKER)
     if marker_count > 1:
@@ -130,6 +368,8 @@ def assemble(src_dir, sha, built):
         for ln in body:
             if ln.strip() == BUILD_ID_MARKER:
                 out.append('const string BUILD_ID = "{}"'.format(src_hash))
+            elif ln.strip() == PROFILES_MARKER:
+                out.extend(prof_lines)
             else:
                 out.append(ln)
     return "\n".join(out) + "\n", src_hash
@@ -147,10 +387,11 @@ def main(argv=None):
     ap.add_argument("--check", action="store_true", help="fail if the dist file is out of date")
     ap.add_argument("--no-time", action="store_true", help="stamp 'unstamped' instead of the build time")
     ap.add_argument("--sha", default=None, help="override the git sha stamp (tests)")
+    ap.add_argument("--profiles", default=DEFAULT_PROFILES, help="AccountProfile YAML (config/lucid_profiles.yaml)")
     args = ap.parse_args(argv)
     try:
         sha = args.sha if args.sha is not None else git_sha(REPO)
-        text, src_hash = assemble(args.src, sha, build_time(args.no_time))
+        text, src_hash = assemble(args.src, sha, build_time(args.no_time), args.profiles)
     except BuildError as e:
         print("pine_build: ERROR: " + str(e), file=sys.stderr)
         return 2

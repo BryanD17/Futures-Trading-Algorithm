@@ -185,7 +185,9 @@ PHASE 1 — OPUS BUILD  (sequential: 02 → 03 → 04; 05 parallel with 02–04)
   [✅] Agent 02 — Opus — Pine Core Library (ICT detectors)  (2026-11-05: Fable-verified (static);
        compile pending ⛔ OA-1 — Appendix D. pine/src 00–70,95 + stubs 80/90, tools/pine_build.py +
        pine_lint.py + 27 unit tests, lint 9/9 PASS, deterministic build, BUILD_ID 1808daab3a6dfee3)
-  [⬜] Agent 03 — Opus — Pine Strategy, Sizing + AccountProfile Envelope
+  [🔄] Agent 03 — Opus — Pine Strategy, Sizing + AccountProfile Envelope  READY-FOR-FABLE (2026-11-05:
+       80_strategy.pine envelope + [Account]/[Risk] inputs, presets generated from lucid_profiles.yaml,
+       self-test mode, lint 9/9, tools tests green; compile + Strategy Tester pending ⛔ OA-1/OA-2/OA-3)
   [⬜] Agent 04 — Opus — Relay Payload Adapter + Order Lifecycle
   [✅] Agent 05 — Opus — Java Repurpose: Topstep Out, Lucid Profiles, Parity Harness
        COMPLETE (Fable-verified 2026-11-05, PR #179): TopstepX → trading-engine/legacy (not compiled),
@@ -784,7 +786,57 @@ APPENDIX A — PER-AGENT VERIFICATION LOG  (append-only; never delete)
         green, 1,046 tests (trading-engine 1,038 + api-backend 8) / 0 failures / 0 errors | residual compile risks for OA-1 (all low): method overloads on different UDTs,
         strategy.position_size read inside a method, `int(float)` cast in the blackout parser, `[1]`
         history reads inside the global for loop
-  A-03  invariant → line-range table: __ | OA-2: __
+  A-03  (Opus, 2026-11-05, branch feat/agent-03-v6-pine-strategy; READY-FOR-FABLE, not self-stamped)
+        invariant → line-range table (pine/src line numbers; dist = same code under "// ==== file:" markers):
+          I1 no opposing exposure  00_header:13 (pyramiding = 0); 80:81-82 flatOk (flat + 0 open trades,
+             never on the exit bar, OPPOSITE side needs 2 bars = one full flat bar between); 80:137-145
+             exit-bar/dir tracking; 80:192 gate; 80:203-208 only "LONG"/"SHORT" entries, no
+             strategy.order / reverse; 80:225 live reversal assertion; MES never in an order (lint L5)
+          I2 broker stop at submission  80:203-208 every entry is followed in the SAME block by
+             strategy.exit(from_entry, stop = sigStop, limit = sigT1) and the payload hook carries sl/tp
+             (Agent 04 turns it into stop_loss/take_profit); lint L7
+          I3 flat-by time  10:21 generated V6_HARD_NO_ENTRY_HHMM 1630 / V6_HARD_FLATTEN_HHMM 1640 (from YAML
+             common.v6_*); 80:63-73 hardNoEntry / hardFlatten / flattenNow / fridayLate / entryTimeBlocked
+             (America/New_York via 20_time inWin/etMin; checked at time_close = the fill time);
+             80:160-163 close_all FLATTEN (+ stale-position flatten after the 18:00 roll); 80:182 gate;
+             80:219 live assertion. Parity defaults stay 1545 no-entry (Java) inside the 1630 outer limit.
+          I4 size cap  80:30-46 microsPerContract + sizeContracts; 80:151 cap = min(profile maxContracts,
+             profile scalingCap(EOD profit), max micros per trade 5); 80:172-173 budget = min(riskPerTrade$,
+             soft daily room, MLL room − drawdownBuffer$); 80:198 size 0 → no trade; 80:211, 221 assertions
+          I5 no HFT  80:75-76 spacingOk + 80:190 (min 60 s between ANY two orders incl. bracket fills,
+             80:143-144); 80:188 maxEntriesPerSession (per CME trading day, 18:00 ET roll); 80:99
+             strategy.risk.max_intraday_filled_orders(2 × max entries); bar-close only (00_header:13
+             calc_on_every_tick = false, process_orders_on_close = true)
+          I6 no microscalp  80:48-61 bracketReason (minStopTicks / minT1Ticks vs the REAL fill);
+             80:78-79 holdOk + 80:158-167 (no strategy-initiated exit < 30 s after the fill)
+          I7 account-agnostic core  10:16-22 [Account] group (generated); 80:88-93, 150-151 the ONLY
+             readers of the profile (caps + soft limits); test_profile_not_read_by_detectors
+          I8 no repaint  80:123 everything inside `if barstate.isconfirmed` (lint L6); the core signal
+             is computed inside 70:890 (confirmed bar, request.security_lower_tf only, no HTF lookahead)
+        decisions: exit = ONE bracket (stop + T1, full qty) → no partials / BE move / trailing in V6
+        (PORT_MAP S3 option B, X2 moot, X3 DROP); RR(T1) gate vs sigEntryRef (70 M7 + 80:194 belt);
+        size distance = max(|ref−stop|, |fill−stop|) so the fill never risks more than the budget;
+        entry comment = "sl=<px>|tp=<px>|ref=<px>" → TV List of Trades Signal column → pine_parity.py;
+        built-ins strategy.risk.max_intraday_loss(softDailyLoss$, strategy.cash) = $600 on 50K
+        (CONSERVATIVE-UNVERIFIED, OA-7) are BACKSTOPS (the Pine SOFT_STOP close_all fires first with a
+        payload); drawdownBuffer$ = 10 % of the profile's YAML MLL until Fable adds
+        v6_drawdown_buffer_usd to the YAML (pine_build.DRAWDOWN_BUFFER_FRACTION_OF_MLL) | sizing worked
+        examples: G1 ref 30636.00 / 5m fill 30638.25 / stop 30674.00 → max(152, 143) = 152 ticks × $0.50
+        = $76/micro → floor(250/76) = 3 → min(EVAL 40, scaling 40, cap 5, 3) = 3 ✔ oracle 3; G2 ref
+        30847.50 / stop 30889.75 → 169 ticks → $84.50 → 2 ✔ oracle 2; all 8 oracle sizes 5,5,5,5,2,5,1,3
+        reproduced (test_pine_strategy.SizingOracleTest) | evidence: python3 tools/pine_build.py →
+        2,799 lines; lint 9/9 PASS (L4 2 entries in 80, L5 6 order calls clean, L6 2 guarded, L7 2
+        paired); python3 -m unittest discover -s tools/tests → 58 tests OK (17 new in
+        test_pine_strategy.py: YAML reader == PyYAML on the real file, presets == YAML, scaling ternary ==
+        bands, AP-5 no plan literal in 10/80, oracle sizes, every order call has alert_message =
+        orderAlert(...), Signal comment parsed by pine_parity); Java `./gradlew :trading-engine:clean
+        :trading-engine:build :api-backend:clean :api-backend:build` (JDK 21) BUILD SUCCESSFUL, 1,029
+        tests (1 skipped) / 0 failures / 0 errors | parity risks for
+        Agent 06 (NOT tuned, AP-8): (a) 09-23 has 4 oracle entries in one trading day → the 4th (06:37)
+        is refused by I5 maxEntriesPerSession = 3; (b) TV holds each trade to stop/T1 while the Java SIM
+        exits earlier (trailing, X5), so an open TV position can refuse a later oracle signal (I1/S8) —
+        watch 09-23 05:04/05:16 and 09-28 12:32 → 14:53 (G1) | OA-2: ⛔ issued (Appendix D) | OA-3: ⛔
+        issued (Appendix D)
   A-04  payload_check results: __ | lifecycle table rows: __
   A-05  tests before/after: trading-engine 1,038 (1 skipped) + api-backend 8 = 1,046 / trading-engine 1,015
         (1 skipped) + api-backend 11 = 1,026, all green (`./gradlew clean build`, JDK 21) + 14 Python tool tests
@@ -886,6 +938,54 @@ APPENDIX D — OWNER CLICK-BY-CLICK STEPS  (Agents 02/03/06/07 fill in)
         Time zone note: TradingView shows the chart in your chart time zone (CT); the script
         itself computes every window in America/New_York, so changing the chart time zone does
         NOT change its behaviour.
+
+  OA-2  STRATEGY TESTER RUN + LIST OF TRADES EXPORT  (Agent 03, issued 2026-11-05)
+        Needs: OA-1 done (script compiles), a plan whose MNQ 1m intrabar history reaches 2026-09-21
+        (the parity tape: 2026-09-21 00:00 → 2026-09-28 16:22 ET = parity/bars_mnq_1m.csv). ~10 minutes.
+        1. Chart MNQ1! (CME), 5 minutes, script LucidICT_v6 on the chart (OA-1 steps 1-5).
+           Confirm line 2 of the pasted file: note the 16-hex src-sha256.
+        2. Legend "LucidICT V6" → gear (Settings) → Inputs. Leave EVERY input at its default
+           (Plan profile = LUCID_FLEX_50K_EVAL, riskPerTrade$ 250, max micros per trade 5,
+           maxEntriesPerSession 3, noEntryAfter 1545, flattenAt 1640). In group "Debug" tick
+           "selfTest (Agent 03 assertions)" → OK.
+        3. Settings → Properties tab: Initial capital 50000, Order size 1 Contract (the script
+           overrides it), Pyramiding 0, Commission 0.5 USD per contract, Slippage 0 ticks,
+           "Recalculate: after order is filled" UNTICKED, "On every tick" UNTICKED → OK.
+        4. Bottom panel → "Strategy Tester" tab → the date-range control (top of the tester, shows
+           "Entire history" or a date range) → "Custom date range" → From 2026-09-21 00:00,
+           To 2026-09-28 17:00 → Select. (If your chart is in CT the fields are CT; the range is wide
+           enough either way.)
+        5. Scroll the chart to the LAST bar (right edge). A label must read "SELF-TEST PASS ..." in
+           green. If it is RED, screenshot it (it lists the failing cases) and any red
+           "SELFTEST FAIL" labels on the chart, then STOP and paste those into the PR thread.
+        6. Strategy Tester → "List of trades" tab → the export/download icon (arrow, top-right of the
+           tester, "Export data" / "Download data as CSV") → save the file as  tv_trades.csv .
+           The "Signal" column of each ENTRY row must read like  sl=30674.00|tp=30558.00|ref=30636.00
+           (that is how tools/pine_parity.py learns the stop and T1).
+        7. Also note from the "Performance summary" tab: Total closed trades, Net profit, Max drawdown.
+        8. Untick selfTest again (Settings → Inputs → Debug) → OK.
+        9. PASTE BACK into the PR thread: tv_trades.csv (attach), the src-sha256, a screenshot of the
+           SELF-TEST label, the three numbers from step 7, and your CHART time zone (Settings →
+           Symbol/Scales → Time zone; owner default America/Chicago). Fable commits the file as
+           parity/tv_trades.csv and runs
+             python3 tools/pine_parity.py parity/java_signals.csv parity/tv_trades.csv --tv-tz America/Chicago
+        C-14 check (Agent 03 open item): in the List of trades, if any day shows trading resuming after
+        a SOFT_STOP / strategy.risk halt, note the time of the first trade after it (verifies that the
+        strategy.risk counters reset at the 18:00 ET session roll).
+
+  OA-3  EXPORT CHART DATA (MNQ1! and MES1!, 1 minute, same range)  (Agent 03, issued 2026-11-05)
+        Needs: any plan with chart-data export. ~5 minutes.
+        1. New chart tab (or the same chart): symbol MNQ1!, timeframe 1 minute. Remove the strategy
+           from this chart (legend → ⋯ → Remove) so only the price series is exported.
+        2. Scroll / "Go to" (Alt+G) 2026-09-21 00:00 ET (= 2026-09-20 23:00 CT) and drag left a little
+           so the chart has loaded back to that date; then go to 2026-09-28 16:30 ET.
+        3. Chart top bar → the arrow next to the layout name (or the ⋯ menu) → "Export chart data…" →
+           Time format: ISO time → Export → save as  tv_bars_mnq_1m.csv .
+        4. Change the symbol to MES1! (same 1m timeframe) and repeat steps 2-3 → save as
+           tv_bars_mes_1m.csv .
+        5. PASTE BACK into the PR thread: both CSVs (attach) + your chart time zone. Fable commits them
+           as parity/tv_bars_mnq_1m.csv and parity/tv_bars_mes_1m.csv for the Agent 06 data-drift check
+           (06.1) against parity/bars_mnq_1m.csv / bars_mes_1m.csv.
 
 ================================================================================
 APPENDIX E — PARITY TOLERANCES
