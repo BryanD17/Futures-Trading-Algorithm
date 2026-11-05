@@ -97,6 +97,17 @@ the relay REST API + cancel on invalidation) is deferred to V7 (Section 9).
 | RR(T1) gate | computed at the Java entry | computed at the Pine entry | a borderline RR(T1) ≈ 1.0 (oracle 09-25 11:33 has RR(T1) = 1.00 exactly) can flip → one expected unmatched signal; Agent 06 lists it as ENTRY_MODE |
 | fills | SIM: limit touched → filled at limit | TV: filled at bar close (process_orders_on_close) | not compared (not part of the key) |
 
+**Known expected ENTRY-CAP mismatch (Fable A-03v, for Agent 06).** The oracle emits **four** entries on the
+2026-09-23 trading day (04:04, 05:04, 05:16, 06:37 ET; Java `maxTradesPerDay = 0` = off), while the V6
+sacred invariant I5 fixes `maxEntriesPerSession = 3` per CME trading day (18:00 ET roll). Pine therefore
+refuses the **4th signal, 2026-09-23 06:37 BUY 31019.00 / stop 31005.75 / T1 31038.75**, with the reject
+reason `I5 maxEntriesPerSession`. Agent 06 must classify that one Java-only row as `ENTRY-CAP`, not as a
+parity bug, and must NOT raise the default to make it match (AP-8; the default is sacred, Section 2 I5).
+`tools/tests/test_pine_strategy.py::test_entry_cap_mismatch_is_exactly_the_09_23_fourth_signal` pins
+that it is exactly this one row. Separately, a later signal can also be refused with `I1 not flat long
+enough` when the earlier TV position is still open (TV holds to stop/T1; the Java SIM exits earlier, X5):
+candidates 05:04 → 05:16 and 09-28 12:32 → 14:53 (G1). Agent 06 classifies those as `OPEN-POSITION`.
+
 Recommendation to Agent 03: compute the Java entry reference (`javaEntryRef` = PD-array level) and
 plot it in debug mode so OA-2's List of Trades can be diffed against both the Java limit and the
 Pine market fill; evaluate the RR(T1) gate against `javaEntryRef` (as Java does), not the market fill,

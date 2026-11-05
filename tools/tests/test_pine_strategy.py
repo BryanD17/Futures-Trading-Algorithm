@@ -84,10 +84,28 @@ class ProfileGenerationTest(unittest.TestCase):
             self.assertEqual(spec["scaling_cap_micros"], y[name]["scaling_cap_micros"])
             self.assertEqual(spec["soft_daily_loss"], y[name]["v6_soft_daily_loss_usd"])
             self.assertEqual(spec["mll"], y[name]["max_loss_limit_usd"])
-            self.assertIn('"{}" => {}'.format(name, spec["max_micros"]), self.block)
-            self.assertIn('"{}" => {}'.format(name, pine_build._flt(spec["soft_daily_loss"])), self.block)
+            self.assertIn('p == "{}" ? {} :'.format(name, spec["max_micros"]), self.block)
+            self.assertIn('p == "{}" ? {} :'.format(name, pine_build._flt(spec["soft_daily_loss"])), self.block)
+            # Fable A-03v: drawdownBuffer$ comes from the YAML key, not the derived fallback
+            self.assertEqual(spec["drawdown_buffer"], float(y[name]["v6_drawdown_buffer_usd"]))
+            self.assertAlmostEqual(spec["drawdown_buffer"], 0.10 * spec["mll"], places=6, msg=name)
         # OA-7 default: LucidFlex 50K soft daily loss $600 (CONSERVATIVE-UNVERIFIED)
-        self.assertIn('"LUCID_FLEX_50K_EVAL" => 600.0', self.block)
+        self.assertIn('p == "LUCID_FLEX_50K_EVAL" ? 600.0 :', self.block)
+
+    def test_accessors_are_simple_qualified(self):
+        """strategy.risk.max_intraday_loss needs a simple value. A parameter declared with a bare type
+        keyword defaults to the series qualifier (Pine docs, user-defined functions -> qualifier keywords),
+        so every accessor must declare `simple string p` and be a pure ?: chain (no switch / mutable local)."""
+        fns = re.findall(r"^(ap\w+)\((simple string p)[^)]*\) =>\n    (.+)$", self.block, re.M)
+        names = {f for f, _, _ in fns}
+        for want in ("apMaxMicros", "apScalingCapBase", "apSoftDailyLoss", "apDrawdownBuffer",
+                     "apStartBalance", "apMll", "apLockedFloor"):
+            self.assertIn(want, names)
+        self.assertNotIn("switch", self.block)
+        body = dict((f, b) for f, _, b in fns)["apSoftDailyLoss"]
+        self.assertTrue(body.endswith(": i_cSoftDL"), body)
+        self.assertEqual(body.count("?"), len(self.profs))
+        self.assertIn("apScalingCap(simple string p, float pr) =>", self.block)
 
     def test_time_limits_from_yaml(self):
         self.assertIn("const int V6_HARD_NO_ENTRY_HHMM = 1630", self.block)
@@ -149,6 +167,43 @@ class SizingOracleTest(unittest.TestCase):
             e, s = float(r["entry"]), float(r["stop"])
             cap = min(40, 40, 5)
             self.assertEqual(size_contracts(250.0, e, e, s, 0.25, 0.5, cap, 1), int(r["size_micros"]), r["ts_et"])
+
+    def test_oracle_per_micro_risk_arithmetic(self):
+        """Fable A-03v: re-derive each row's size from the oracle's own '$X/micro' text and the formula
+        ticks = |entry - stop| / 0.25, $/micro = ticks x $0.50, size = min(5, floor(250 / $/micro))."""
+        with open(ORACLE, newline="") as fh:
+            rows = list(csv.DictReader(fh))
+        for r in rows:
+            e, s = float(r["entry"]), float(r["stop"])
+            ticks = round(abs(e - s) / 0.25)
+            per_micro = ticks * 0.5
+            m = re.search(r"\(\$([\d.]+)/micro\)", r["risk_decision"])
+            self.assertAlmostEqual(float(m.group(1)), per_micro, places=2, msg=r["ts_et"])
+            self.assertEqual(min(5, math.floor(250.0 / per_micro + 1e-9)), int(r["size_micros"]), r["ts_et"])
+            # the Pine mirror with the 5m fill drifting up to 4 ticks AWAY from the stop never exceeds the oracle
+            drift = 4 * 0.25 * (1 if e > s else -1)
+            self.assertLessEqual(size_contracts(250.0, e, e + drift, s, 0.25, 0.5, 5, 1), int(r["size_micros"]))
+            # ... and a fill CLOSER to the stop reproduces the oracle size exactly (distance = Java ref)
+            self.assertEqual(size_contracts(250.0, e, e - drift, s, 0.25, 0.5, 5, 1), int(r["size_micros"]))
+
+    def test_entry_cap_mismatch_is_exactly_the_09_23_fourth_signal(self):
+        """I5 maxEntriesPerSession = 3 (sacred default) vs the oracle: simulate the per-trading-day counter
+        over java_signals.csv. Exactly one row (2026-09-23 06:37) is refused -> documented in GOLDEN_SIGNALS
+        as the known ENTRY-CAP mismatch for Agent 06; the default is NOT changed (AP-8)."""
+        import datetime
+        with open(ORACLE, newline="") as fh:
+            rows = list(csv.DictReader(fh))
+        per_day, refused = {}, []
+        for r in rows:
+            t = datetime.datetime.strptime(r["ts_et"], "%Y-%m-%d %H:%M")
+            day = (t + datetime.timedelta(hours=6)).date()  # CME trading day rolls 18:00 ET
+            per_day[day] = per_day.get(day, 0) + 1
+            if per_day[day] > 3:
+                refused.append(r["ts_et"])
+        self.assertEqual(refused, ["2026-09-23 06:37"])
+        doc = slurp(os.path.join(REPO, "docs", "v6", "GOLDEN_SIGNALS.md"))
+        self.assertIn("ENTRY-CAP", doc)
+        self.assertIn("2026-09-23 06:37", doc)
 
     def test_g1_g2_worked_examples(self):
         # G1: ref 30636.00, stop 30674.00 -> 152 ticks -> $76/micro -> 3; 5m close 30638.25 is closer -> still 3

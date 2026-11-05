@@ -185,9 +185,12 @@ PHASE 1 — OPUS BUILD  (sequential: 02 → 03 → 04; 05 parallel with 02–04)
   [✅] Agent 02 — Opus — Pine Core Library (ICT detectors)  (2026-11-05: Fable-verified (static);
        compile pending ⛔ OA-1 — Appendix D. pine/src 00–70,95 + stubs 80/90, tools/pine_build.py +
        pine_lint.py + 27 unit tests, lint 9/9 PASS, deterministic build, BUILD_ID 1808daab3a6dfee3)
-  [🔄] Agent 03 — Opus — Pine Strategy, Sizing + AccountProfile Envelope  READY-FOR-FABLE (2026-11-05:
-       80_strategy.pine envelope + [Account]/[Risk] inputs, presets generated from lucid_profiles.yaml,
-       self-test mode, lint 9/9, tools tests green; compile + Strategy Tester pending ⛔ OA-1/OA-2/OA-3)
+  [✅] Agent 03 — Opus — Pine Strategy, Sizing + AccountProfile Envelope  COMPLETE (Fable-verified
+       2026-11-05, PR #181, static; compile pending ⛔ OA-1/OA-2/OA-3): 80_strategy.pine envelope +
+       [Account]/[Risk] inputs, presets generated from lucid_profiles.yaml (accessors now
+       `simple string` ?: chains — the series/simple mismatch at strategy.risk.max_intraday_loss was
+       real and is fixed), v6_drawdown_buffer_usd in the YAML, I1–I8 re-verified, all 8 oracle sizes,
+       lint 9/9, 61 tool tests, Java 1,029 green; ENTRY-CAP mismatch (09-23 06:37) documented for 06)
   [⬜] Agent 04 — Opus — Relay Payload Adapter + Order Lifecycle
   [✅] Agent 05 — Opus — Java Repurpose: Topstep Out, Lucid Profiles, Parity Harness
        COMPLETE (Fable-verified 2026-11-05, PR #179): TopstepX → trading-engine/legacy (not compiled),
@@ -837,6 +840,52 @@ APPENDIX A — PER-AGENT VERIFICATION LOG  (append-only; never delete)
         exits earlier (trailing, X5), so an open TV position can refuse a later oracle signal (I1/S8) —
         watch 09-23 05:04/05:16 and 09-28 12:32 → 14:53 (G1) | OA-2: ⛔ issued (Appendix D) | OA-3: ⛔
         issued (Appendix D)
+  A-03v FABLE-VERIFIED (static; compile pending OA-1/OA-2) 2026-11-05, PR #181 | invariants re-read against
+        the A-03 line table and attacked: I1 reversal-same-bar impossible (pyramiding 0 + flatOk needs
+        position_size 0 AND opentrades 0; opposite side needs barsSinceExit ≥ 2 = one full flat bar;
+        entry on the exit bar refused because a bracket fill on bar N is visible at N's confirmed calc with
+        exit_bar_index = N → barsSinceExit 0; a close_all fill at N's close is seen on N+1 with
+        barsSinceExit 1, so same side N+1 / opposite N+2) · I3 entry ≥ 16:30 ET refused by hardNoEntry on
+        time_close (fill time) in [16:30,18:00) regardless of i_noEntryAfter; parity default 15:45 blocks
+        earlier; flatten at the 16:35–16:40 bar close (flattenNow(time_close) ∈ [16:40,18:00)); DST-safe via
+        hour()/minute()/dayofweek(t,"America/New_York"); Sunday/any 18:00 roll: tradingDayKey changes →
+        dayRolled flattens a survivor on the first bar of the new day; Friday min(flattenAt, fridayFlatAt)
+        · I4 entryQty ≤ floor(min(profile max, scalingCap(EOD profit), 5)/MPC) by construction, live
+        assertion at 80:221 · I5 lastOrderMs = max(entry close, close_all close, bracket exit_time) so a
+        bracket fill restarts the 60 s clock; 5m closes are ≥ 300 s apart anyway · I6 holdOk gates ONLY
+        strategy.close_all (FLATTEN/SOFT_STOP); the bracket strategy.exit is submitted in the entry block
+        and is never delayed (broker stop untouched) · I7 only 80:88-93/150-151 read the profile · I8 all
+        orders inside barstate.isconfirmed | sizing: all 8 oracle rows re-derived by hand AND by the new
+        test_oracle_per_micro_risk_arithmetic (ticks = |entry−stop|/0.25, $/micro = ticks×0.50 matches the
+        oracle's own "$X/micro" text, size = min(5, floor(250/$)) = 5,5,5,5,2,5,1,3; a 4-tick fill drift
+        away from the stop never exceeds the oracle size, a closer fill reproduces it) | COMPILE FIX
+        (real): Pine docs "User-defined functions → Qualifier keywords": a parameter declared with a bare
+        type keyword (`pass(int source)`) defaults to the SERIES qualifier → apSoftDailyLoss(string p)
+        returned series float → strategy.risk.max_intraday_loss(value = simple int/float) would NOT
+        compile. pine_build now emits `apX(simple string p) => p == "A" ? v : … : i_cX` (?: chain over
+        const literals + the CUSTOM input, no switch / mutable local) for the 7 accessors and
+        apScalingCap(simple string p, float pr); test_accessors_are_simple_qualified pins it | bare `na`
+        arguments cast explicitly (float(na) / int(na)) per the type-system doc ("the type assigned to an
+        na value depends on how the code uses it … use float() to cast") in the FLATTEN/SOFT_STOP payload
+        calls and the self-test cases | log.warning (v5+/v6, const format string) and
+        strategy.closedtrades.exit_time / exit_bar_index / size, strategy.opentrades.entry_time are v6
+        built-ins — kept; the TV reference page is JS-rendered so OA-1 remains the compile proof | AP-5:
+        config/lucid_profiles.yaml now carries v6_drawdown_buffer_usd for all 8 profiles = 10 % of that
+        profile's MLL (200/200/100/100/300/300/450/450), marked CONSERVATIVE (not a Lucid rule:
+        LUCID_RULES.md §8 has no buffer); the generator fallback stays for a profile that lacks it;
+        test_values_come_from_yaml asserts key == 0.10 × MLL; Java LucidProfiles reads by key (new key
+        ignored) | I5 vs oracle: 09-23 has 4 entries in one CME day → the 4th (06:37 BUY 31019.00) is
+        refused "I5 maxEntriesPerSession"; default 3 NOT changed (sacred); documented in
+        docs/v6/GOLDEN_SIGNALS.md §1 as the known ENTRY-CAP mismatch (+ OPEN-POSITION candidates) and
+        pinned by test_entry_cap_mismatch_is_exactly_the_09_23_fourth_signal | evidence: SOURCE_DATE_EPOCH=0
+        build ×2 → file sha256 f35b3aeccd9ac767f3559dd792753aa0ea455fae0f0acee98285cc1b7ead403a both runs
+        (2,729 lines, src-sha256 / BUILD_ID 626b55f7852df974); --check OK; lint 9/9 PASS; python3 -m
+        unittest discover -s tools/tests → 61 tests OK (3 new); `./gradlew :trading-engine:clean
+        :trading-engine:build :api-backend:clean :api-backend:build` (JDK 21) BUILD SUCCESSFUL, 1,029
+        tests (1 skipped) / 0 failures before and after the YAML change | residual (not fixable
+        statically): compile itself (OA-1); strategy.risk.* session-reset moment (C-14, OA-2);
+        max_intraday_filled_orders = 6 also counts bracket exits (3 round trips) — by design; TV emulator
+        bracket semantics vs Tradovate OSO = Agent 04/07 | ⛔ OA-1/OA-2/OA-3 unchanged
   A-04  payload_check results: __ | lifecycle table rows: __
   A-05  tests before/after: trading-engine 1,038 (1 skipped) + api-backend 8 = 1,046 / trading-engine 1,015
         (1 skipped) + api-backend 11 = 1,026, all green (`./gradlew clean build`, JDK 21) + 14 Python tool tests

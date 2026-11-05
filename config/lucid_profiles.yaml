@@ -76,6 +76,7 @@ profiles:
       amount_usd: null                    # NOT PUBLISHED -> OA-7; conservative_unverified
       breach_type: "soft_lockout_until_next_session"   # source: customize
     v6_soft_daily_loss_usd: 600           # master prompt 03.5 default = 30% of MLL; conservative_unverified
+    v6_drawdown_buffer_usd: 200           # V6 policy (Fable A-03v), NOT a Lucid rule (LUCID_RULES.md s8 has none): no entry when MLL room - trade risk < this. CONSERVATIVE = 10% of MLL
     max_contracts_minis: 4                # source: eval
     max_contracts_micros: 40              # source: eval
     scaling_plan_applies: false           # source: scaling ("no scaling plan in the evaluation phase")
@@ -102,6 +103,7 @@ profiles:
       amount_usd: null                    # NOT PUBLISHED -> OA-7; conservative_unverified
       breach_type: "soft_lockout_until_next_session"   # source: customize
     v6_soft_daily_loss_usd: 600           # conservative_unverified (30% of MLL)
+    v6_drawdown_buffer_usd: 200           # V6 policy (Fable A-03v); CONSERVATIVE = 10% of MLL; not a Lucid rule
     max_contracts_minis: 4                # source: funded (hard ceiling)
     max_contracts_micros: 40              # source: funded
     scaling_plan_applies: true            # source: scaling
@@ -134,6 +136,7 @@ profiles:
     consistency_max_pct: 40
     min_trading_days: 3
     v6_soft_daily_loss_usd: 300           # conservative_unverified (30% of MLL)
+    v6_drawdown_buffer_usd: 100           # V6 policy (Fable A-03v); CONSERVATIVE = 10% of MLL; not a Lucid rule
 
   LUCID_FLEX_25K_FUNDED:
     plan: "LucidFlex"
@@ -151,6 +154,7 @@ profiles:
     payout_min_daily_profit_usd: 100      # source: payouts
     payout_max_per_request_usd: 1000      # source: payouts
     v6_soft_daily_loss_usd: 300           # conservative_unverified
+    v6_drawdown_buffer_usd: 100           # V6 policy (Fable A-03v); CONSERVATIVE = 10% of MLL; not a Lucid rule
 
   LUCID_FLEX_100K_EVAL:
     plan: "LucidFlex"
@@ -166,6 +170,7 @@ profiles:
     consistency_max_pct: 40
     min_trading_days: 3
     v6_soft_daily_loss_usd: 900           # conservative_unverified
+    v6_drawdown_buffer_usd: 300           # V6 policy (Fable A-03v); CONSERVATIVE = 10% of MLL; not a Lucid rule
 
   LUCID_FLEX_100K_FUNDED:
     plan: "LucidFlex"
@@ -185,6 +190,7 @@ profiles:
     payout_min_daily_profit_usd: 200      # source: payouts
     payout_max_per_request_usd: 2500      # source: payouts
     v6_soft_daily_loss_usd: 900           # conservative_unverified
+    v6_drawdown_buffer_usd: 300           # V6 policy (Fable A-03v); CONSERVATIVE = 10% of MLL; not a Lucid rule
 
   LUCID_FLEX_150K_EVAL:
     plan: "LucidFlex"
@@ -200,6 +206,7 @@ profiles:
     consistency_max_pct: 40
     min_trading_days: 3
     v6_soft_daily_loss_usd: 1350          # conservative_unverified
+    v6_drawdown_buffer_usd: 450           # V6 policy (Fable A-03v); CONSERVATIVE = 10% of MLL; not a Lucid rule
 
   LUCID_FLEX_150K_FUNDED:
     plan: "LucidFlex"
@@ -220,6 +227,7 @@ profiles:
     payout_min_daily_profit_usd: 250      # source: payouts
     payout_max_per_request_usd: 3000      # source: payouts
     v6_soft_daily_loss_usd: 1350          # conservative_unverified
+    v6_drawdown_buffer_usd: 450           # V6 policy (Fable A-03v); CONSERVATIVE = 10% of MLL; not a Lucid rule
 
 owner_actions:
   - id: OA-4

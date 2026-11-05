@@ -22,7 +22,8 @@ SOURCE_DATE_EPOCH or --no-time two builds of the same tree are byte-identical.
 AccountProfile presets (V6 Agent 03, task 03.4 / AP-5): the marker "// @@ACCOUNT_PROFILES@@" in a
 source is replaced by Pine code GENERATED from config/lucid_profiles.yaml: the profile dropdown,
 the CUSTOM inputs (defaulting to the first profile's numbers), the I3 outer time limits and one
-switch-accessor per field. No plan number is typed into pine/src. When the marker is present the
+accessor per field (`apX(simple string p) => p == "A" ? .. : i_cX`, simple-qualified so the result can
+feed strategy.risk.max_intraday_loss). No plan number is typed into pine/src. When the marker is present the
 YAML bytes are part of the src-sha256 / BUILD_ID. The YAML subset reader is stdlib-only.
 
 Python 3.9+ standard library only.
@@ -43,9 +44,9 @@ VERSION_LINE = "//@version=6"
 BUILD_ID_MARKER = "// @@BUILD_ID@@"
 PROFILES_MARKER = "// @@ACCOUNT_PROFILES@@"
 DEFAULT_PROFILES = os.path.join(REPO, "config", "lucid_profiles.yaml")
-# drawdownBuffer$ is not a Lucid rule (LUCID_RULES.md has none). Until Fable adds
-# `v6_drawdown_buffer_usd` to a profile in lucid_profiles.yaml it is DERIVED from that profile's own
-# YAML MLL with this V6 policy fraction (CONSERVATIVE-UNVERIFIED; owner can override via CUSTOM).
+# drawdownBuffer$ is not a Lucid rule (LUCID_RULES.md has none). Every profile in lucid_profiles.yaml
+# carries `v6_drawdown_buffer_usd` (Fable, A-03v: 10 % of that profile's MLL, CONSERVATIVE). If a
+# profile ever lacks it, it is DERIVED from that profile's own YAML MLL with this same fraction.
 DRAWDOWN_BUFFER_FRACTION_OF_MLL = 0.10
 STAMP_PREFIX = "// BUILD: "
 FILE_MARKER = "// ==== file: {} ===="
@@ -239,12 +240,15 @@ def generate_profiles_block(path):
     ]
 
     def accessor(fn, typ, key, custom, conv):
-        L.append("{}(string p) =>".format(fn))
-        L.append("    {} v = switch p".format(typ))
-        for n, s in profs:
-            L.append('        "{}" => {}'.format(n, conv(s[key])))
-        L.append("        => {}".format(custom))
-        L.append("    v")
+        # `simple string p` + a ?: chain, NOT `string p` + switch/mutable local: a parameter declared
+        # with a bare type keyword defaults to the "series" qualifier (Pine docs, User-defined functions
+        # -> Qualifier keywords: `pass(int source)` returns "series int"), and strategy.risk.max_intraday_loss
+        # needs a simple value. The ?: chain over const literals / the CUSTOM input stays simple.
+        L.append("{}(simple string p) =>".format(fn))
+        expr = custom
+        for n, s in reversed(profs):
+            expr = 'p == "{}" ? {} : {}'.format(n, conv(s[key]), expr)
+        L.append("    {}".format(expr))
 
     accessor("apMaxMicros", "int", "max_micros", "i_cMaxMicros", str)
     accessor("apScalingCapBase", "int", "scaling_cap_micros", "i_cScaleMicros", str)
@@ -254,7 +258,7 @@ def generate_profiles_block(path):
     accessor("apMll", "float", "mll", "i_cMll", _flt)
     accessor("apLockedFloor", "float", "locked_floor", "i_cLockFloor", _flt)
     L.append("// Scaling plan (funded profiles): micros allowed at EOD account profit `pr`; no plan -> scaling_cap_micros.")
-    L.append("apScalingCap(string p, float pr) =>")
+    L.append("apScalingCap(simple string p, float pr) =>")
     L.append("    int v = apScalingCapBase(p)")
     first = True
     for n, s in profs:
