@@ -1,11 +1,24 @@
-# Topstep Futures Trading Algorithm
+# Futures Trading Algorithm — LucidICT V6 (TradingView → CrossTrade → Lucid/Tradovate)
 
-A fully automated futures trading system designed for Topstep evaluation and funded accounts. Built with event-driven architecture using Java for the trading engine, Spring Boot for the API, and React + TypeScript for the dashboard.
+An ICT/SMC futures strategy, proven on a real MNQ tape by the Java engine in this repo, now **executed by a
+Pine Script v6 strategy on TradingView** and routed to **Lucid Trading** accounts on Tradovate through a
+webhook relay (CrossTrade) with broker-side brackets. The Java engine is the **research lab and parity
+oracle**; it no longer trades.
+
+> **V6 (2026-11-05).** Topstep access was permanently revoked on 2026-11-05; the TopstepX/ProjectX live path
+> was removed (LIVE mode fails loud, `POST /api/control/start?mode=LIVE` → 410). Everything below that
+> mentions Topstep is **historical** and kept for context. Start here:
+> - **Owner runbook (go live without asking Claude):** `docs/RUNBOOK_TRADINGVIEW.md`
+> - **Venue rules with sources:** `docs/LUCID_RULES.md`, `docs/PLATFORM_FACTS.md`
+> - **Relay payloads + failure lifecycle:** `docs/v6/RELAY_SETUP.md` · **drills:** `docs/v6/DRILL_SCRIPT.md`
+> - **Port map + parity oracle:** `docs/v6/PORT_MAP.md`, `docs/v6/GOLDEN_SIGNALS.md`, `PARITY_REPORT.md`
+> - **The master prompt that built it (ledger, owner actions):** `TRADINGVIEW_MIGRATION_MASTER_PROMPT_V6.txt`
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Architecture](#architecture)
+- [V6 Architecture](#v6-architecture)
+- [Overview (historical: Topstep era)](#overview)
+- [Architecture (historical: Java live engine)](#architecture)
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
@@ -15,7 +28,51 @@ A fully automated futures trading system designed for Topstep evaluation and fun
 - [Safety and Compliance](#safety-and-compliance)
 - [License](#license)
 
+## V6 Architecture
+
+```
+        ┌──────────────────────── TradingView (cloud) ────────────────────────┐
+        │  Pine v6 strategy LucidICT_v6 on MNQ1! 5m (1m intrabars via         │
+        │  request.security_lower_tf; MES read-only for SMT)                  │
+        │   sessions → levels → raid score → MSS → displacement → FVG/OTE     │
+        │   → bias → sizing → AccountProfile caps (from config/lucid_profiles) │
+        │   strategy.entry/exit/close_all(alert_message = relay payload)      │
+        └──────────────────────────────┬──────────────────────────────────────┘
+                                       │ ONE alert: {{strategy.order.alert_message}} → HTTPS webhook
+                                       ▼
+        ┌──────────────── Relay: CrossTrade (cloud) ──────────────────────────┐
+        │  secret key → strategy sync (out_of_sync=flatten, exit block) →      │
+        │  Account Manager (session loss, drawdown, window, auto-flatten       │
+        │  16:42 ET / 15:42 CT, Block Signals) → Tradovate-native OSO bracket  │
+        │  (stop + T1, GTC) → N linked Lucid accounts, same side, same time    │
+        └──────────────────────────────┬──────────────────────────────────────┘
+                                       ▼
+                     Tradovate — Lucid LucidFlex accounts (eval → funded)
+
+        Java (this repo, local, NOT in the live path):
+          backtest · Monte Carlo · optimisation · GoldenSignalExport (parity/java_signals.csv)
+          · tools/pine_parity.py + tools/run_parity.sh (Pine vs Java on the same bars)
+          · dashboard = "Research mode — live trading on TradingView"
+```
+
+| piece | where | owner doc |
+|---|---|---|
+| Pine sources (modular) → one pasteable file | `pine/src/*.pine` → `pine/dist/LucidICT_v6.pine` | [Building the Pine file](#building-the-pine-file) |
+| Plan numbers (data only, sourced) | `config/lucid_profiles.yaml` | `docs/LUCID_RULES.md` |
+| Relay payload builders + checker | `pine/src/75_payload.pine`, `tools/payload_check.py` | `docs/v6/RELAY_SETUP.md` |
+| Parity oracle + harness | `parity/*.csv`, `tools/pine_parity.py`, `tools/bars_drift.py`, `tools/run_parity.sh` | `docs/v6/GOLDEN_SIGNALS.md`, `PARITY_REPORT.md` |
+| Java lab (backtests on the Lucid profile, parity export) | `trading-engine/`, `api-backend/`, `dashboard-frontend/` | `docs/QUICK_START.md`, `docs/RUNBOOK_TRADINGVIEW.md` §10 |
+| Secret hygiene | `.githooks/pre-commit` (`git config core.hooksPath .githooks`) | `.githooks/README.md` |
+
+Sacred invariants (master prompt Section 2): one strategy instance, one traded root, one alert → **no
+opposing exposure across instruments or accounts**; every entry carries a **broker-side stop at submission**;
+no entries ≥ 16:30 ET (15:30 CT), flat at 16:40 ET (15:40 CT); size ≤ plan caps; no HFT / microscalp
+signature; account-agnostic core; no repaint; no secrets in git; no Topstep orders.
+
 ## Overview
+
+> **Historical (Topstep era, V1–V5).** The Java engine below traded Topstep via TopstepX/ProjectX. In V6 it
+> is the research lab; the strategy logic it proved is what `pine/` ports.
 
 This trading algorithm implements ICT/Smart Money Concepts (SMC) with strict risk management to trade futures contracts while adhering to Topstep's rules:
 
@@ -32,6 +89,10 @@ This trading algorithm implements ICT/Smart Money Concepts (SMC) with strict ris
 3. **Long-term**: Scale to multiple evaluation accounts and strategies
 
 ## Architecture
+
+> **Historical (Java live engine).** This is the V1–V5 picture. In V6 the connector layer's live path is
+> gone (`TopstepConn.` moved to `trading-engine/legacy`, not compiled; `MockConnector` remains for SIM /
+> backtests) and the dashboard is a research viewer. The live path is the [V6 Architecture](#v6-architecture).
 
 The system follows an event-driven architecture with clear separation of concerns:
 
@@ -89,9 +150,9 @@ The system follows an event-driven architecture with clear separation of concern
 
 ### Key Components
 
-1. **Market Data & Connectivity**: Receives and normalizes market data from Topstep
-2. **Strategy Engine**: Implements ICT/SMC trading logic and generates signals
-3. **Risk Engine**: Enforces Topstep rules and risk limits before every trade
+1. **Market Data & Connectivity**: Receives and normalizes market data (V6: tape replay / Mock only; Topstep feed removed)
+2. **Strategy Engine**: Implements ICT/SMC trading logic and generates signals (V6: the parity oracle for `pine/`)
+3. **Risk Engine**: Enforces the prop-firm rules and risk limits before every trade (V6: Lucid profiles from `config/lucid_profiles.yaml`, EOD-trailing MLL + lock)
 4. **Execution Engine**: Manages order lifecycle and position tracking
 5. **Event Bus**: Central pub/sub system for decoupled communication
 6. **API Backend**: REST + WebSocket endpoints for dashboard
@@ -160,10 +221,23 @@ Futures-Trading-Algorithm/
 │   ├── tsconfig.json
 │   └── vite.config.ts
 │
+├── pine/                    # V6: Pine Script v6 strategy
+│   ├── src/                 # modular sources 00_header … 95_debug (concatenated by tools/pine_build.py)
+│   └── dist/LucidICT_v6.pine# the ONE generated file the owner pastes (never hand-edited)
+│
+├── tools/                   # V6: pine_build.py, pine_lint.py, payload_check.py,
+│   │                        #     pine_parity.py, bars_drift.py, run_parity.sh, tests/
+├── parity/                  # V6: Java oracle (java_signals.csv, bars_*.csv) + owner TradingView exports
+├── .githooks/               # V6: pre-commit secret scan (git config core.hooksPath .githooks)
+│
 ├── docs/                    # Documentation
+│   ├── RUNBOOK_TRADINGVIEW.md   # V6 owner runbook (setup, daily, kill switch, incidents, go-live ladder)
+│   ├── LUCID_RULES.md / PLATFORM_FACTS.md   # venue truth with vendor URLs + retrieval dates
+│   ├── v6/                  # PORT_MAP, PINE_CONSTRAINTS, GOLDEN_SIGNALS, RELAY_SETUP, DRILL_SCRIPT/REPORT
+│   ├── RUNBOOK_V5.md        # historical (Java engine on Topstep)
 │   └── architecture/        # Architecture diagrams and specs
 │
-├── config/                  # Configuration files
+├── config/                  # lucid_profiles.yaml (plan numbers, sourced) + engine config
 │
 ├── LICENSE                  # MIT License
 └── README.md               # This file
@@ -208,7 +282,13 @@ Futures-Trading-Algorithm/
 
 ### Running Locally
 
-> **V5 (2026-09-28): run it the proven way.** `docs/RUNBOOK_V5.md` has the exact start commands, the
+> **V6: the Java engine is the lab.** `BACKTEST` and `SIM` modes work as before (defaults now use the
+> `LUCID_FLEX_50K_EVAL` profile); `LIVE` refuses to start ("Topstep removed in V6 — live trading runs on
+> TradingView (see RUNBOOK_TRADINGVIEW.md)"). Live trading is configured in `docs/RUNBOOK_TRADINGVIEW.md`.
+> The parity oracle: `./gradlew :trading-engine:test --tests '*GoldenSignalExport*'` → `parity/java_signals.csv`;
+> compare with a TradingView export via `tools/run_parity.sh`.
+
+> **V5 (2026-09-28, historical): run it the proven way.** `docs/RUNBOOK_V5.md` has the exact start commands, the
 > `engine-defaults.properties` the real-tape matrix was proven with, the A/B switches, the pre-LIVE
 > checklist, and how to read `GET /api/setup` ("which gate killed it"). The engine boots in that
 > configuration with **no flags** (`./gradlew bootRun` or `java -jar api-backend-1.0.0-SNAPSHOT.jar`);
@@ -296,12 +376,29 @@ Lint rules (`tools/pine_lint.py`, details in its docstring): L1 exactly one `str
 L3 every `request.security` uses `lookahead = barmerge.lookahead_off` (or the documented `[1]` + `lookahead_on`
 pair); L4 entries only in `80_strategy.pine`; L5 no order references the SMT symbol or any `request.*` data
 (I1); L6 every `strategy.entry` inside `if barstate.isconfirmed` (I8); L7 every entry has a
-`strategy.exit(..., stop = ...)` (I2); L8 no URLs / secrets; L9 no `calc_on_every_tick`, `pyramiding = 0`.
+`strategy.exit(..., stop = ...)` (I2); L8 no URLs / secrets; L9 no `calc_on_every_tick`, `pyramiding = 0`;
+L10 every order call carries a non-empty `alert_message` (the relay payload).
 
 Pine cannot be compiled or run here — TradingView is the only compiler. Compiling is owner action OA-1
 (click-by-click steps in `TRADINGVIEW_MIGRATION_MASTER_PROMPT_V6.txt` Appendix D).
 
+### Parity: does Pine take the Java engine's trades?
+
+```bash
+./gradlew :trading-engine:test --tests '*GoldenSignalExport*'   # JDK 21 → parity/java_signals.csv (8 signals)
+tools/run_parity.sh --tv-tz America/Chicago                     # needs parity/tv_trades.csv (owner OA-2)
+```
+`run_parity.sh` stops with the exact owner steps when the TradingView export is missing; with it, it runs the
+data-drift check (`tools/bars_drift.py`, if `parity/tv_bars_*.csv` from OA-3 exist), `tools/pine_parity.py`
+with every hard fail on (opposite direction, no stop, entry ≥ 16:30 ET, size above cap, stop/T1 off by > 2 ticks)
+and rewrites `PARITY_REPORT.md` with the pre-filled expected classifications (`docs/v6/PARITY_EXPECTED.md`).
+
 ## Development Roadmap
+
+> **Historical.** The Week 1–4 plan below is the original 2026 scaffold. Delivered since: V1/V2 chart fixes,
+> V3 top-down OTE, V4 ICT stack, V5 trade-flow unblock (Java engine proven on the real tape), **V6 TradingView
+> migration** (this). Deferred to V7: multi-root trading behind an exposure gateway, broker-side resting limits,
+> relay-fed live dashboard, package rename `com.topstep` → neutral (master prompt Section 9).
 
 ### ✅ Week 1 - Foundations (COMPLETED)
 - [x] Project structure and build configuration
@@ -359,7 +456,16 @@ Pine cannot be compiled or run here — TradingView is the only compiler. Compil
 
 ## Safety and Compliance
 
-### Topstep Rules Compliance
+### Lucid Trading rules (V6) — every rule sourced in `docs/LUCID_RULES.md`
+- Bots and trade copiers permitted; **hedging, HFT and microscalping prohibited and auto-detected** → one strategy,
+  one traded root (MNQ), same side on every account; ≤ 3 entries per CME day, ≥ 60 s between orders, no
+  strategy exit < 30 s after a fill; broker-side stop on every trade (OSO at Tradovate)
+- LucidFlex 50K: target $3,000 / Max Loss Limit $2,000 EOD-trailing with lock / 40 micros max; forced flat
+  16:45 ET (15:45 CT) — the strategy is flat at 16:40 ET (15:40 CT), the relay backstop at 16:42 ET (15:42 CT)
+- Two open questions to Lucid support (OA-4 hedging wording, OA-7 daily-loss-limit amount) are printed verbatim
+  in `docs/LUCID_RULES.md`
+
+### Topstep Rules Compliance (historical, V1–V5)
 ✅ All trading originates from local device
 ✅ Daily loss limits enforced
 ✅ Trailing drawdown monitored
@@ -367,6 +473,8 @@ Pine cannot be compiled or run here — TradingView is the only compiler. Compil
 ✅ Flatten-by-time automated
 
 ### Security
+- Relay key, webhook URL and account names live only in TradingView's hidden inputs / CrossTrade — never in
+  the repo (placeholders `<RELAY_SECRET>`, `<ACCOUNT_1>`); `.githooks/pre-commit` blocks key-shaped strings
 - API keys stored in environment variables
 - No credentials in source code
 - Local-first architecture
@@ -390,10 +498,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **RISK WARNING**: Trading futures involves substantial risk of loss and is not suitable for all investors. This software is provided "as is" without warranty of any kind. Past performance is not indicative of future results. Always test thoroughly in simulation before risking real capital.
 
-**Topstep Compliance**: Ensure you read and understand all Topstep rules and terms of service. This software is designed to help comply with those rules, but YOU are responsible for ensuring compliance with all applicable rules and regulations.
+**Prop-firm Compliance**: Ensure you read and understand all Lucid Trading rules and terms of service (and those of
+TradingView, CrossTrade and Tradovate). This software is designed to help comply with those rules, but YOU are
+responsible for ensuring compliance with all applicable rules and regulations. (Topstep wording: historical.)
 
 ---
 
-**Status**: 🚧 Under Development - Week 1 Complete
+**Status**: V6 — Agents 00–05 merged (Pine port, relay adapter, Java lab); Agents 06–08 waiting on owner
+TradingView/relay actions (compile, Strategy Tester export, drills). See the ledger in
+`TRADINGVIEW_MIGRATION_MASTER_PROMPT_V6.txt` Section 1 and the owner action list in its Appendix D.
 
 For questions or issues, please open a GitHub issue.

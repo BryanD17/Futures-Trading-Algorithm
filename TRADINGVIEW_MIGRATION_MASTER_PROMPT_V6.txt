@@ -202,11 +202,21 @@ PHASE 1 — OPUS BUILD  (sequential: 02 → 03 → 04; 05 parallel with 02–04)
        LIVE fails loud + api 410, Lucid profiles from YAML, EOD-trailing MLL + lock, pine_parity.py, .githooks
 
 PHASE 2 — FABLE VERIFY
-  [⬜] Agent 06 — Fable — Parity Verification (Java tape vs TradingView)
-  [⬜] Agent 07 — Fable — Relay + Demo Safety Drill
+  [⛔] Agent 06 — Fable — Parity Verification (Java tape vs TradingView)  OWNER-ACTION OA-1, OA-2, OA-3
+       (prep done 2026-11-05: tools/run_parity.sh turnkey + PARITY_REPORT.md skeleton with the expected
+       classifications pre-filled (docs/v6/PARITY_EXPECTED.md); pine_parity.py now hard-fails on size above
+       cap (06.4) and, with --require-stop, on a stopless trade; tools/bars_drift.py = 06.1 data-drift check.
+       Resumes the moment parity/tv_trades.csv (+ tv_bars_*.csv) land: `tools/run_parity.sh --tv-tz <chart tz>`)
+  [⛔] Agent 07 — Fable — Relay + Demo Safety Drill  OWNER-ACTION OA-5 (needs OA-0/OA-1 + the Pine sha from 06)
+       (prep done 2026-11-05: docs/v6/DRILL_SCRIPT.md D1–D8 click-by-click on a Tradovate practice account, then
+       D1/D2/D4 on one Lucid eval @ 1 micro, PASS/FAIL per drill, D7 records the flatten_first-vs-sync ordering;
+       docs/v6/DRILL_REPORT.md template. Fable stamps results when the owner pastes evidence)
 
 PHASE 3 — SIGN-OFF
-  [⬜] Agent 08 — Fable — Runbook, Go-Live Gate, Final Sign-off
+  [⛔] Agent 08 — Fable — Runbook, Go-Live Gate, Final Sign-off  WAITS ON 06 + 07
+       (prep done 2026-11-05: docs/RUNBOOK_TRADINGVIEW.md drafted in full (08.1 + 08.2 ladder, ET+CT everywhere,
+       cold-read fixes applied — A-08); README.md + docs/QUICK_START.md updated per 08.3. Open: 08.4 final
+       Appendix F board + tag v6.0.0 after 06/07 are ✅)
 
 DEPENDENCY GRAPH:
   00 ─┬─▶ 02 ─▶ 03 ─▶ 04 ─┬─▶ 06 ─▶ 07 ─▶ 08
@@ -1007,9 +1017,49 @@ APPENDIX A — PER-AGENT VERIFICATION LOG  (append-only; never delete)
         a scratch commit holding a fake AKIA key + key=<token>: blocked (exit 1, both rules fired), probe discarded;
         secret_scan.py --all over the tree: clean; no secret in the diff | hygiene: removed the committed
         .githooks/__pycache__/*.pyc | notes for 06: size-above-cap and TV header names stay Agent 06 checks.
-  A-06  match rate __ % | opposite disagreements __ | G1/G2/G3 __/__/__
-  A-07  D1..D8: __ | Lucid eval D1/D2/D4: __
-  A-08  cold-read issues found/fixed: __ / __ | tag: __
+  A-06  PREP 2026-11-05 (Fable, PR agent-06-08-v6-prep; run itself ⛔ OA-2/OA-3): tools/run_parity.sh (exit 2 +
+        the exact OA-2 steps when parity/tv_trades.csv is absent; else drift check per symbol → pine_parity with
+        --require-stop --cap 5 → PARITY_REPORT.md = header + tool output + drift + docs/v6/PARITY_EXPECTED.md);
+        smoke-tested end to end with a 2-trade synthetic export (rc 0, G2 PASS, G1 "no TV trade matched",
+        OA-3-pending stubs rendered), synthetic inputs removed before commit | pine_parity.py 06.4: SIZE ABOVE CAP
+        hard fail (TV size > --cap, default 5 = `max micros per trade`; --cap 0 off) + NO STOP hard fail under
+        --require-stop (default off keeps a hand-made export reportable as N/A) — 3 new tests (6 > 5 fails, 5 = 5
+        passes, --cap 0/6 pass; stopless trade rc 0 by default / rc 1 with the flag) | tools/bars_drift.py (06.1):
+        TV "Export chart data" (unix seconds UTC, ISO with offset, or naive ISO in --tv-tz) vs parity/bars_*.csv by
+        UTC minute → median/p95/max |close Δ| ticks, bars missing both ways, any-OHLC > 1 tick count; verdict OK if
+        median ≤ 1 tick else "judge parity with ±N-tick tolerance"; rc 2 on no overlap; 6 tests incl. the real
+        7,830-bar tape | expected classifications pre-filled for all 8 oracle rows (1 MATCH, 2/3 MATCH-or-
+        OPEN-POSITION, 4 ENTRY-CAP with the "unless 2/3 were refused" caveat, 5 MATCH/G2, 6 MATCH + Sunday-bars
+        DATA check, 7 ENTRY_MODE +40t, 8 G1 MATCH-or-OPEN-POSITION with the "thesis carried by trade 7, T1
+        30558 must still print" rule) + the adjusted-denominator reading of the ≥ 90 % target (8 rows → one
+        unexplained miss = 87.5 %) | python3 -m unittest discover -s tools/tests → 92 OK; lint 10/10; build --check
+        OK | match rate __ % | opposite disagreements __ | G1/G2/G3 __/__/__  (after OA-2)
+  A-07  PREP 2026-11-05 (Fable; drills ⛔ OA-5): docs/v6/DRILL_SCRIPT.md — ground rules (practice account first,
+        RTH weekday 09:30–15:30 ET / 08:30–14:30 CT, never roll week; curl POST of the exact payload_check --sample
+        payloads as the test tool because a real fill alert can take days; secrets only in ~/drills/), prep P1–P9,
+        D1–D8 each with setup / action / expected TV+relay+broker / evidence / PASS-FAIL (D2 = OSO Stop+Limit GTC
+        within 10 s + the BRACKET message rejected; D3 = manual long + stale ENTRY → withheld + flattened, never
+        short; D4 = FLATTEN closes AND cancels both legs + optional 16:40 ET / 16:42 ET live checks; D5 three
+        switches; D6 one-alert check + opposite ENTRY while long; D7 duplicate → 1 or 0 never 2, records ordering
+        (a) flatten_first-first / (b) sync-gate-first for RELAY_SETUP L5/R-4, + qty-1000 rejection; D8 OLD→NEW
+        BUILD_ID in strategy_tag), §10 Lucid eval D1/D2/D4 @ 1 micro with the Lucid-rule note, §11 what Fable does
+        | docs/v6/DRILL_REPORT.md template (times ET (CT), screenshot ids S1–S22, Fable verdict column) |
+        D1..D8: __ | Lucid eval D1/D2/D4: __ | D7 ordering: __  (after OA-5)
+  A-08  PREP 2026-11-05 (Fable; final sign-off waits on 06/07): docs/RUNBOOK_TRADINGVIEW.md §1 picture + 4 layers,
+        §2 clock table (every row ET + CT), §3 setup S1–S14, §4 daily D1–D8, §5 kill switch ×3 in order, §6 update =
+        re-create the alert, §7 go-live ladder 5 rungs with the exact flip sequence, §8 incident playbook mapped to
+        RELAY_SETUP L1–L10 + Lucid email, §9 what NOT to do, §10 Java lab commands, §11 recurring | README.md: V6
+        banner + pointers, V6 architecture diagram + piece table + invariants, Topstep Overview/Architecture/
+        Roadmap/Compliance marked historical, project tree (pine/tools/parity/.githooks/docs/v6), lint L10, parity
+        section, status line | docs/QUICK_START.md: V6 banner (BACKTEST/SIM stay, LIVE removed → 410, where the lab
+        fits), LIVE section marked REMOVED with the V6 message, TOPSTEP AUTOMATION POLICY → historical + pointer |
+        cold read (Fable, 2026-11-05) — issues found/fixed 6/6: (1) "Link Demo" never said WHICH login → "the
+        Tradovate login Lucid issued, NOT Link Live"; (2) tradingEnabled ON had no effect without re-creating the
+        alert → §7 flip sequence spelled out + §6 note on inputs; (3) softDailyLoss/drawdown numbers were only in
+        the YAML → §3 S6/S9 state $600 / $1,800 with their derivation; (4) "re-create the alert" needed the snapshot
+        reason → §6 opens with PF A5; (5) a rejected BRACKET row looked like an error → §8 first row says it is
+        normal; (6) roll week needed a date rule → §4 D7 "Thursday before the 3rd Friday of Mar/Jun/Sep/Dec" |
+        tag: __ (after 06/07 ✅)
 
 ================================================================================
 APPENDIX B — OWNERSHIP MAP
@@ -1039,7 +1089,61 @@ APPENDIX C — FACTS CARRIED IN FROM THE 2026-11-05 RESEARCH (re-verify in 01)
 ================================================================================
 APPENDIX D — OWNER CLICK-BY-CLICK STEPS  (Agents 02/03/06/07 fill in)
 ================================================================================
-  OA-1 … OA-6: exact menus, settings, file names, and what to paste back.
+
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║  OWNER ACTION LIST — consolidated, in the order to do them (2026-11-05)   ║
+  ║  Every Fable agent that is not ✅ is blocked on one of these. Do them    ║
+  ║  top to bottom; each says what to PASTE BACK into the PR thread.         ║
+  ║  Times: ET (CT). Never paste a key, a webhook URL or an account name.    ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
+
+  ┌─────┬──────────────────────────────────────────────┬─────────────┬───────────────────────────────────────┐
+  │ OA  │ what (≈ time)                                │ unblocks    │ paste back                            │
+  ├─────┼──────────────────────────────────────────────┼─────────────┼───────────────────────────────────────┤
+  │ 0   │ SUBSCRIBE (≈ 20 min, can run in parallel)    │ 1, 5        │ "OA-0 done" + plan names (no $)       │
+  │     │ a. TradingView Premium (open-ended alerts;   │             │                                       │
+  │     │    PLATFORM_FACTS A3) b. 2FA ON (A2; save    │             │                                       │
+  │     │    backup codes) c. CME real-time data, non- │             │                                       │
+  │     │    professional (A7) — no "Data is delayed"  │             │                                       │
+  │     │    label on MNQ1! d. CrossTrade Pro $49/mo   │             │                                       │
+  │     │    (B9; Account Manager is the L2 layer)     │             │                                       │
+  │ 1   │ COMPILE the dist file on TradingView (≈ 5    │ 2, 3, 5, 6  │ (a) console screenshot zero errors    │
+  │     │ min) — steps below                           │             │ (b) chart with the legend (c) the 16- │
+  │     │                                              │             │ hex src-sha256 from line 2 (d) any    │
+  │     │                                              │             │ red text + line number                │
+  │ 2   │ STRATEGY TESTER run + List of Trades export  │ Agent 06    │ tv_trades.csv (attach) + src-sha256 + │
+  │     │ (≈ 10 min) — steps below. Fable commits it   │ (parity)    │ SELF-TEST label screenshot + 3 numbers│
+  │     │ as parity/tv_trades.csv and runs             │             │ from Performance summary + your CHART │
+  │     │ tools/run_parity.sh --tv-tz <your chart tz>  │             │ TIME ZONE + the C-14 note             │
+  │ 3   │ EXPORT CHART DATA MNQ1! + MES1!, 1 m, same   │ Agent 06    │ tv_bars_mnq_1m.csv, tv_bars_mes_1m.csv│
+  │     │ range, ISO time (≈ 5 min) — steps below      │ (06.1 drift)│ (attach) + chart time zone            │
+  │ 4   │ LUCID SUPPORT: hedging-definition questions  │ go-live     │ Lucid's reply verbatim + date → Fable │
+  │     │ (6 numbered questions printed verbatim in    │ rung 3,     │ pastes into LUCID_RULES.md §2         │
+  │     │ docs/LUCID_RULES.md §2) — send in writing    │ Lucid drills│                                       │
+  │ 7   │ LUCID SUPPORT (same email): LucidFlex Daily  │ softDaily-  │ reply verbatim + date → §6; Fable     │
+  │     │ Loss Limit $ amount, realised vs unrealised, │ Loss$ (now  │ updates lucid_profiles.yaml + relay   │
+  │     │ reset time (text in LUCID_RULES.md §6)       │ $600 CONS.) │ session-loss setting                  │
+  │ 5   │ RELAY SETUP + DRILLS (≈ 20 min setup + ≈ 2 h │ Agent 07    │ payload_check output, Account Manager │
+  │     │ drills on a weekday 09:30–15:30 ET / 08:30–  │ (drills),   │ screenshots (practice + Lucid), every │
+  │     │ 14:30 CT): Link Demo per account (Tradovate  │ then 08     │ S1–S22 screenshot/row named in        │
+  │     │ practice account FIRST), Account Manager per │             │ docs/v6/DRILL_REPORT.md, times ET (CT)│
+  │     │ RELAY_SETUP §7, the ONE alert in DRY RUN,    │             │ and the D7 ordering (a)/(b)           │
+  │     │ then docs/v6/DRILL_SCRIPT.md D1–D8 → D1/D2/  │             │                                       │
+  │     │ D4 on one Lucid eval @ 1 micro — needs 1, 4  │             │                                       │
+  │     │ (or a dated waiver) and the Pine sha from 06 │             │                                       │
+  │ 6   │ STANDING RULE: never trade the bot's accounts│ every       │ nothing — it is a rule, not a task.   │
+  │     │ by hand while the alert is live (Block       │ session     │ RUNBOOK_TRADINGVIEW.md §9              │
+  │     │ Signals + pause the alert first if you must) │             │                                       │
+  └─────┴──────────────────────────────────────────────┴─────────────┴───────────────────────────────────────┘
+
+  Order rationale: 0 → 1 are prerequisites for everything on TradingView; 2 and 3 are one sitting
+  (same chart, same range) and unblock the parity run (Agent 06) with no further owner time; 4 and 7 are
+  ONE email to Lucid support that can go out today, in parallel, and gate only the Lucid-account drills
+  and go-live rung 3; 5 is the long one and should wait for Fable's parity verdict (the drills run the
+  Pine sha that parity verified). 6 starts the day the alert goes live and never ends.
+
+  After 2+3 → Fable runs Agent 06 (PARITY_REPORT.md). After 5 → Fable stamps DRILL_REPORT.md (Agent 07)
+  and completes Agent 08 (Appendix F board, tag v6.0.0). The loop then prints "all nine agents ✅".
 
   OA-1  COMPILE dist/LucidICT_v6.pine ON TRADINGVIEW  (Agent 02, issued 2026-11-05)
         Needs: a TradingView login (any plan compiles; webhooks are OA-0). ~5 minutes.
@@ -1158,5 +1262,29 @@ APPENDIX F — FINAL GREEN BOARD  (Agent 08 fills; mirrors Section 5)
   [ ] compile  [ ] lint  [ ] parity  [ ] hold-time  [ ] demo drills
   [ ] Lucid eval drills  [ ] Topstep removed  [ ] Lucid profiles sourced
   [ ] secrets clean  [ ] runbook cold read  [ ] ledger all ✅  [ ] v6.0.0 tagged
+
+  STATUS 2026-11-05 (Agent 08 prep; ✅ = evidence in Appendix A, ⛔ = owner, 🔄 = Fable after owner input)
+  ┌──────────────────────────┬────┬──────────────────────────────────────────────────────────────────────┐
+  │ box                      │    │ state / what closes it                                               │
+  ├──────────────────────────┼────┼──────────────────────────────────────────────────────────────────────┤
+  │ compile                  │ ⛔ │ OA-1 screenshot (zero errors) for dist BUILD_ID c9bdf95eeb3bb52f    │
+  │ lint                     │ ✅ │ pine_lint 10/10 PASS on dist (A-04v); one strategy(), lookahead_off,  │
+  │                          │    │ isconfirmed entries, stop on every entry, alert_message everywhere   │
+  │ parity                   │ ⛔ │ OA-2 + OA-3 → tools/run_parity.sh → PARITY_REPORT.md; tool hard fails│
+  │                          │    │ (opposite / no stop / late / size > cap / levels) all wired (A-06)    │
+  │ hold-time                │ ⛔ │ same run: <=5s and <=30s buckets 0, ≤5 s profit share 0.0 % (A-06)   │
+  │ demo drills              │ ⛔ │ OA-5 → DRILL_REPORT.md D1–D8 stamped by Fable (A-07)                 │
+  │ Lucid eval drills        │ ⛔ │ OA-5 §10 → D1-L/D2-L/D4-L @ 1 micro (needs OA-4 reply or waiver)     │
+  │ Topstep removed          │ ✅ │ A-05: runtime grep 0 refs, LIVE fails loud with the V6 message, 410  │
+  │ Lucid profiles sourced   │ ✅ │ A-01/A-03v: every number in lucid_profiles.yaml has a Lucid URL +    │
+  │                          │    │ date; Java backtests default LUCID_FLEX_50K_EVAL (A-05). Open text:  │
+  │                          │    │ softDailyLoss$ $600 CONSERVATIVE until OA-7                          │
+  │ secrets clean            │ ✅ │ .githooks/pre-commit + secret_scan --all clean (A-04v/A-05)          │
+  │ runbook cold read        │ 🔄 │ draft complete, Fable cold read 6/6 fixed (A-08); FINAL after the    │
+  │                          │    │ drills (D7 ordering + any FAIL feed back into §8)                     │
+  │ ledger all ✅            │ ⛔ │ 06/07/08 are ⛔ on OA-1/2/3/5                                         │
+  │ v6.0.0 tagged            │ ⛔ │ Agent 08.4, after every box above is ✅                               │
+  └──────────────────────────┴────┴──────────────────────────────────────────────────────────────────────┘
+  Owner path to all-green: Appendix D table, OA-0 → 1 → 2+3 → (4+7 email) → 5; 6 forever.
 
 END OF FILE — Return to the GOLDEN LOOP STEP 1.
