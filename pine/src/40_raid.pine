@@ -126,6 +126,8 @@ type RaidState
     float swL      = na
     float swC      = na
     float swPrior  = na
+    int   nRaids   = 0    // funnel: registered level raids
+    int   maxScore = 0    // funnel: max registered raid score
     // debug: raids registered on the current chart bar
     array<int>   dbgT
     array<float> dbgP
@@ -148,6 +150,8 @@ method processRaidCandle(RaidState this, LevelState lvs, Feed1 f, int t, float o
                 int sc = scoreRaid(not isHi, x.kind, x.cluster, p, o, h, l, c, ctx)
                 if sc >= i_raidThreshold
                     x.raided := true
+                    this.nRaids := this.nRaids + 1
+                    this.maxScore := math.max(this.maxScore, sc)
                     Raid r = Raid.new(true, not isHi, p, x.kind, sc, f.count, t, this.nextId)
                     this.nextId := this.nextId + 1
                     Raid prev = isHi ? this.lastHigh : this.lastLow

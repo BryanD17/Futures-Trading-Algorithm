@@ -111,6 +111,8 @@ var int   lastExitDir   = 0
 var int   seenClosed    = 0
 var float prevPosSize   = 0.0
 var int   selfTestFails = 0
+var int   fnEntries     = 0                          // funnel: strategy.entry calls issued
+var map<string, int> fnRejects = map.new<string, int>()   // funnel: entryReject reason -> count
 
 // per-bar outputs (debug / self-test)
 string entryReject  = ""
@@ -195,6 +197,9 @@ if barstate.isconfirmed
             entryReject := br
         else if entryQty < 1
             entryReject := "SIZE 0 (budget $" + str.tostring(budget, "#.##") + ")"
+        if entryReject != ""
+            string rk = str.startswith(entryReject, "SIZE 0") ? "SIZE 0" : entryReject
+            fnRejects.put(rk, (fnRejects.contains(rk) ? fnRejects.get(rk) : 0) + 1)
         if entryReject == ""
             // Signal column of the TV List of Trades = this comment; tools/pine_parity.py reads sl= / tp=.
             string cmt = "sl=" + str.tostring(sigStop, format.mintick) + "|tp=" + str.tostring(sigT1, format.mintick) + "|ref=" + str.tostring(sigEntryRef, format.mintick)
@@ -206,6 +211,7 @@ if barstate.isconfirmed
                 strategy.exit("SHORT_BRK", from_entry = "SHORT", stop = sigStop, limit = sigT1, comment_loss = "SL", comment_profit = "T1", alert_message = orderAlert("BRACKET", -1, entryQty, sigStop, sigT1, "bracket leg fill"))
             dayEntries  += 1
             lastOrderMs := time_close
+            fnEntries   += 1
             if i_selfTest and (hardNoEntry(time_close) or entryQty * MPC > capMicrosNow)
                 selfTestFails += 1
                 label.new(bar_index, high, "SELFTEST FAIL: entry violates I3/I4", color = color.red, textcolor = color.white, size = size.small)
