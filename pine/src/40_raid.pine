@@ -33,6 +33,7 @@ method add(Feed1 this, int t, float o, float h, float l, float c) =>
         this.h.shift()
         this.l.shift()
         this.c.shift()
+    true
 
 // ---- scoring context (RaidDetector.RaidDetectionContext built each 1m bar in the runner :896-912)
 type ScoreCtx
@@ -160,6 +161,7 @@ method processCandle(RaidState this, LevelState lvs, Feed1 f, int t, float o, fl
                     this.dbgP.push(p)
                     this.dbgS.push(sc)
                     this.dbgLow.push(not isHi)
+    true
 
 // LiquidityDetector.detectLiquiditySweeps on the newest 1m candle (already pushed into f)
 method detectSwingSweep(RaidState this, Feed1 f) =>
@@ -192,6 +194,7 @@ method detectSwingSweep(RaidState this, Feed1 f) =>
                 for k = math.max(0, n - 10) to n - 2
                     pr := bull ? loOf(pr, f.l.get(k)) : hiOf(pr, f.h.get(k))
             this.swPrior := pr
+    true
 
 // RaidDetector.scoreSweep: the sweep candle vs every known level it took (most significant wins,
 // tie -> higher price), else the prior swing extreme scored as SESSION_HIGH/LOW. Returns

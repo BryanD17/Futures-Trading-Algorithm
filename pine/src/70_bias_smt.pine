@@ -212,6 +212,7 @@ method onCandle(DRange this, int t, float h, float l, float c) =>
                     if l < this.lo
                         this.lo := l
                     this.pullback := na(this.pullback) ? l : math.min(this.pullback, l)
+    true
 
 // ---------------------------------------------------------------- SMT (CorrelationTracker.hasSMTDivergence)
 type Smt
@@ -222,11 +223,13 @@ method pushA(Smt this, float c) =>
     this.a.push(c)
     if this.a.size() > i_smtLookback
         this.a.shift()
+    true
 
 method pushB(Smt this, float c) =>
     this.b.push(c)
     if this.b.size() > i_smtLookback
         this.b.shift()
+    true
 
 method diverges(Smt this) =>
     int n = i_smtLookback
@@ -392,6 +395,7 @@ method rearm(Machine this) =>
     this.resetForNextWindow()
     if this.lastBias != 0
         this.recordHtfBias(this.lastBias)
+    true
 
 // StdvOteStrategy.onCandle expiry budgets (PHASED, minutes = 1m bars)
 method expiry(Machine this) =>
@@ -426,6 +430,7 @@ method newSweepEpisode(Machine this) =>
     if this.prevState != ST_SWEEP_DONE or this.state != ST_SWEEP_DONE
         this.epHi := na
         this.epLo := na
+    true
 
 // setSweepBar: the sweep 1m candle + the obLookbackBars 1m candles before it
 method setSweepBar(Machine this, Feed1 f, int t, float o, float h, float l, float c) =>
@@ -451,6 +456,7 @@ method setSweepBar(Machine this, Feed1 f, int t, float o, float h, float l, floa
                 this.prH.unshift(f.h.get(k))
                 this.prL.unshift(f.l.get(k))
                 this.prC.unshift(f.c.get(k))
+    true
 
 method startSweepTracking(Machine this, Feed1 f, int t, float o, float h, float l, float c) =>
     this.newSweepEpisode()
@@ -468,6 +474,7 @@ method onFeedCandle(Machine this, Feed1 f, int t, float o, float h, float l, flo
             this.postHi := math.max(this.postHi, h)
             this.postLo := math.min(this.postLo, l)
         this.trackEpisode(this.swLevel, h, l)
+    true
 
 // OteSetupDriver.afterCandle
 method afterCandle(Machine this) =>
@@ -509,6 +516,7 @@ method tryRecordSweep(Machine this, RaidState rs, LevelState lvs, Feed1 f, Score
                 this.consumedRaidId := rid
             if not na(swTs)
                 this.consumedSweepTs := swTs
+    true
 
 // tryRefreshSweep: a NEWER level raid scoring >= floor and >= current replaces the sweep
 method tryRefreshSweep(Machine this, RaidState rs, LevelState lvs, Feed1 f, ScoreCtx ctx) =>
@@ -521,6 +529,7 @@ method tryRefreshSweep(Machine this, RaidState rs, LevelState lvs, Feed1 f, Scor
             this.raidScore := sc
             this.raidKind := kind
             this.consumedRaidId := rid
+    true
 
 // OteSetupDriver.tryImpulseLegEntry -> true when the IMPULSE_LEG path consumed the candle
 method tryImpulseLeg(Machine this, Buf5 b, Structure st, Feed1 f, float rHi, float rLo, int t, float o, float h, float l, float c) =>
@@ -667,6 +676,7 @@ method tryRecordMss(Machine this, Buf5 b, Structure st) =>
                 this.mssIdx := e.idx
                 this.mssTs := e.ts
                 done := true
+    true
 
 // POST_SWEEP: plan + tryArmOte (range leg if the post-sweep extreme sits in the correct half, else the
 // sweep-extreme -> furthest-price leg; recomputed every candle until armed)

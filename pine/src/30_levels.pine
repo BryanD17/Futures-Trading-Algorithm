@@ -132,6 +132,7 @@ method register(LevelState this, int kind, float price) =>
         x.active  := true
         x.raided  := false
         x.cluster := 1
+    true
 
 hiOf(float a, float b) => na(a) ? b : math.max(a, b)
 loOf(float a, float b) => na(a) ? b : math.min(a, b)
@@ -220,6 +221,7 @@ method processCandle(LevelState this, int t, float h, float l) =>
         this.todayLow  := loOf(this.todayLow, l)
         this.weekHigh  := hiOf(this.weekHigh, h)
         this.weekLow   := loOf(this.weekLow, l)
+    true
 
 // EQUAL_HIGH / EQUAL_LOW (PORT_APPROX of EqualLevelDetector): a new 5m swing point within
 // i_eqTolTicks of the running cluster reference joins it; >= 2 members registers the level

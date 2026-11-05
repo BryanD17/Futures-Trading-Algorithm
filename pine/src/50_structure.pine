@@ -159,6 +159,7 @@ method detectDisplacement(Structure this, Buf5 b) =>
             this.dSwingHi := b.bH(idx - 1)
         if b.bL(idx - 1) < b.bL(idx - 2) and b.bL(idx - 1) < l
             this.dSwingLo := b.bL(idx - 1)
+    true
 
 // MarketStructureShiftDetector.update (forStdvOte) on the newest anatomy bar.
 // Returns [swingHighFound, swingHighPrice, swingLowFound, swingLowPrice] for the EQUAL-level clusters.
