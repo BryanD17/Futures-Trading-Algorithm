@@ -17,11 +17,9 @@
 // tools/tests/test_pine_strategy.py fails the build if any order call misses it.
 // =============================================================================
 
-// ---- AGENT 04 HOOK — the ONLY place a relay payload is built. Agent 04 replaces the BODY (keep the
-// signature) or moves it to a file sorted before 80. Never returns "" (empty alert_message = failed
-// alert). kind: ENTRY | BRACKET | FLATTEN | SOFT_STOP. dir: +1 long / -1 short. Prices are absolute.
-orderAlert(string kind, int dir, int qty, float stopPx, float tpPx, string why) =>
-    "LucidICT_v6 " + BUILD_ID + " " + kind + " dir=" + str.tostring(dir) + " qty=" + str.tostring(qty) + " sl=" + str.tostring(stopPx, format.mintick) + " tp=" + str.tostring(tpPx, format.mintick) + " why=" + why
+// ---- AGENT 04 HOOK — orderAlert(kind, dir, qty, stopPx, tpPx, why) now lives in 75_payload.pine (sorted
+// before 80 so Pine resolves it). Same signature; builds the relay payload (CROSSTRADE | PICKMYTRADE |
+// TRADERSPOST) and never returns "". kind: ENTRY | BRACKET | FLATTEN | SOFT_STOP.
 
 // ---- pure helpers (every one is exercised by the 03.8 self-test below)
 const int MS_SEC = 1000   // ms per second (unit constant, not a plan number)

@@ -22,6 +22,10 @@ Rules (each prints PASS/FAIL with evidence):
                        (an exit without from_entry covers all entries)                         (I2)
   L8 no-secrets        no URLs, webhook endpoints, key/secret/password literals or long tokens  (R5/AP-9)
   L9 no-tick-entries   strategy() does not set calc_on_every_tick = true; pyramiding is 0      (AP-3/I5/AP-10)
+  L10 alert-message    every order call (entry/order/exit/close/close_all) passes a non-empty
+                       alert_message = ...; an empty payload fails the relay alert
+                       (PLATFORM_FACTS A6: "order calls without alert_message yield an empty string";
+                       CrossTrade: the empty payload makes the alert fail)                     (04.1/I2)
 
 Rules L4-L7 apply to every entry PRESENT: a dist with zero entries (Agent 03 not merged yet) passes
 them vacuously and says so. Python 3.9+ standard library only.
@@ -365,6 +369,22 @@ class Lint:
                 bad.append("pyramiding = " + pyr.strip())
         self.add("L9 no-tick-entries", not bad, "; ".join(bad) if bad else "calc_on_every_tick off, pyramiding 0")
 
+    # L10
+    def alert_message(self):
+        bad = []
+        n = 0
+        for fn in ("strategy.entry", "strategy.order", "strategy.exit", "strategy.close_all", "strategy.close"):
+            for line, args, _ in self.calls(fn):
+                n += 1
+                am = named_arg(split_args(args), "alert_message")
+                if am is None:
+                    bad.append("{} at line {} has no alert_message".format(fn, line))
+                elif re.fullmatch(r"""\s*(["'])\s*\1\s*|na""", am):
+                    bad.append("{} at line {} has an empty alert_message".format(fn, line))
+        detail = "; ".join(bad) if bad else ("{} order call(s), all with a non-empty alert_message".format(n) if n
+                                              else "0 order calls — vacuous PASS")
+        self.add("L10 alert-message", not bad, detail)
+
     def run(self):
         self.single_strategy()
         self.version()
@@ -375,6 +395,7 @@ class Lint:
         self.entry_has_stop()
         self.no_secrets()
         self.no_tick_entries()
+        self.alert_message()
         return all(ok for _, ok, _ in self.results)
 
 

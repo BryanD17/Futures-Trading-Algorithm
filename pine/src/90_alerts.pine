@@ -1,5 +1,16 @@
 // =============================================================================
-// 90_alerts — OWNED BY AGENT 04 (V6 tasks 04.1-04.6). STUB from Agent 02.
-// Relay payload builders (alert_message on every strategy.entry / strategy.exit / close_all).
-// Never put a secret, webhook URL or account id in a default value, comment or plot (R5 / AP-9).
+// 90_alerts — OWNED BY AGENT 04 (V6 tasks 04.1-04.6). The payload builders live in 75_payload.pine
+// (they must precede 80_strategy). This file only warns the owner about relay configuration on the
+// last bar; it never prints the secret or the account names (R5 / AP-9).
+// Alert setup (RELAY_SETUP.md §2): ONE alert, condition "Order fills and alert() function calls",
+// Message = {{strategy.order.alert_message}} exactly, webhook = the relay URL (Notifications tab only).
 // =============================================================================
+if barstate.islast
+    if i_tradingEnabled and not relayLive()
+        log.warning("tradingEnabled is ON but the relay secret or accounts are still placeholders: every payload is a DRY RUN (key=<DRY_RUN>) that the relay rejects.")
+    if not i_tradingEnabled
+        log.info("Relay DRY RUN: tradingEnabled is OFF; order alerts carry key=<DRY_RUN> (rejected by the relay).")
+    if i_relay == "TRADERSPOST" and str.contains(relayInstrument("TRADERSPOST"), "!")
+        log.warning("TRADERSPOST does not resolve continuous symbols (MNQ1!): set 'relay instrument' to the dated contract, e.g. MNQZ2026.")
+    if i_relay != "CROSSTRADE"
+        log.warning("Relay is a FALLBACK (no strategy sync / out_of_sync=flatten). CROSSTRADE is the V6 default (PLATFORM_FACTS C3).")
