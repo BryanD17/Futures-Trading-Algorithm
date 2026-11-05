@@ -124,6 +124,8 @@ method onRthCandle(DRange this, int t, float h, float l, float c) =>
                 this.hasRth := true
             else
                 this.rth.onBar(h, l, c, i_rangeMinLegTk * TICK, i_rangeReanchor)
+                this.hasRth
+    this.hasRth
 
 // DealingRangeTracker.onCandle (1m)
 method onCandle(DRange this, int t, float h, float l, float c) =>
