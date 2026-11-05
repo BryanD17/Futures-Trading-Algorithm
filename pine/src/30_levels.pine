@@ -248,3 +248,4 @@ method onSwingPoint(LevelState this, bool isHigh, float price) =>
         else
             this.eqLoRef   := price
             this.eqLoCount := 1
+    true
