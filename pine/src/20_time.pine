@@ -1,0 +1,167 @@
+// =============================================================================
+// 20_time — ET clock, SessionClassifier windows, killzones, Silver Bullet,
+// trading-day / week keys. Every function takes a UNIX ms timestamp and reads the
+// wall clock in "America/New_York" (DST-safe; R9 / AP-7). Never chart-timezone math.
+// Java: strategy/session/SessionClassifier.java:57-83, chartstate/RaidQualityScorer.java:110
+// =============================================================================
+const string TZ = "America/New_York"
+const int MS_MIN  = 60000
+const int MS_HOUR = 3600000
+const int MS_DAY  = 86400000
+
+// SessionClassifier window codes (SessionClassifier.classify, :113)
+const int SW_ASIA     = 1
+const int SW_LONDON   = 2
+const int SW_PRE_NY   = 3
+const int SW_NY_AM    = 4
+const int SW_NY_LUNCH = 5
+const int SW_NY_PM    = 6
+const int SW_NO_ENTRY = 7
+const int SW_PRE_ASIA = 8
+const int SW_WEEKEND  = 9
+
+// HHMM (ET wall clock) -> minutes after midnight
+hhmmToMin(int hhmm) =>
+    math.floor(hhmm / 100) * 60 + hhmm % 100
+
+// ET minutes after midnight of a timestamp
+etMin(int t) =>
+    hour(t, TZ) * 60 + minute(t, TZ)
+
+// [start, end) in minutes; wraps midnight when start > end; empty when start == end
+// (LevelEngine.inWindow semantics)
+inWin(int m, int startMin, int endMin) =>
+    startMin == endMin ? false : startMin < endMin ? (m >= startMin and m < endMin) : (m >= startMin or m < endMin)
+
+inWinHHMM(int t, int startHHMM, int endHHMM) =>
+    inWin(etMin(t), hhmmToMin(startHHMM), hhmmToMin(endHHMM))
+
+// yyyymmdd of the ET calendar date of t
+etDateKey(int t) =>
+    year(t, TZ) * 10000 + month(t, TZ) * 100 + dayofmonth(t, TZ)
+
+// CME trading day: rolls at 18:00 ET (a print at/after 18:00 belongs to the next date).
+// +6 h maps 18:00..23:59 onto the next calendar date and leaves 00:00..17:59 on the same date.
+tradingDayKey(int t) =>
+    etDateKey(t + 6 * MS_HOUR)
+
+// Week key = the Monday of the trading day's week (ISO week; Sunday 18:00 opens Monday)
+weekKey(int t) =>
+    int x = t + 6 * MS_HOUR
+    int dow = dayofweek(x, TZ)
+    int back = dow == dayofweek.sunday ? 6 : dow - dayofweek.monday
+    etDateKey(x - back * MS_DAY)
+
+// Inside the CME daily halt 17:00-18:00 ET (Java ignores these prints: DealingRangeTracker, LevelEngine)
+inHalt(int t) =>
+    int m = etMin(t)
+    m >= 17 * 60 and m < 18 * 60
+
+isWeekend(int t) =>
+    int dow = dayofweek(t, TZ)
+    int m = etMin(t)
+    (dow == dayofweek.friday and m >= 17 * 60) or dow == dayofweek.saturday or (dow == dayofweek.sunday and m < 18 * 60)
+
+// SessionClassifier.classify (ET): ASIA 19-02, LONDON 02-08, PRE_NY 08-09:30, NY_AM 09:30-12,
+// NY_LUNCH 12-13:30, NY_PM 13:30-15:45, NO_ENTRY 15:45-18, PRE_ASIA 18-19, WEEKEND Fri 17 -> Sun 18
+sessionWindow(int t) =>
+    int m = etMin(t)
+    int sw = SW_ASIA
+    if isWeekend(t)
+        sw := SW_WEEKEND
+    else if inWin(m, 15 * 60 + 45, 18 * 60)
+        sw := SW_NO_ENTRY
+    else if inWin(m, 18 * 60, 19 * 60)
+        sw := SW_PRE_ASIA
+    else if inWin(m, 19 * 60, 2 * 60)
+        sw := SW_ASIA
+    else if inWin(m, 2 * 60, 8 * 60)
+        sw := SW_LONDON
+    else if inWin(m, 8 * 60, 9 * 60 + 30)
+        sw := SW_PRE_NY
+    else if inWin(m, 9 * 60 + 30, 12 * 60)
+        sw := SW_NY_AM
+    else if inWin(m, 12 * 60, 13 * 60 + 30)
+        sw := SW_NY_LUNCH
+    else
+        sw := SW_NY_PM
+    sw
+
+sessionName(int sw) =>
+    switch sw
+        SW_ASIA     => "ASIA"
+        SW_LONDON   => "LONDON"
+        SW_PRE_NY   => "PRE_NY"
+        SW_NY_AM    => "NY_AM"
+        SW_NY_LUNCH => "NY_LUNCH"
+        SW_NY_PM    => "NY_PM"
+        SW_NO_ENTRY => "NO_ENTRY"
+        SW_PRE_ASIA => "PRE_ASIA"
+        SW_WEEKEND  => "WEEKEND"
+        => "?"
+
+// M3 (MandatoryConfluenceValidator:597): NO_ENTRY and WEEKEND always block
+sessionBlocksEntry(int t) =>
+    int sw = sessionWindow(t)
+    sw == SW_NO_ENTRY or sw == SW_WEEKEND
+
+// [Time] per-window allow toggles (session.allSessions = true -> all allowed by default)
+sessionAllowed(int t) =>
+    int sw = sessionWindow(t)
+    switch sw
+        SW_ASIA     => i_kzAsia
+        SW_LONDON   => i_kzLondon
+        SW_PRE_NY   => i_kzPreNy
+        SW_NY_AM    => i_kzNyAm
+        SW_NY_LUNCH => i_kzNyLunch
+        SW_NY_PM    => i_kzNyPm
+        SW_PRE_ASIA => i_kzPreAsia
+        => false
+
+// Prime killzones (tier O1 only): London 02-05, NY AM 09:45-11:00, NY PM 13:45-15:45
+isPrimeKillzone(int t) =>
+    int m = etMin(t)
+    inWin(m, 2 * 60, 5 * 60) or inWin(m, 9 * 60 + 45, 11 * 60) or inWin(m, 13 * 60 + 45, 15 * 60 + 45)
+
+// Raid-score killzone (+2): legacy NY KZ 09:45-12:30 / 13:45-16:00 (RaidQualityScorer, PORT_MAP T5)
+isRaidKillzone(int t) =>
+    int m = etMin(t)
+    inWin(m, 9 * 60 + 45, 12 * 60 + 30) or inWin(m, 13 * 60 + 45, 16 * 60)
+
+// Silver Bullet (+1): 03-04, 10-11, 14-15 ET
+isSilverBullet(int t) =>
+    int m = etMin(t)
+    inWin(m, 3 * 60, 4 * 60) or inWin(m, 10 * 60, 11 * 60) or inWin(m, 14 * 60, 15 * 60)
+
+// ---- [Time] gates exposed to Agent 03 (I3). Times are ET.
+// No new entry at/after noEntryAfter until the 18:00 ET reopen.
+isNoEntryTime(int t) =>
+    inWin(etMin(t), hhmmToMin(i_noEntryAfter), 18 * 60)
+
+isFlattenTime(int t) =>
+    int lim = dayofweek(t, TZ) == dayofweek.friday ? math.min(hhmmToMin(i_flattenAt), hhmmToMin(i_fridayFlatAt)) : hhmmToMin(i_flattenAt)
+    inWin(etMin(t), lim, 18 * 60)
+
+// Manual blackout windows (parsed once)
+var array<int> blackoutStart = array.new<int>()
+var array<int> blackoutEnd   = array.new<int>()
+if barstate.isfirst and str.length(i_blackout) > 0
+    array<string> parts = str.split(i_blackout, ",")
+    for p in parts
+        array<string> se = str.split(str.trim(p), "-")
+        if se.size() == 2
+            float s = str.tonumber(str.trim(se.get(0)))
+            float e = str.tonumber(str.trim(se.get(1)))
+            if not na(s) and not na(e)
+                blackoutStart.push(hhmmToMin(int(s)))
+                blackoutEnd.push(hhmmToMin(int(e)))
+
+inManualBlackout(int t) =>
+    bool hit = false
+    int m = etMin(t)
+    int nb = blackoutStart.size()
+    if nb > 0
+        for k = 0 to nb - 1
+            if inWin(m, blackoutStart.get(k), blackoutEnd.get(k))
+                hit := true
+    hit

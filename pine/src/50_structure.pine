@@ -1,0 +1,260 @@
+// =============================================================================
+// 50_structure — the 5m "anatomy" series: bar buffer (PdArrayLocator bars), swings,
+// MSS (close beyond the most recent opposite 2-bar fractal), displacement (ATR multiple).
+// Java: strategy/stdvote/PdArrayLocator.java (MAX_BARS 200), strategy/MarketStructureShiftDetector.java
+//       (forStdvOte: lookback 50, swing 2, closeBeyondRecentSwing), strategy/DisplacementDetector.java:216.
+// The anatomy bar is fed when the FIRST 1m candle of the next 5m bucket arrives
+// (BarAggregationManager completes a period on the next period's first candle).
+// =============================================================================
+const int BUF5_CAP     = 200
+const int MSS_LOOKBACK = 50
+const int MSS_SWING    = 2
+
+type Buf5
+    array<int>   t
+    array<float> o
+    array<float> h
+    array<float> l
+    array<float> c
+    int firstIdx = 0
+    int lastIdx  = -1
+
+newBuf5() =>
+    Buf5.new(t = array.new<int>(), o = array.new<float>(), h = array.new<float>(), l = array.new<float>(), c = array.new<float>())
+
+method add(Buf5 this, int t, float o, float h, float l, float c) =>
+    this.t.push(t)
+    this.o.push(o)
+    this.h.push(h)
+    this.l.push(l)
+    this.c.push(c)
+    this.lastIdx := this.lastIdx + 1
+    if this.t.size() > BUF5_CAP
+        this.t.shift()
+        this.o.shift()
+        this.h.shift()
+        this.l.shift()
+        this.c.shift()
+        this.firstIdx := this.firstIdx + 1
+    this.lastIdx
+
+method has(Buf5 this, int idx) =>
+    not na(idx) and idx >= this.firstIdx and idx <= this.lastIdx
+
+method bT(Buf5 this, int idx) => this.t.get(idx - this.firstIdx)
+method bO(Buf5 this, int idx) => this.o.get(idx - this.firstIdx)
+method bH(Buf5 this, int idx) => this.h.get(idx - this.firstIdx)
+method bL(Buf5 this, int idx) => this.l.get(idx - this.firstIdx)
+method bC(Buf5 this, int idx) => this.c.get(idx - this.firstIdx)
+
+// PdArrayLocator.indexOf(ts): newest bar with this open time, else -1
+method indexOf(Buf5 this, int ts) =>
+    int found = -1
+    if not na(ts) and this.lastIdx >= this.firstIdx
+        for i = this.lastIdx to this.firstIdx
+            if this.bT(i) == ts
+                found := i
+                break
+    found
+
+// PdArrayLocator.lastBarAt(price, wantHigh, toIdx): newest bar <= toIdx whose high/low == price (+- tick/2)
+method lastBarAt(Buf5 this, float price, bool wantHigh, int toIdx) =>
+    int found = -1
+    float tol = math.max(1e-9, TICK / 2.0)
+    if not na(price) and this.lastIdx >= this.firstIdx
+        for i = this.lastIdx to this.firstIdx
+            if i <= toIdx
+                float v = wantHigh ? this.bH(i) : this.bL(i)
+                if math.abs(v - price) <= tol
+                    found := i
+                    break
+    found
+
+// ---- displacement events (DisplacementDetector history)
+type DispEv
+    int   ts
+    int   idx
+    bool  bullish
+    float rangeOverAtr
+    float body
+    bool  createdFvg
+    bool  brokeMss
+
+// ---- MSS events (OteSetupDriver.mssEvents)
+type MssEv
+    bool  bullish
+    float level
+    int   ts
+    int   idx
+
+type Structure
+    array<DispEv> disp
+    array<MssEv>  mss
+    // MSS detector swing state (latest swing high / low inside the 50-bar window)
+    float swHiP     = na
+    int   swHiIdx   = na
+    int   swHiTs    = na
+    bool  swHiBroke = false
+    float swLoP     = na
+    int   swLoIdx   = na
+    int   swLoTs    = na
+    bool  swLoBroke = false
+    // DisplacementDetector 3-bar fractal (checkForMss reference)
+    float dSwingHi  = na
+    float dSwingLo  = na
+    float lastAtr   = na
+    // debug: last MSS
+    float dbgMssLevel = na
+    int   dbgMssTs    = na
+    bool  dbgMssBull  = false
+
+newStructure() =>
+    Structure.new(disp = array.new<DispEv>(), mss = array.new<MssEv>())
+
+// DisplacementDetector.detectDisplacement on the newest anatomy bar (b.lastIdx)
+method detectDisplacement(Structure this, Buf5 b) =>
+    int idx = b.lastIdx
+    int winStart = math.max(b.firstIdx, idx - 19)     // detector keeps 20 candles
+    int fr = math.max(winStart + 1, idx - i_dispAtrLen)
+    float sum = 0.0
+    int cnt = 0
+    if idx - 1 >= fr
+        for i = fr to idx - 1
+            float pc = b.bC(i - 1)
+            sum += math.max(b.bH(i) - b.bL(i), math.max(math.abs(b.bH(i) - pc), math.abs(b.bL(i) - pc)))
+            cnt += 1
+    float avgRange = cnt > 0 ? sum / cnt : 10.0
+    float o = b.bO(idx)
+    float h = b.bH(idx)
+    float l = b.bL(idx)
+    float c = b.bC(idx)
+    float rng = h - l
+    float body = math.abs(c - o)
+    float bodyRatio = rng > 0 ? body / rng : 0.0
+    float minMove = avgRange * i_dispAtrMult
+    this.lastAtr := avgRange
+    if bodyRatio >= i_dispBodyPct and rng >= minMove
+        bool bull = c > o
+        int consec = 1
+        if idx - 1 >= winStart
+            for i = idx - 1 to math.max(winStart, idx - 2)
+                float pr = b.bH(i) - b.bL(i)
+                float pbr = pr > 0 ? math.abs(b.bC(i) - b.bO(i)) / pr : 0.0
+                bool pBull = b.bC(i) > b.bO(i)
+                if pBull == bull and pbr >= i_dispBodyPct * 0.8
+                    consec += 1
+                else
+                    break
+        float total = consec >= 2 ? (bull ? c - b.bO(idx - consec + 1) : b.bO(idx - consec + 1) - c) : body
+        if consec < 2 or total >= minMove
+            // PORT_APPROX: checkForFvgCreation / checkForMss (only feed the +2 "displacement entry" raid term)
+            bool fvg = b.has(idx - 2) and (bull ? l > b.bH(idx - 2) : h < b.bL(idx - 2))
+            bool brk = bull ? (not na(this.dSwingHi) and c > this.dSwingHi) : (not na(this.dSwingLo) and c < this.dSwingLo)
+            this.disp.push(DispEv.new(b.bT(idx), idx, bull, avgRange > 0 ? rng / avgRange : na, bodyRatio, fvg, brk))
+            if this.disp.size() > 100
+                this.disp.shift()
+    // fractal update (mid = idx - 1)
+    if b.has(idx - 2)
+        if b.bH(idx - 1) > b.bH(idx - 2) and b.bH(idx - 1) > h
+            this.dSwingHi := b.bH(idx - 1)
+        if b.bL(idx - 1) < b.bL(idx - 2) and b.bL(idx - 1) < l
+            this.dSwingLo := b.bL(idx - 1)
+
+// MarketStructureShiftDetector.update (forStdvOte) on the newest anatomy bar.
+// Returns [swingHighFound, swingHighPrice, swingLowFound, swingLowPrice] for the EQUAL-level clusters.
+method updateMss(Structure this, Buf5 b) =>
+    int idx = b.lastIdx
+    int winStart = math.max(b.firstIdx, idx - (MSS_LOOKBACK - 1))
+    bool newHi = false
+    bool newLo = false
+    float hiP = na
+    float loP = na
+    // swings that aged out of the 50-bar window are dropped (adjustSwingIndices)
+    if not na(this.swHiIdx) and this.swHiIdx < winStart
+        this.swHiP := na
+        this.swHiIdx := na
+        this.swHiTs := na
+    if not na(this.swLoIdx) and this.swLoIdx < winStart
+        this.swLoP := na
+        this.swLoIdx := na
+        this.swLoTs := na
+    int piv = idx - MSS_SWING
+    if piv - MSS_SWING >= winStart
+        float ph = b.bH(piv)
+        float pl = b.bL(piv)
+        bool isHi = true
+        bool isLo = true
+        for i = piv - MSS_SWING to piv + MSS_SWING
+            if i != piv
+                if b.bH(i) > ph
+                    isHi := false
+                if b.bL(i) < pl
+                    isLo := false
+        if isHi and (na(this.swHiIdx) or this.swHiIdx != piv)
+            this.swHiP := ph
+            this.swHiIdx := piv
+            this.swHiTs := b.bT(piv)
+            this.swHiBroke := false
+            newHi := true
+            hiP := ph
+        if isLo and (na(this.swLoIdx) or this.swLoIdx != piv)
+            this.swLoP := pl
+            this.swLoIdx := piv
+            this.swLoTs := b.bT(piv)
+            this.swLoBroke := false
+            newLo := true
+            loP := pl
+    float c = b.bC(idx)
+    if not na(this.swHiIdx) and idx - this.swHiIdx >= 2 and not this.swHiBroke and c > this.swHiP
+        this.swHiBroke := true
+        this.mss.push(MssEv.new(true, this.swHiP, b.bT(idx), idx))
+        this.dbgMssLevel := this.swHiP
+        this.dbgMssTs := b.bT(idx)
+        this.dbgMssBull := true
+    else if not na(this.swLoIdx) and idx - this.swLoIdx >= 2 and not this.swLoBroke and c < this.swLoP
+        this.swLoBroke := true
+        this.mss.push(MssEv.new(false, this.swLoP, b.bT(idx), idx))
+        this.dbgMssLevel := this.swLoP
+        this.dbgMssTs := b.bT(idx)
+        this.dbgMssBull := false
+    if this.mss.size() > 200
+        this.mss.shift()
+    [newHi, hiP, newLo, loP]
+
+// DisplacementDetector.findRecent(recentBars, bullish, notBefore): newest wanted-direction
+// displacement within the last n anatomy bars, at/after notBefore. Returns the event or na.
+method findRecentDisp(Structure this, Buf5 b, int n, bool bullish, int notBefore) =>
+    DispEv out = na
+    int sz = this.disp.size()
+    if sz > 0
+        for k = sz - 1 to 0
+            DispEv e = this.disp.get(k)
+            if b.lastIdx - e.idx > n
+                break
+            if e.bullish == bullish and (na(notBefore) or e.ts >= notBefore)
+                out := e
+                break
+    out
+
+method anyRecentDisp(Structure this, Buf5 b, int n, int notBefore) =>
+    bool any = false
+    int sz = this.disp.size()
+    if sz > 0
+        for k = sz - 1 to 0
+            DispEv e = this.disp.get(k)
+            if b.lastIdx - e.idx > n
+                break
+            if na(notBefore) or e.ts >= notBefore
+                any := true
+                break
+    any
+
+// DisplacementDetector.hasLayer3EntryTrigger(5, bullish): last displacement within 5 bars,
+// same direction, created an FVG and broke structure (+2 raid-score term)
+method dispEntryTrigger(Structure this, Buf5 b, bool bullish) =>
+    bool ok = false
+    int sz = this.disp.size()
+    if sz > 0
+        DispEv e = this.disp.get(sz - 1)
+        ok := e.bullish == bullish and b.lastIdx - e.idx <= 5 and e.createdFvg and e.brokeMss
+    ok

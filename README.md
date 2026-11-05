@@ -9,6 +9,7 @@ A fully automated futures trading system designed for Topstep evaluation and fun
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
+- [Building the Pine file](#building-the-pine-file)
 - [Development Roadmap](#development-roadmap)
 - [Key Features](#key-features)
 - [Safety and Compliance](#safety-and-compliance)
@@ -256,6 +257,49 @@ cd trading-engine
 cd api-backend
 ./gradlew test
 ```
+
+## Building the Pine file
+
+V6 runs the strategy on TradingView. The Pine source is modular (`pine/src/NN_name.pine`, concatenated
+in numeric order because Pine has no `#include`); the owner pastes ONE generated file,
+`pine/dist/LucidICT_v6.pine`. Never edit `pine/dist/` by hand (master prompt R8).
+
+```bash
+python3 tools/pine_build.py                          # -> pine/dist/LucidICT_v6.pine
+python3 tools/pine_lint.py pine/dist/LucidICT_v6.pine # static safety checks (exit 1 on any FAIL)
+python3 tools/pine_build.py --check                  # CI: fail if dist is stale vs pine/src
+python3 -m unittest discover -s tools/tests -v       # build + lint unit tests
+SOURCE_DATE_EPOCH=0 python3 tools/pine_build.py      # byte-reproducible build (fixed build time)
+```
+
+| file | owner | content |
+|---|---|---|
+| `00_header.pine` | Agent 02 | `//@version=6`, the single `strategy()` declaration, `BUILD_ID` marker |
+| `10_inputs.pine` | 02 (+03 Account/Risk, 04 Relay) | input groups; every Strategy input = Java effective default, tooltip names the EngineConfig key |
+| `20_time.pine` | 02 | ET clock (`America/New_York`), SessionClassifier windows, killzones, trading-day/week keys, I3 time helpers |
+| `30_levels.pine` | 02 | PDH/PDL, PWH/PWL, session H/L, equal H/L (tick tolerance) |
+| `40_raid.pine` | 02 | level raids, swing sweeps, V5 raid score 1–10 |
+| `50_structure.pine` | 02 | 5m buffer, 2-bar swings, MSS, displacement (ATR multiple) |
+| `60_fvg_ote.pine` | 02 | FVG / IFVG / BREAKER / OB / WICK, OTE zone, target ladder |
+| `70_bias_smt.pine` | 02 | dealing range (bias), SMT vs MES (data only), setup state machine, 1m replay engine, EXPORTS |
+| `80_strategy.pine` | Agent 03 | entries, sizing, AccountProfile envelope |
+| `90_alerts.pine` | Agent 04 | relay payloads |
+| `95_debug.pine` | 02 | optional overlay + gate table (off by default) |
+
+The header stamp (`// BUILD: LucidICT_v6 | git <sha> | built <UTC> | src-sha256 <hex16>`) and the Pine
+constant `BUILD_ID` (= src-sha256) identify exactly which sources a pasted script came from. `git <sha>` is
+`HEAD` at build time (`+src-modified` when `pine/src` had uncommitted edits). The only non-deterministic
+token is the build time; two builds of the same tree with `SOURCE_DATE_EPOCH` set (or `--no-time`) are
+byte-identical.
+
+Lint rules (`tools/pine_lint.py`, details in its docstring): L1 exactly one `strategy()`; L2 `//@version=6`;
+L3 every `request.security` uses `lookahead = barmerge.lookahead_off` (or the documented `[1]` + `lookahead_on`
+pair); L4 entries only in `80_strategy.pine`; L5 no order references the SMT symbol or any `request.*` data
+(I1); L6 every `strategy.entry` inside `if barstate.isconfirmed` (I8); L7 every entry has a
+`strategy.exit(..., stop = ...)` (I2); L8 no URLs / secrets; L9 no `calc_on_every_tick`, `pyramiding = 0`.
+
+Pine cannot be compiled or run here — TradingView is the only compiler. Compiling is owner action OA-1
+(click-by-click steps in `TRADINGVIEW_MIGRATION_MASTER_PROMPT_V6.txt` Appendix D).
 
 ## Development Roadmap
 

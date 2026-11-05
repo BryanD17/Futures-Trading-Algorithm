@@ -1,0 +1,5 @@
+// =============================================================================
+// 90_alerts — OWNED BY AGENT 04 (V6 tasks 04.1-04.6). STUB from Agent 02.
+// Relay payload builders (alert_message on every strategy.entry / strategy.exit / close_all).
+// Never put a secret, webhook URL or account id in a default value, comment or plot (R5 / AP-9).
+// =============================================================================

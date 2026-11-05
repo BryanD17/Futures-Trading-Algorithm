@@ -1,0 +1,262 @@
+// =============================================================================
+// 40_raid — raid detection + V5 quality score 1..10 (tick tolerances only).
+// Java: chartstate/RaidDetector.java:153 (checkLevelForRaid, checkForRejection),
+//       chartstate/RaidDetector.java:476 (scoreSweep), chartstate/RaidQualityScorer.java:110,
+//       strategy/LiquidityDetector.java (swing sweep), StdvOteRunnerStrategy.resolveSweep (:2062).
+// All on the 1m feed (Java runs them on 1m candles).
+// =============================================================================
+
+// ---- rolling 1m feed buffer (LiquidityDetector primaryCandles + candleSeries + OteSetupDriver feedBars)
+const int FEED_CAP = 32
+
+type Feed1
+    array<int>   t
+    array<float> o
+    array<float> h
+    array<float> l
+    array<float> c
+    int count = 0       // total 1m candles processed (LiquidityDetector.totalCandleCount)
+
+newFeed1() =>
+    Feed1.new(t = array.new<int>(), o = array.new<float>(), h = array.new<float>(), l = array.new<float>(), c = array.new<float>())
+
+method add(Feed1 this, int t, float o, float h, float l, float c) =>
+    this.t.push(t)
+    this.o.push(o)
+    this.h.push(h)
+    this.l.push(l)
+    this.c.push(c)
+    this.count := this.count + 1
+    if this.t.size() > FEED_CAP
+        this.t.shift()
+        this.o.shift()
+        this.h.shift()
+        this.l.shift()
+        this.c.shift()
+
+// ---- scoring context (RaidDetector.RaidDetectionContext built each 1m bar in the runner :896-912)
+type ScoreCtx
+    int   htfDir    = 0      // +1 bullish / -1 bearish / 0 none (setup bias, else last bias)
+    bool  smt       = false  // CorrelationTracker SMT this bar
+    bool  dispEntry = false  // DisplacementDetector.hasLayer3EntryTrigger(5, dir)
+    float eq        = na     // dealing-range equilibrium when decisive
+    bool  kz        = false  // legacy NY killzone
+    bool  sb        = false  // Silver Bullet window
+
+// RaidQualityScorer.calculateScore (raid.weights = V5)
+// PORT_APPROX (PORT_MAP L5): "HTF strong trend" reads HtfTrendAnalyzer (DROP) -> alignment is
+// always the WEAK +2 term; multi-touch term (KnownLevel touch counts) is not tracked -> 0;
+// zone-confluence and target-alignment terms are 0 in Java's runner context as well.
+scoreRaid(bool lowSweep, int kind, int cluster, float level, float o, float h, float l, float c, ScoreCtx ctx) =>
+    int s = 1
+    bool expectBull = lowSweep
+    bool aligned = ctx.htfDir != 0 and ((ctx.htfDir > 0) == expectBull)
+    bool opposes = ctx.htfDir != 0 and ((ctx.htfDir > 0) != expectBull)
+    if aligned
+        s += 2
+    if ctx.kz
+        s += 2
+    if ctx.sb
+        s += 1
+    if kind == LV_PDH or kind == LV_PDL or kind == LV_PWH or kind == LV_PWL
+        s += 2
+    else if levelIsSessionExtreme(kind)
+        s += 2
+    else if (kind == LV_EQH or kind == LV_EQL) and cluster >= 3
+        s += 1
+    // rejection quality (max +2)
+    bool highSweep = not lowSweep
+    bool closedBack = highSweep ? c <= level : c >= level
+    float rng = h - l
+    float wick = rng > 0 ? (highSweep ? (h - math.max(o, c)) / rng : (math.min(o, c) - l) / rng) : 0.0
+    float rejTicks = math.abs(c - level) / TICK
+    if wick >= 0.50 or (closedBack and rejTicks >= i_raidStrongTicks)
+        s += 2
+    else if wick >= 0.30 or closedBack
+        s += 1
+    // premium / discount vs the dealing-range eq (+1)
+    if not na(ctx.eq)
+        if highSweep and level > ctx.eq
+            s += 1
+        else if lowSweep and level < ctx.eq
+            s += 1
+    if ctx.smt
+        s += 2
+    if ctx.dispEntry
+        s += 2
+    if opposes
+        s -= 4
+    math.max(1, math.min(10, s))
+
+// RaidDetector.checkForRejection
+hasRejection(bool lowSweep, float level, float o, float h, float l, float c) =>
+    float rng = h - l
+    bool ok = false
+    if rng > 0
+        if not lowSweep
+            ok := c <= level or (h - math.max(o, c)) / rng >= 0.4
+        else
+            ok := c >= level or (math.min(o, c) - l) / rng >= 0.4
+    ok
+
+// ---- registered level raids (RaidDetector.activeRaids, newest per direction)
+type Raid
+    bool  valid    = false
+    bool  lowSweep = false
+    float level    = na
+    int   kind     = na
+    int   score    = 0
+    int   bar1m    = na
+    int   ts       = na
+    int   id       = na
+
+type RaidState
+    Raid  lastLow
+    Raid  lastHigh
+    int   nextId   = 1
+    // last swing sweep (LiquidityDetector.lastSweep — ONE slot for both directions, like Java)
+    bool  swValid  = false
+    bool  swLow    = false
+    float swLevel  = na
+    int   swTs     = na
+    int   swCount  = na
+    float swO      = na
+    float swH      = na
+    float swL      = na
+    float swC      = na
+    float swPrior  = na
+    // debug: raids registered on the current chart bar
+    array<int>   dbgT
+    array<float> dbgP
+    array<int>   dbgS
+    array<bool>  dbgLow
+
+newRaidState() =>
+    RaidState.new(lastLow = Raid.new(), lastHigh = Raid.new(), dbgT = array.new<int>(), dbgP = array.new<float>(), dbgS = array.new<int>(), dbgLow = array.new<bool>())
+
+// RaidDetector.processCandle over every unraided known level (1m)
+method processCandle(RaidState this, LevelState lvs, Feed1 f, int t, float o, float h, float l, float c, ScoreCtx ctx) =>
+    float tol = i_raidTolTicks * TICK
+    float pen = i_raidPenTicks * TICK
+    for x in lvs.lv
+        if x.active and not x.raided
+            bool isHi = levelIsHigh(x.kind)
+            float p = x.price
+            bool swept = isHi ? (h > p + pen and l <= p + tol) : (l < p - pen and h >= p - tol)
+            if swept and hasRejection(not isHi, p, o, h, l, c)
+                int sc = scoreRaid(not isHi, x.kind, x.cluster, p, o, h, l, c, ctx)
+                if sc >= i_raidThreshold
+                    x.raided := true
+                    Raid r = Raid.new(true, not isHi, p, x.kind, sc, f.count, t, this.nextId)
+                    this.nextId := this.nextId + 1
+                    Raid prev = isHi ? this.lastHigh : this.lastLow
+                    // newest wins; same bar -> best score (BEST_RAID_ORDER)
+                    if not prev.valid or prev.bar1m != f.count or sc > prev.score
+                        if isHi
+                            this.lastHigh := r
+                        else
+                            this.lastLow := r
+                    this.dbgT.push(t)
+                    this.dbgP.push(p)
+                    this.dbgS.push(sc)
+                    this.dbgLow.push(not isHi)
+
+// LiquidityDetector.detectLiquiditySweeps on the newest 1m candle (already pushed into f)
+method detectSwingSweep(RaidState this, Feed1 f) =>
+    int n = f.t.size()
+    if n >= 5
+        int fr = math.max(0, n - i_swingSweepLen)
+        float rh = f.h.get(fr)
+        float rl = f.l.get(fr)
+        for k = fr to n - 1
+            rh := math.max(rh, f.h.get(k))
+            rl := math.min(rl, f.l.get(k))
+        float lh = f.h.get(n - 1)
+        float ll = f.l.get(n - 1)
+        float lc = f.c.get(n - 1)
+        bool bull = ll <= rl and lc > rl
+        bool bear = not bull and lh >= rh and lc < rh
+        if bull or bear
+            this.swValid := true
+            this.swLow   := bull
+            this.swLevel := bull ? rl : rh
+            this.swTs    := f.t.get(n - 1)
+            this.swCount := f.count
+            this.swO     := f.o.get(n - 1)
+            this.swH     := lh
+            this.swL     := ll
+            this.swC     := lc
+            // prior extreme = up to 9 bars before the sweep candle (StdvOteRunnerStrategy.currentRaidScore)
+            float pr = na
+            if n >= 2
+                for k = math.max(0, n - 10) to n - 2
+                    pr := bull ? loOf(pr, f.l.get(k)) : hiOf(pr, f.h.get(k))
+            this.swPrior := pr
+
+// RaidDetector.scoreSweep: the sweep candle vs every known level it took (most significant wins,
+// tie -> higher price), else the prior swing extreme scored as SESSION_HIGH/LOW. Returns
+// [ok, score, kind, level]; ok = false -> NOT_A_SWEEP; prior na -> starved (floor - 1).
+method scoreSwingSweep(RaidState this, LevelState lvs, ScoreCtx ctx) =>
+    bool lowSweep = this.swLow
+    float tol = i_raidTolTicks * TICK
+    float pen = i_raidPenTicks * TICK
+    int bestKind = na
+    float bestP = na
+    int bestCl = 1
+    for x in lvs.lv
+        if x.active and levelIsHigh(x.kind) != lowSweep
+            float p = x.price
+            bool swept = lowSweep ? (this.swL < p - pen and this.swH >= p - tol) : (this.swH > p + pen and this.swL <= p + tol)
+            if swept and hasRejection(lowSweep, p, this.swO, this.swH, this.swL, this.swC)
+                if na(bestKind) or levelSignificance(x.kind) > levelSignificance(bestKind) or (levelSignificance(x.kind) == levelSignificance(bestKind) and p > bestP)
+                    bestKind := x.kind
+                    bestP := p
+                    bestCl := x.cluster
+    bool ok = true
+    int sc = 0
+    if na(this.swPrior)
+        sc := i_minRaidScore - 1    // raid.starvedScore = floor - 1 (never passes M4)
+        bestKind := lowSweep ? LV_SESSION_L : LV_SESSION_H
+        bestP := this.swLevel
+    else
+        if na(bestKind)
+            bool sweptPrior = lowSweep ? this.swL < this.swPrior : this.swH > this.swPrior
+            if sweptPrior and hasRejection(lowSweep, this.swPrior, this.swO, this.swH, this.swL, this.swC)
+                bestKind := lowSweep ? LV_SESSION_L : LV_SESSION_H
+                bestP := this.swPrior
+            else
+                ok := false
+        if ok
+            sc := scoreRaid(lowSweep, bestKind, bestCl, bestP, this.swO, this.swH, this.swL, this.swC, ctx)
+    [ok, sc, bestKind, bestP]
+
+// StdvOteRunnerStrategy.resolveSweep(wantLow, levelOnly): best of the recent level raid and the
+// swing sweep (swing wins only with a strictly higher score). Returns
+// [found, sweptLevel, ts, score, kind, raidId, swingTs].
+method resolveSweep(RaidState this, LevelState lvs, Feed1 f, ScoreCtx ctx, bool wantLow, bool levelOnly, int consumedRaidId, int consumedSweepTs) =>
+    bool found = false
+    float lvl = na
+    int ts = na
+    int sc = 0
+    int kind = na
+    int rid = na
+    int swTs = na
+    Raid r = wantLow ? this.lastLow : this.lastHigh
+    if r.valid and f.count - r.bar1m <= i_sweepRecency and (na(consumedRaidId) or r.id != consumedRaidId)
+        found := true
+        lvl := r.level
+        ts := r.ts
+        sc := r.score
+        kind := r.kind
+        rid := r.id
+    if not levelOnly and this.swValid and f.count - this.swCount <= i_sweepRecency and this.swLow == wantLow and (na(consumedSweepTs) or this.swTs != consumedSweepTs)
+        [ok, ssc, skind, sp] = this.scoreSwingSweep(lvs, ctx)
+        if ok and (not found or ssc > sc)
+            found := true
+            lvl := this.swLevel
+            ts := this.swTs
+            sc := ssc
+            kind := skind
+            rid := na
+            swTs := this.swTs
+    [found, lvl, ts, sc, kind, rid, swTs]
