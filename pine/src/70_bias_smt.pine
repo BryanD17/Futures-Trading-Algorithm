@@ -60,6 +60,7 @@ method onBar(DLeg this, float h, float l, float c, float minLeg, float frac) =>
             if l < this.lo
                 this.lo := l
             this.pullback := na(this.pullback) ? l : math.min(this.pullback, l)
+    true
 
 type DRange
     int   tradingDay = na
@@ -363,6 +364,7 @@ method recordHtfBias(Machine this, int newBias) =>
         if newBias != 0 and this.state == ST_IDLE
             this.state := ST_BIAS_SET
             this.createdAt := this.barIndex
+    true
 
 // StdvOteStrategy.resetForNextWindow + OteSetupDriver.afterCandle resets
 method resetForNextWindow(Machine this) =>
@@ -411,6 +413,7 @@ method expiry(Machine this) =>
     else if s == ST_BIAS_SET
         if i_preSweepMin > 0 and not na(this.createdAt) and this.barIndex - this.createdAt > i_preSweepMin
             this.invalidate("expired before SWEEP_DONE")
+    true
 
 // processLegacyRearm (setup.rearmCooldownBars; canRearm = not NO_ENTRY/WEEKEND and flat)
 method processRearm(Machine this, int t) =>
@@ -421,6 +424,7 @@ method processRearm(Machine this, int t) =>
     else if this.rearmCD == 0 and (this.state == ST_INVALIDATED or (this.state == ST_IN_TRADE and this.closedAwaitingRearm)) and not sessionBlocksEntry(t) and strategy.position_size == 0
         this.rearmCD := -1
         this.rearm()
+    true
 
 method trackEpisode(Machine this, float level, float h, float l) =>
     this.epHi := na(this.epHi) ? math.max(level, h) : math.max(this.epHi, math.max(level, h))
@@ -652,6 +656,7 @@ method tryRecordDisplacement(Machine this, Buf5 b, Structure st) =>
                     this.linked := link
                     this.orderBlock := orderBlockAt(b, idx, bull)
                     this.dispTs := d.ts
+    true
 
 // POST_SWEEP: tryRecordMss (fresh MSS at/after the displacement; counter MSS through the extreme kills)
 method tryRecordMss(Machine this, Buf5 b, Structure st) =>
@@ -706,6 +711,7 @@ method tryArmOte(Machine this, Buf5 b, float rHi, float rLo, int t, float h, flo
         this.armedTs := t
     else
         this.lastGate := "awaiting-band-touch"
+    true
 
 // IMPULSE_LEG PD-array candidates at the sweep
 method impulseCandidates(Machine this, Buf5 b, bool bull) =>
