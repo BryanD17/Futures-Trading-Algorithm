@@ -345,6 +345,7 @@ newMachine() =>
 method invalidate(Machine this, string why) =>
     this.state := ST_INVALIDATED
     this.lastGate := why
+    true
 
 // StdvOteStrategy.recordHtfBias (bias.hysteresis, bias.neutralGraceBars)
 method recordHtfBias(Machine this, int newBias) =>
@@ -391,6 +392,7 @@ method resetForNextWindow(Machine this) =>
     this.emitBar := na
     this.dispTs := na
     this.mssTs := na
+    true
 
 method rearm(Machine this) =>
     this.closedAwaitingRearm := false
@@ -429,6 +431,7 @@ method processRearm(Machine this, int t) =>
 method trackEpisode(Machine this, float level, float h, float l) =>
     this.epHi := na(this.epHi) ? math.max(level, h) : math.max(this.epHi, math.max(level, h))
     this.epLo := na(this.epLo) ? math.min(level, l) : math.min(this.epLo, math.min(level, l))
+    true
 
 method newSweepEpisode(Machine this) =>
     if this.prevState != ST_SWEEP_DONE or this.state != ST_SWEEP_DONE
@@ -502,6 +505,7 @@ method afterCandle(Machine this) =>
         this.epHi := na
         this.epLo := na
     this.prevState := this.state
+    true
 
 // tryRecordSweep (BIAS_SET acts as MANIP_DONE: the manipulation leg always exists — PORT_MAP L2 DROP)
 method tryRecordSweep(Machine this, RaidState rs, LevelState lvs, Feed1 f, ScoreCtx ctx) =>
@@ -562,7 +566,7 @@ method tryImpulseLeg(Machine this, Buf5 b, Structure st, Feed1 f, float rHi, flo
                     this.verdict := "sweep not in OTE band"
                 else if na(ext) or ext < lo - 1e-9 or ext > hi + 1e-9
                     this.verdict := "retrace extreme outside the OTE band"
-                else if bull ? ext > need + 1e-9 : ext < need - 1e-9
+                else if (bull ? ext > need + 1e-9 : ext < need - 1e-9)
                     this.verdict := "sweep extreme short of minSweepFib"
                 else if closedBeyondExtreme(z, c)
                     this.verdict := "close beyond the range 1.0"
@@ -742,7 +746,7 @@ method impulseCandidates(Machine this, Buf5 b, bool bull) =>
             out.push(bull ? PdArr.new("WICK", true, this.sbL, bBot, this.sbT) : PdArr.new("WICK", false, bTop, this.sbH, this.sbT))
     array<PdArr> dc = pdCandidates(b, bull)
     for p in dc
-        if bull ? p.bottom <= level : p.top >= level
+        if (bull ? p.bottom <= level : p.top >= level)
             out.push(p)
     out
 
