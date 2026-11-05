@@ -1,0 +1,12 @@
+// =============================================================================
+// 80_strategy — OWNED BY AGENT 03 (V6 tasks 03.1-03.8). STUB from Agent 02.
+// Consumes the EXPORTS of 70_bias_smt (coreSignalLong/coreSignalShort, sigEntryRef, sigStop,
+// sigT1/sigT2/sigT3/sigFinal, sigRrT1/sigRrFinal, raidScore, mssConfirmed, oteLow/oteHigh, bias,
+// smt, rangeHigh/rangeLow/rangeEq, sessionNow) and the [Time] helpers of 20_time
+// (isNoEntryTime, isFlattenTime, inManualBlackout, sessionAllowed).
+// Contract enforced by tools/pine_lint.py for every entry added here:
+//   * strategy.entry only inside an `if barstate.isconfirmed` block (I8)
+//   * each strategy.entry id has a strategy.exit(..., from_entry = <same id>, stop = ...) (I2)
+//   * no order call references the SMT symbol or any request.* result (I1)
+// No orders are placed by this stub.
+// =============================================================================

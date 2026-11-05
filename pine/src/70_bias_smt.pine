@@ -1,0 +1,1037 @@
+// =============================================================================
+// 70_bias_smt — dealing range (THE bias once decisive), SMT vs MES, the STDV-OTE setup
+// state machine (IDLE -> BIAS_SET -> SWEEP_DONE -> DISPLACED -> MSS_CONFIRMED -> OTE_ARMED
+// -> alarm -> emit), and the ENGINE loop that replays every 1m intrabar of the confirmed
+// 5m chart bar in Java's per-candle order (StdvOteRunnerStrategy.onCandle :800-1200).
+// Java: strategy/stdvote/DealingRangeTracker.java, strategy/CorrelationTracker.java:121,
+//       strategy/stdvote/StdvOteStrategy.java (recordHtfBias :487, recordSweep :593, tryEmit :743),
+//       strategy/stdvote/OteSetupDriver.java, strategy/stdvote/StdvOteRunnerStrategy.java.
+// Named series for Agent 03 are at the END of this file ("EXPORTS").
+// =============================================================================
+
+// ---------------------------------------------------------------- dealing range
+type DLeg
+    float hi       = na
+    float lo       = na
+    int   hiSeq    = 0
+    int   loSeq    = 0
+    int   seq      = 0
+    int   dir      = 0
+    float pullback = na
+
+// DealingRangeTracker.Leg.onBar
+method onBar(DLeg this, float h, float l, float c, float minLeg, float frac) =>
+    this.seq := this.seq + 1
+    if this.dir == 0
+        if h > this.hi
+            this.hi := h
+            this.hiSeq := this.seq
+        if l < this.lo
+            this.lo := l
+            this.loSeq := this.seq
+        if this.hi - this.lo >= minLeg and this.hiSeq != this.loSeq
+            this.dir := this.hiSeq > this.loSeq ? 1 : -1
+            this.pullback := na
+    else if this.dir < 0
+        if c > this.hi
+            this.dir := 1
+            this.hi := h
+            this.pullback := na
+        else if l < this.lo
+            if not na(this.pullback) and this.pullback - this.lo >= frac * (this.hi - this.lo)
+                this.hi := this.pullback
+            this.lo := l
+            this.pullback := na
+        else
+            if h > this.hi
+                this.hi := h
+            this.pullback := na(this.pullback) ? h : math.max(this.pullback, h)
+    else
+        if c < this.lo
+            this.dir := -1
+            this.lo := l
+            this.pullback := na
+        else if h > this.hi
+            if not na(this.pullback) and this.hi - this.pullback >= frac * (this.hi - this.lo)
+                this.lo := this.pullback
+            this.hi := h
+            this.pullback := na
+        else
+            if l < this.lo
+                this.lo := l
+            this.pullback := na(this.pullback) ? l : math.min(this.pullback, l)
+
+type DRange
+    int   tradingDay = na
+    float hi         = na
+    float lo         = na
+    int   hiSeq      = 0
+    int   loSeq      = 0
+    int   seq        = 0
+    int   dir        = 0
+    int   carry      = 0
+    float pullback   = na
+    float carryHi    = na
+    float carryLo    = na
+    DLeg  rth
+    bool  hasRth     = false
+    bool  hasCarried = false
+    float cHi        = na
+    float cLo        = na
+    int   cDir       = 0
+    DLeg  sessionLeg
+
+method rthGoverns(DRange this) =>
+    this.hasRth and (i_rangeWindow == "RTH_FIRST" or (i_rangeWindow == "AUTO" and this.rth.dir != 0))
+
+method sessionDayDirection(DRange this) =>
+    int d = this.dir != 0 ? this.dir : this.carry
+    this.hasCarried ? this.cDir : d
+
+// DealingRangeTracker.snapshot -> [direction (+1/-1/0), high, low, equilibrium, decisive]
+method snapshot(DRange this) =>
+    int d = 0
+    float sh = na
+    float sl = na
+    bool dec = false
+    if not na(this.hi)
+        bool rthDir = this.rthGoverns() and this.rth.dir != 0
+        if this.hasCarried and not rthDir
+            d := this.cDir
+            sh := this.cHi
+            sl := this.cLo
+            dec := true
+        else if this.rthGoverns()
+            d := this.rth.dir != 0 ? this.rth.dir : this.sessionDayDirection()
+            sh := this.rth.hi
+            sl := this.rth.lo
+            dec := this.rth.dir != 0
+        else
+            d := this.sessionDayDirection()
+            bool useCarry = this.dir == 0 and this.carry != 0 and not na(this.carryHi)
+            sh := useCarry ? this.carryHi : this.hi
+            sl := useCarry ? this.carryLo : this.lo
+            dec := d != 0
+    float eq = na(sh) or na(sl) ? na : sl + (sh - sl) * 0.5
+    [d, sh, sl, eq, dec]
+
+method onRthCandle(DRange this, int t, float h, float l, float c) =>
+    if i_rangeWindow != "SESSION_DAY"
+        int mm = etMin(t)
+        if mm >= 9 * 60 + 30 and mm < 17 * 60
+            if not this.hasRth
+                this.rth := DLeg.new(h, l)
+                this.hasRth := true
+            else
+                this.rth.onBar(h, l, c, i_rangeMinLegTk * TICK, i_rangeReanchor)
+
+// DealingRangeTracker.onCandle (1m)
+method onCandle(DRange this, int t, float h, float l, float c) =>
+    if not inHalt(t)
+        int day = tradingDayKey(t)
+        this.seq := this.seq + 1
+        if na(this.tradingDay) or day != this.tradingDay
+            bool roll = not na(this.tradingDay)
+            bool nextCarried = false
+            float nHi = na
+            float nLo = na
+            int nDir = 0
+            if roll and i_rangeCarry
+                [pd, ph, pl, peq, pdec] = this.snapshot()
+                if pd != 0 and not na(ph) and not na(pl)
+                    nextCarried := true
+                    nHi := math.max(ph, h)
+                    nLo := math.min(pl, l)
+                    nDir := pd
+            this.hasCarried := nextCarried
+            this.cHi := nHi
+            this.cLo := nLo
+            this.cDir := nDir
+            if nextCarried
+                this.sessionLeg := DLeg.new(h, l)
+            this.tradingDay := day
+            if this.dir != 0
+                this.carry := this.dir
+                this.carryHi := this.hi
+                this.carryLo := this.lo
+            this.dir := 0
+            this.hi := h
+            this.lo := l
+            this.hiSeq := this.seq
+            this.loSeq := this.seq
+            this.pullback := na
+            this.hasRth := false
+            this.onRthCandle(t, h, l, c)
+        else
+            this.onRthCandle(t, h, l, c)
+            // onCarryCandle
+            if this.hasCarried
+                this.sessionLeg.onBar(h, l, c, i_rangeMinLegTk * TICK, i_rangeReanchor)
+                if this.sessionLeg.dir != 0
+                    this.hasCarried := false
+                else
+                    this.cHi := math.max(this.cHi, h)
+                    this.cLo := math.min(this.cLo, l)
+            if this.dir == 0
+                if h > this.hi
+                    this.hi := h
+                    this.hiSeq := this.seq
+                if l < this.lo
+                    this.lo := l
+                    this.loSeq := this.seq
+                if this.hi - this.lo >= i_rangeMinPct / 100.0 * c
+                    this.dir := this.hiSeq > this.loSeq ? 1 : -1
+                    this.pullback := na
+            else if this.dir < 0
+                if c > this.hi
+                    this.dir := 1
+                    this.hi := h
+                    this.pullback := na
+                else if l < this.lo
+                    if not na(this.pullback) and this.pullback - this.lo >= i_rangeReanchor * (this.hi - this.lo)
+                        this.hi := this.pullback
+                    this.lo := l
+                    this.pullback := na
+                else
+                    if h > this.hi
+                        this.hi := h
+                    this.pullback := na(this.pullback) ? h : math.max(this.pullback, h)
+            else
+                if c < this.lo
+                    this.dir := -1
+                    this.lo := l
+                    this.pullback := na
+                else if h > this.hi
+                    if not na(this.pullback) and this.hi - this.pullback >= i_rangeReanchor * (this.hi - this.lo)
+                        this.lo := this.pullback
+                    this.hi := h
+                    this.pullback := na
+                else
+                    if l < this.lo
+                        this.lo := l
+                    this.pullback := na(this.pullback) ? l : math.min(this.pullback, l)
+
+// ---------------------------------------------------------------- SMT (CorrelationTracker.hasSMTDivergence)
+type Smt
+    array<float> a      // primary (MNQ) 1m closes
+    array<float> b      // correlate (MES) 1m closes
+
+method pushA(Smt this, float c) =>
+    this.a.push(c)
+    if this.a.size() > i_smtLookback
+        this.a.shift()
+
+method pushB(Smt this, float c) =>
+    this.b.push(c)
+    if this.b.size() > i_smtLookback
+        this.b.shift()
+
+method diverges(Smt this) =>
+    int n = i_smtLookback
+    bool div = false
+    if this.a.size() >= n and this.b.size() >= n
+        float h1 = this.a.get(0)
+        float l1 = this.a.get(0)
+        float h2 = this.b.get(0)
+        float l2 = this.b.get(0)
+        for i = 0 to n - 2
+            h1 := math.max(h1, this.a.get(i))
+            l1 := math.min(l1, this.a.get(i))
+            h2 := math.max(h2, this.b.get(i))
+            l2 := math.min(l2, this.b.get(i))
+        float x1 = this.a.get(n - 1)
+        float x2 = this.b.get(n - 1)
+        bool nh1 = x1 > h1
+        bool nl1 = x1 < l1
+        bool nh2 = x2 > h2
+        bool nl2 = x2 < l2
+        div := (nh1 and not nh2) or (nl1 and not nl2) or (nh2 and not nh1) or (nl2 and not nl1)
+    div
+
+// ---------------------------------------------------------------- setup state machine
+const int ST_IDLE        = 0
+const int ST_BIAS_SET    = 1
+const int ST_SWEEP_DONE  = 3
+const int ST_DISPLACED   = 4
+const int ST_MSS         = 5
+const int ST_OTE_ARMED   = 6
+const int ST_IN_TRADE    = 7
+const int ST_INVALIDATED = 9
+
+stateName(int s) =>
+    switch s
+        ST_IDLE        => "IDLE"
+        ST_BIAS_SET    => "BIAS_SET"
+        ST_SWEEP_DONE  => "SWEEP_DONE"
+        ST_DISPLACED   => "DISPLACED"
+        ST_MSS         => "MSS_CONFIRMED"
+        ST_OTE_ARMED   => "OTE_ARMED"
+        ST_IN_TRADE    => "IN_TRADE"
+        ST_INVALIDATED => "INVALIDATED"
+        => "?"
+
+type Machine
+    int    state            = 0
+    int    htfBias          = 0      // the SETUP's bias
+    int    lastRecordedBias = 0      // StdvOteStrategy.lastRecordedBias
+    int    lastBias         = 0      // runner lastBias (last 15m/30m read)
+    int    neutralGrace     = 0
+    int    createdAt        = na
+    int    phaseState       = -1
+    int    phaseAt          = 0
+    int    barIndex         = 0      // core 1m bar counter
+    // sweep
+    bool   hasSweep         = false
+    bool   swBull           = false
+    float  swLevel          = na
+    int    swTs             = na
+    int    raidScore        = na
+    int    raidKind         = na
+    int    consumedRaidId   = na
+    int    consumedSweepTs  = na
+    // OteSetupDriver
+    int    drvSweepTs       = na
+    float  postHi           = na
+    float  postLo           = na
+    float  epHi             = na
+    float  epLo             = na
+    bool   hasSweepBar      = false
+    int    sbT              = na
+    float  sbO              = na
+    float  sbH              = na
+    float  sbL              = na
+    float  sbC              = na
+    array<int>   prT
+    array<float> prO
+    array<float> prH
+    array<float> prL
+    array<float> prC
+    int    prevState        = 0
+    int    dispIdx          = -1
+    int    consumedDispTs   = na
+    PdArr  linked
+    PdArr  orderBlock
+    int    mssIdx           = -1
+    bool   impulseMode      = false
+    float  impulseLevel     = na
+    Zone   zone
+    string model            = ""
+    float  sweepExtreme     = na
+    bool   alarmed          = false
+    float  alarmEntry       = na
+    string alarmKind        = ""
+    float  alarmFar         = na
+    int    alarmTs          = na
+    int    armedTs          = na
+    int    barsInOte        = 0
+    int    rearmCD          = -1
+    bool   closedAwaitingRearm = false
+    bool   positionSeen     = false
+    int    emitBar          = na
+    string lastGate         = ""
+    string verdict          = ""
+    int    dispTs           = na
+    int    mssTs            = na
+
+newMachine() =>
+    Machine.new(prT = array.new<int>(), prO = array.new<float>(), prH = array.new<float>(), prL = array.new<float>(), prC = array.new<float>(), zone = Zone.new())
+
+method invalidate(Machine this, string why) =>
+    this.state := ST_INVALIDATED
+    this.lastGate := why
+
+// StdvOteStrategy.recordHtfBias (bias.hysteresis, bias.neutralGraceBars)
+method recordHtfBias(Machine this, int newBias) =>
+    this.lastRecordedBias := newBias
+    if this.htfBias != 0 and newBias != 0 and newBias != this.htfBias and this.state < ST_IN_TRADE
+        this.invalidate("HTF bias flip")
+    if newBias == 0 and this.state != ST_IDLE and this.state < ST_IN_TRADE
+        if not i_biasHysteresis
+            this.invalidate("HTF bias became NEUTRAL")
+        else
+            this.neutralGrace := this.neutralGrace + 1
+            if this.neutralGrace > i_neutralGrace
+                this.invalidate("HTF bias NEUTRAL beyond grace")
+    else
+        this.neutralGrace := 0
+        this.htfBias := newBias
+        if newBias != 0 and this.state == ST_IDLE
+            this.state := ST_BIAS_SET
+            this.createdAt := this.barIndex
+
+// StdvOteStrategy.resetForNextWindow + OteSetupDriver.afterCandle resets
+method resetForNextWindow(Machine this) =>
+    this.state := ST_IDLE
+    this.htfBias := 0
+    this.neutralGrace := 0
+    this.createdAt := na
+    this.hasSweep := false
+    this.swLevel := na
+    this.swTs := na
+    this.raidScore := na
+    this.raidKind := na
+    this.zone := Zone.new()
+    this.model := ""
+    this.sweepExtreme := na
+    this.alarmed := false
+    this.alarmEntry := na
+    this.alarmKind := ""
+    this.alarmFar := na
+    this.alarmTs := na
+    this.armedTs := na
+    this.barsInOte := 0
+    this.positionSeen := false
+    this.emitBar := na
+    this.dispTs := na
+    this.mssTs := na
+
+method rearm(Machine this) =>
+    this.closedAwaitingRearm := false
+    this.resetForNextWindow()
+    if this.lastBias != 0
+        this.recordHtfBias(this.lastBias)
+
+// StdvOteStrategy.onCandle expiry budgets (PHASED, minutes = 1m bars)
+method expiry(Machine this) =>
+    int s = this.state
+    if s != this.phaseState
+        this.phaseState := s
+        this.phaseAt := this.barIndex
+    this.barIndex := this.barIndex + 1
+    if s == ST_SWEEP_DONE or s == ST_DISPLACED or s == ST_MSS
+        int budget = s == ST_SWEEP_DONE ? i_sweepDispMin : s == ST_DISPLACED ? i_dispMssMin : i_mssOteMin
+        if budget > 0 and this.barIndex - this.phaseAt > budget
+            this.invalidate("expired: phase budget " + str.tostring(budget) + " min")
+    else if s == ST_BIAS_SET
+        if i_preSweepMin > 0 and not na(this.createdAt) and this.barIndex - this.createdAt > i_preSweepMin
+            this.invalidate("expired before SWEEP_DONE")
+
+// processLegacyRearm (setup.rearmCooldownBars; canRearm = not NO_ENTRY/WEEKEND and flat)
+method processRearm(Machine this, int t) =>
+    if this.state == ST_INVALIDATED and this.rearmCD < 0
+        this.rearmCD := i_rearmCooldown
+    else if this.rearmCD > 0
+        this.rearmCD := this.rearmCD - 1
+    else if this.rearmCD == 0 and (this.state == ST_INVALIDATED or (this.state == ST_IN_TRADE and this.closedAwaitingRearm)) and not sessionBlocksEntry(t) and strategy.position_size == 0
+        this.rearmCD := -1
+        this.rearm()
+
+method trackEpisode(Machine this, float level, float h, float l) =>
+    this.epHi := na(this.epHi) ? math.max(level, h) : math.max(this.epHi, math.max(level, h))
+    this.epLo := na(this.epLo) ? math.min(level, l) : math.min(this.epLo, math.min(level, l))
+
+method newSweepEpisode(Machine this) =>
+    if this.prevState != ST_SWEEP_DONE or this.state != ST_SWEEP_DONE
+        this.epHi := na
+        this.epLo := na
+
+// setSweepBar: the sweep 1m candle + the obLookbackBars 1m candles before it
+method setSweepBar(Machine this, Feed1 f, int t, float o, float h, float l, float c) =>
+    this.hasSweepBar := true
+    this.sbT := t
+    this.sbO := o
+    this.sbH := h
+    this.sbL := l
+    this.sbC := c
+    this.prT.clear()
+    this.prO.clear()
+    this.prH.clear()
+    this.prL.clear()
+    this.prC.clear()
+    int n = f.t.size()
+    if n > 0
+        for k = n - 1 to 0
+            if this.prT.size() >= i_obLookback
+                break
+            if f.t.get(k) < t
+                this.prT.unshift(f.t.get(k))
+                this.prO.unshift(f.o.get(k))
+                this.prH.unshift(f.h.get(k))
+                this.prL.unshift(f.l.get(k))
+                this.prC.unshift(f.c.get(k))
+
+method startSweepTracking(Machine this, Feed1 f, int t, float o, float h, float l, float c) =>
+    this.newSweepEpisode()
+    this.drvSweepTs := this.swTs
+    this.postHi := math.max(this.swLevel, h)
+    this.postLo := math.min(this.swLevel, l)
+    this.setSweepBar(f, t, o, h, l, c)
+
+// OteSetupDriver.onFeedCandle
+method onFeedCandle(Machine this, Feed1 f, int t, float o, float h, float l, float c) =>
+    if this.hasSweep
+        if na(this.drvSweepTs) or this.drvSweepTs != this.swTs
+            this.startSweepTracking(f, t, o, h, l, c)
+        else
+            this.postHi := math.max(this.postHi, h)
+            this.postLo := math.min(this.postLo, l)
+        this.trackEpisode(this.swLevel, h, l)
+
+// OteSetupDriver.afterCandle
+method afterCandle(Machine this) =>
+    if this.state == ST_IDLE or this.state == ST_BIAS_SET
+        this.dispIdx := -1
+        this.linked := na
+        this.orderBlock := na
+        this.mssIdx := -1
+        this.impulseMode := false
+        this.impulseLevel := na
+    if not this.hasSweep
+        this.drvSweepTs := na
+        this.postHi := na
+        this.postLo := na
+        this.hasSweepBar := false
+        this.prT.clear()
+        this.prO.clear()
+        this.prH.clear()
+        this.prL.clear()
+        this.prC.clear()
+        this.epHi := na
+        this.epLo := na
+    this.prevState := this.state
+
+// tryRecordSweep (BIAS_SET acts as MANIP_DONE: the manipulation leg always exists — PORT_MAP L2 DROP)
+method tryRecordSweep(Machine this, RaidState rs, LevelState lvs, Feed1 f, ScoreCtx ctx) =>
+    if this.htfBias != 0
+        bool wantLow = this.htfBias > 0
+        [found, lvl, ts, sc, kind, rid, swTs] = rs.resolveSweep(lvs, f, ctx, wantLow, false, this.consumedRaidId, this.consumedSweepTs)
+        if found and sc >= i_minRaidScore
+            this.hasSweep := true
+            this.swBull := wantLow
+            this.swLevel := lvl
+            this.swTs := ts
+            this.raidScore := sc
+            this.raidKind := kind
+            this.state := ST_SWEEP_DONE
+            if not na(rid)
+                this.consumedRaidId := rid
+            if not na(swTs)
+                this.consumedSweepTs := swTs
+
+// tryRefreshSweep: a NEWER level raid scoring >= floor and >= current replaces the sweep
+method tryRefreshSweep(Machine this, RaidState rs, LevelState lvs, Feed1 f, ScoreCtx ctx) =>
+    if this.htfBias != 0 and this.hasSweep
+        bool wantLow = this.htfBias > 0
+        [found, lvl, ts, sc, kind, rid, swTs] = rs.resolveSweep(lvs, f, ctx, wantLow, true, this.consumedRaidId, this.consumedSweepTs)
+        if found and not na(rid) and sc >= i_minRaidScore and sc >= this.raidScore and ts > this.swTs
+            this.swLevel := lvl
+            this.swTs := ts
+            this.raidScore := sc
+            this.raidKind := kind
+            this.consumedRaidId := rid
+
+// OteSetupDriver.tryImpulseLegEntry -> true when the IMPULSE_LEG path consumed the candle
+method tryImpulseLeg(Machine this, Buf5 b, Structure st, Feed1 f, float rHi, float rLo, int t, float o, float h, float l, float c) =>
+    bool consumed = false
+    if this.htfBias != 0 and this.hasSweep
+        bool bull = this.htfBias > 0
+        if this.swBull != bull
+            this.verdict := "sweep-direction-mismatch"
+        else if na(rHi) or na(rLo) or not (rHi > rLo)
+            this.verdict := "no-dealing-range"
+        else
+            Zone z = buildZone(rLo, rHi, bull)
+            if not z.valid
+                this.verdict := "no-zone"
+            else
+                float lo = z.bandLo()
+                float hi = z.bandHi()
+                float level = this.swLevel
+                if na(this.drvSweepTs) or this.drvSweepTs != this.swTs
+                    this.startSweepTracking(f, t, o, h, l, c)
+                this.trackEpisode(level, h, l)
+                float ext = bull ? this.epLo : this.epHi
+                float sz = rHi - rLo
+                float need = bull ? rHi - i_minSweepFib * sz : rLo + i_minSweepFib * sz
+                if level < lo - 1e-9 or level > hi + 1e-9
+                    this.verdict := "sweep not in OTE band"
+                else if na(ext) or ext < lo - 1e-9 or ext > hi + 1e-9
+                    this.verdict := "retrace extreme outside the OTE band"
+                else if bull ? ext > need + 1e-9 : ext < need - 1e-9
+                    this.verdict := "sweep extreme short of minSweepFib"
+                else if closedBeyondExtreme(z, c)
+                    this.verdict := "close beyond the range 1.0"
+                else
+                    int endIdx = bull ? b.lastBarAt(rHi, true, b.lastIdx) : b.lastBarAt(rLo, false, b.lastIdx)
+                    int startIdx = endIdx < 0 ? -1 : (bull ? b.lastBarAt(rLo, false, endIdx) : b.lastBarAt(rHi, true, endIdx))
+                    if startIdx < 0 or endIdx < 0 or startIdx >= endIdx
+                        this.verdict := "impulse leg not in the detector buffer"
+                    else
+                        int legStart = b.bT(startIdx)
+                        int legEnd = b.bT(endIdx)
+                        // M5: displacements on the leg; M6: first leg MSS with a displacement at/before it
+                        MssEv pick = na
+                        DispEv pickD = na
+                        for e in st.mss
+                            if na(pick) and e.bullish == bull and e.idx >= startIdx and e.idx <= endIdx
+                                DispEv before = na
+                                for d in st.disp
+                                    if d.bullish == bull and d.ts >= legStart and d.ts <= legEnd and d.ts <= e.ts
+                                        before := d
+                                if not na(before)
+                                    pick := e
+                                    pickD := before
+                        bool anyDisp = false
+                        for d in st.disp
+                            if d.bullish == bull and d.ts >= legStart and d.ts <= legEnd
+                                anyDisp := true
+                        if not anyDisp
+                            this.verdict := "M5: no displacement on the impulse leg"
+                        else if na(pick)
+                            this.verdict := "M6: no structure break on the impulse leg at/after its displacement"
+                        else
+                            int dIdx = b.indexOf(pickD.ts)
+                            PdArr fvg = na
+                            if dIdx >= 0
+                                PdArr lf = linkedFvg(b, dIdx, bull)
+                                if not na(lf) and lf.at >= legStart and lf.at <= legEnd
+                                    fvg := lf
+                            if na(fvg)
+                                fvg := gapInWindow(b, startIdx + 1, endIdx, bull)
+                            if na(fvg)
+                                this.verdict := "M5: no FVG created inside the impulse leg"
+                            else
+                                // SWEEP_DONE -> DISPLACED -> MSS_CONFIRMED -> OTE_ARMED on this candle
+                                this.state := ST_OTE_ARMED
+                                this.zone := z
+                                this.model := "IMPULSE_LEG"
+                                this.impulseMode := true
+                                this.impulseLevel := level
+                                this.sweepExtreme := ext
+                                this.dispIdx := dIdx
+                                this.mssIdx := pick.idx
+                                this.linked := fvg
+                                this.orderBlock := na
+                                this.armedTs := t
+                                this.dispTs := pickD.ts
+                                this.mssTs := pick.ts
+                                this.verdict := "ARMED (impulse leg)"
+                                consumed := true
+    consumed
+
+// POST_SWEEP: OteSetupDriver.tryRecordDisplacement (non-impulse branch)
+method tryRecordDisplacement(Machine this, Buf5 b, Structure st) =>
+    bool bull = this.htfBias > 0
+    int notBefore = na(this.swTs) ? na : this.swTs - 4 * MS_MIN
+    DispEv d = st.findRecentDisp(b, i_dispRecent, bull, notBefore)
+    if na(d)
+        this.lastGate := st.anyRecentDisp(b, i_dispRecent, notBefore) ? "displacement-wrong-direction" : "no-recent-displacement"
+    else if not na(this.consumedDispTs) and d.ts == this.consumedDispTs
+        this.lastGate := "displacement-already-consumed"
+    else
+        int idx = b.indexOf(d.ts)
+        if idx < 0
+            this.lastGate := "no-displacement-object"
+        else
+            PdArr link = linkedFvg(b, idx, bull)
+            bool pending = false
+            if na(link)
+                if not linkWindowClosed(b, idx)
+                    pending := true
+                    this.lastGate := "fvg-link-pending"
+                else
+                    link := orderBlockAt(b, idx, bull)
+            if not pending
+                if na(link)
+                    this.lastGate := "no-fvg-for-displacement"
+                else if link.bullish == bull
+                    this.state := ST_DISPLACED
+                    this.consumedDispTs := d.ts
+                    this.dispIdx := idx
+                    this.linked := link
+                    this.orderBlock := orderBlockAt(b, idx, bull)
+                    this.dispTs := d.ts
+
+// POST_SWEEP: tryRecordMss (fresh MSS at/after the displacement; counter MSS through the extreme kills)
+method tryRecordMss(Machine this, Buf5 b, Structure st) =>
+    bool bull = this.htfBias > 0
+    int n = st.mss.size()
+    bool done = false
+    if n > 0
+        for k = n - 1 to 0
+            if done
+                break
+            MssEv e = st.mss.get(k)
+            if e.idx < this.dispIdx or b.lastIdx - e.idx > i_mssFreshBars
+                break
+            if e.bullish != bull
+                float ext = bull ? this.postLo : this.postHi
+                bool through = not na(ext) and (bull ? e.level < ext : e.level > ext)
+                if through
+                    this.invalidate("counter-bias MSS through the sweep extreme")
+                    done := true
+            else
+                this.state := ST_MSS
+                this.mssIdx := e.idx
+                this.mssTs := e.ts
+                done := true
+
+// POST_SWEEP: plan + tryArmOte (range leg if the post-sweep extreme sits in the correct half, else the
+// sweep-extreme -> furthest-price leg; recomputed every candle until armed)
+method tryArmOte(Machine this, Buf5 b, float rHi, float rLo, int t, float h, float l, float c) =>
+    bool bull = this.htfBias > 0
+    bool usable = false
+    if not na(rHi) and not na(rLo) and rHi > rLo
+        float eq = (rLo + rHi) / 2.0
+        usable := bull ? (na(this.postLo) or (this.postLo >= rLo - TICK and this.postLo <= eq)) : (na(this.postHi) or (this.postHi <= rHi + TICK and this.postHi >= eq))
+    Zone z = Zone.new()
+    if usable
+        z := buildZone(rLo, rHi, bull)
+    else if not na(this.postHi) and not na(this.postLo) and this.postHi > this.postLo
+        z := buildZone(this.postLo, this.postHi, bull)
+    if z.valid
+        this.zone := z
+        this.sweepExtreme := bull ? this.postLo : this.postHi
+    if not this.zone.valid
+        this.lastGate := "no-anchor-leg"
+    else if closedBeyondExtreme(this.zone, c)
+        this.invalidate("OTE invalidated: close beyond range extreme")
+    else if this.mssIdx >= 0 and b.lastIdx - this.mssIdx > i_mssFreshBars
+        this.invalidate("MSS stale before price reached the OTE band")
+    else if tradedIntoBand(this.zone, h, l)
+        this.state := ST_OTE_ARMED
+        this.model := "POST_SWEEP"
+        this.armedTs := t
+    else
+        this.lastGate := "awaiting-band-touch"
+
+// IMPULSE_LEG PD-array candidates at the sweep
+method impulseCandidates(Machine this, Buf5 b, bool bull) =>
+    array<PdArr> out = array.new<PdArr>()
+    float level = this.impulseLevel
+    if not na(this.swTs)
+        int barStart = math.floor(this.swTs / (5 * MS_MIN)) * (5 * MS_MIN)
+        int sIdx = b.indexOf(barStart)
+        if sIdx >= 0
+            PdArr sob = sweepOrderBlock(b, sIdx, bull, level)
+            if not na(sob)
+                out.push(sob)
+    if i_pdSource == "ICT_OB"
+        int np = this.prT.size()
+        if np > 0
+            for k = np - 1 to 0
+                bool opp = bull ? this.prC.get(k) < this.prO.get(k) : this.prC.get(k) > this.prO.get(k)
+                if opp
+                    out.push(PdArr.new("OB", bull, this.prL.get(k), this.prH.get(k), this.prT.get(k)))
+                    break
+    if this.hasSweepBar
+        float rng = this.sbH - this.sbL
+        float bTop = math.max(this.sbO, this.sbC)
+        float bBot = math.min(this.sbO, this.sbC)
+        bool rej = bull ? this.sbC > level : this.sbC < level
+        float wick = bull ? bBot - this.sbL : this.sbH - bTop
+        if rej and rng > 0 and wick / rng >= 0.5
+            out.push(bull ? PdArr.new("WICK", true, this.sbL, bBot, this.sbT) : PdArr.new("WICK", false, bTop, this.sbH, this.sbT))
+    array<PdArr> dc = pdCandidates(b, bull)
+    for p in dc
+        if bull ? p.bottom <= level : p.top >= level
+            out.push(p)
+    out
+
+// OteSetupDriver.alarm -> true when an entry may be attempted on this candle
+method alarm(Machine this, Buf5 b, int t, float o, float h, float l, float c) =>
+    bool fire = false
+    if this.state == ST_OTE_ARMED and this.zone.valid
+        if sessionBlocksEntry(t)
+            this.lastGate := "no-entry-block-15:45-18:00ET"
+        else if this.alarmed
+            fire := true
+        else if closedBeyondExtreme(this.zone, c)
+            this.invalidate("OTE invalidated: close beyond range extreme")
+        else
+            bool bull = this.zone.bullish
+            bool impulse = this.impulseMode and this.model == "IMPULSE_LEG"
+            if impulse
+                this.sweepExtreme := bull ? this.epLo : this.epHi
+            array<PdArr> cands = array.new<PdArr>()
+            if impulse
+                cands := this.impulseCandidates(b, bull)
+            else
+                if not na(this.linked)
+                    cands.push(this.linked)
+                if not na(this.orderBlock)
+                    cands.push(this.orderBlock)
+                array<PdArr> dc = pdCandidates(b, bull)
+                for p in dc
+                    cands.push(p)
+            PdArr best = bestInBand(cands, this.zone)
+            if na(best)
+                this.lastGate := impulse ? "impulse-no-pd-array-at-sweep" : "no-pd-array-overlapping-band"
+            else
+                bool react = impulse ? reactionImpulse(this.zone, o, h, l, c, this.impulseLevel) : reactionPostSweep(this.zone, o, h, l, c)
+                if not react
+                    this.lastGate := impulse ? "impulse-awaiting-rejection" : "no-reaction-at-band"
+                else
+                    this.alarmed := true
+                    this.alarmEntry := roundTick(pdEntryLevel(best, this.zone))
+                    this.alarmKind := best.kind
+                    this.alarmFar := best.farEdge()
+                    this.alarmTs := t
+                    fire := true
+    fire
+
+// StdvOteStrategy.tryEmit + MandatoryConfluenceValidator (M2b, M3, M4, M7; M8 size = Agent 03).
+// Returns [emitted, entry, stop, t1, t2, t3, final, rrT1, rrFinal].
+method tryEmit(Machine this, int t, float rHi, float rLo, float rEq, bool rDec) =>
+    bool ok = false
+    float entry = na
+    float stop = na
+    float t1 = na
+    float t2 = na
+    float t3 = na
+    float fin = na
+    float rrT1 = na
+    float rrFin = na
+    if this.state == ST_OTE_ARMED and this.zone.valid
+        if this.lastRecordedBias == 0 or this.lastRecordedBias != this.htfBias
+            this.lastGate := "BIAS: emission blocked (current bias not aligned with setup)"
+        else
+            Zone z = this.zone
+            bool bull = z.bullish
+            // OteEntryCalculator.chooseEntry: the PD-array level when inside the band, else the 0.705
+            entry := z.contains(this.alarmEntry) ? roundTick(this.alarmEntry) : z.f705
+            // StdvOteStrategy.anchoredStop (ote.stopMode = BAND)
+            float far = z.f79
+            bool impulse = this.model == "IMPULSE_LEG"
+            if bull
+                if not na(this.alarmFar)
+                    far := math.min(far, this.alarmFar)
+                if impulse and not na(this.sweepExtreme)
+                    far := math.min(far, this.sweepExtreme)
+                stop := roundTick(far - i_stopBufTicks * TICK)
+            else
+                if not na(this.alarmFar)
+                    far := math.max(far, this.alarmFar)
+                if impulse and not na(this.sweepExtreme)
+                    far := math.max(far, this.sweepExtreme)
+                stop := roundTick(far + i_stopBufTicks * TICK)
+            // targetLadder [0.5, 0.382, 0.0]; final = the LAST rung (in that order) with RR <= ceiling, default T1
+            t1 := z.fibLevel(0.5)
+            t2 := z.fibLevel(0.382)
+            t3 := z.fibLevel(0.0)
+            fin := t1
+            if rewardToRisk(entry, stop, t2) <= i_rrMax + 1e-9
+                fin := t2
+            if rewardToRisk(entry, stop, t3) <= i_rrMax + 1e-9
+                fin := t3
+            rrT1 := rewardToRisk(entry, stop, t1)
+            rrFin := rewardToRisk(entry, stop, fin)
+            // M2b premium/discount vs the governing range eq (RD branch; other branches ABSTAIN = pass)
+            bool m2b = true
+            if i_pdGateOn and rDec and not na(rEq) and not na(rHi) and not na(rLo) and (rHi - rLo) >= i_pdMinRangeTicks * TICK
+                float band = i_pdEqBandTicks * TICK
+                m2b := bull ? entry < rEq - band : entry > rEq + band
+            bool m3 = not sessionBlocksEntry(t)
+            bool m4 = not na(this.raidScore) and this.raidScore >= i_minRaidScore
+            bool m7 = z.contains(entry) and rrT1 >= i_rrMin - 1e-9 and rrFin <= i_rrMax + 1e-9 and (bull ? stop < entry : stop > entry)
+            if not m2b
+                this.lastGate := "GATE-M2b premium/discount"
+            else if not m3
+                this.lastGate := "GATE-M3 session"
+            else if not m4
+                this.lastGate := "GATE-M4 raid score"
+            else if not m7
+                this.lastGate := "GATE-M7 OTE/RR"
+            else
+                ok := true
+                this.lastGate := ""
+                this.state := ST_IN_TRADE
+                this.emitBar := bar_index
+                this.positionSeen := false
+    [ok, entry, stop, t1, t2, t3, fin, rrT1, rrFin]
+
+// =============================================================================
+// ENGINE — replay the 1m intrabars of every CONFIRMED 5m bar (I8: nothing evaluates intrabar).
+// request.security_lower_tf returns the 1m bars INSIDE the current chart bar, oldest first; it has
+// no lookahead parameter and on a confirmed bar its contents are final. MES is read the same way
+// for SMT and is DATA ONLY — never traded (I1). When a bar has no intrabar data (history older than
+// the plan's intrabar limit) the 5m bar itself is replayed as one pseudo-1m candle (PORT_APPROX).
+// =============================================================================
+[ltT, ltO, ltH, ltL, ltC] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, high, low, close])
+[mesT, mesC] = request.security_lower_tf(i_smtSymbol, "1", [time, close], ignore_invalid_symbol = true)
+
+if barstate.isfirst and timeframe.period != "5"
+    runtime.error("LucidICT V6 runs on a 5-minute chart (EngineConfig stdvote.detectorTimeframe = 5).")
+
+var LevelState levels = newLevelState()
+var Feed1      feed  = newFeed1()
+var RaidState  raids = newRaidState()
+var Buf5       buf   = newBuf5()
+var Structure  anat   = newStructure()
+var DRange     dr    = DRange.new(rth = DLeg.new(), sessionLeg = DLeg.new())
+var Smt        smtS  = Smt.new(array.new<float>(), array.new<float>())
+var Machine    mach   = newMachine()
+var int        last15Bucket = na
+var bool       smtNow  = false
+var int        rDirNow = 0
+var float      rHiNow  = na
+var float      rLoNow  = na
+var float      rEqNow  = na
+var bool       rDecNow = false
+
+// per-bar signal outputs (reset every bar)
+bool   coreSignalLong  = false
+bool   coreSignalShort = false
+float  sigEntryRef     = na    // Java LIMIT entry (PD-array level) — parity reference (PORT_MAP S1)
+float  sigStop         = na
+float  sigT1           = na
+float  sigT2           = na
+float  sigT3           = na
+float  sigFinal        = na
+float  sigRrT1         = na
+float  sigRrFinal      = na
+string sigPdKind       = ""
+string sigModel        = ""
+string sigLevelType    = ""
+int    sigRaidScore    = na
+int    sigTs1m         = na    // open time of the 1m candle on which Java would emit
+int    sigSession      = na
+
+if barstate.isconfirmed
+    raids.dbgT.clear()
+    raids.dbgP.clear()
+    raids.dbgS.clear()
+    raids.dbgLow.clear()
+    // IN_TRADE latch release (processLegacyRearm: pendingPositionClosed / executedSinceEmit)
+    if mach.state == ST_IN_TRADE
+        if strategy.position_size != 0
+            mach.positionSeen := true
+        else if bar_index > mach.emitBar and not mach.closedAwaitingRearm
+            if not mach.positionSeen
+                mach.invalidate("signal not executed (released)")
+            else
+                mach.closedAwaitingRearm := true
+                mach.rearmCD := i_rearmCooldown
+    int nLtf = na(ltT) ? 0 : ltT.size()
+    bool useLtf = nLtf > 0
+    int cnt = useLtf ? nLtf : 1
+    int nMes = na(mesT) ? 0 : mesT.size()
+    int mesPtr = 0
+    for i = 0 to cnt - 1
+        int   t1m = useLtf ? ltT.get(i) : time
+        float o1m = useLtf ? ltO.get(i) : open
+        float h1m = useLtf ? ltH.get(i) : high
+        float l1m = useLtf ? ltL.get(i) : low
+        float c1m = useLtf ? ltC.get(i) : close
+        // 1. LiquidityDetector.updatePrimary
+        feed.add(t1m, o1m, h1m, l1m, c1m)
+        raids.detectSwingSweep(feed)
+        // 2. LevelEngine.processCandle
+        levels.processCandle(t1m, h1m, l1m)
+        // 3. the 5m anatomy bar completed by the first 1m of this bucket: displacement, MSS, PD arrays
+        if i == 0 and bar_index > 0
+            buf.add(time[1], open[1], high[1], low[1], close[1])
+            anat.detectDisplacement(buf)
+            [nh, nhp, nl, nlp] = anat.updateMss(buf)
+            if nh
+                levels.onSwingPoint(true, nhp)
+            if nl
+                levels.onSwingPoint(false, nlp)
+        // 4. OteSetupDriver.onFeedCandle
+        mach.onFeedCandle(feed, t1m, o1m, h1m, l1m, c1m)
+        // 5. SMT (CorrelationTracker): correlate closes up to this minute first
+        if nMes > 0
+            while mesPtr < nMes and mesT.get(mesPtr) <= t1m
+                smtS.pushB(mesC.get(mesPtr))
+                mesPtr += 1
+        smtS.pushA(c1m)
+        smtNow := i_smtEnabled and smtS.diverges()
+        // 6. DealingRangeTracker.onCandle
+        dr.onCandle(t1m, h1m, l1m, c1m)
+        [rd, rh, rl, re, rdec] = dr.snapshot()
+        rDirNow := rd
+        rHiNow  := rh
+        rLoNow  := rl
+        rEqNow  := re
+        rDecNow := rdec
+        // 7. RaidDetector.processCandle with this candle's scoring context
+        int scoringBias = mach.htfBias != 0 ? mach.htfBias : mach.lastBias
+        bool dispEntry = scoringBias != 0 and anat.dispEntryTrigger(buf, scoringBias > 0)
+        ScoreCtx ctx = ScoreCtx.new(scoringBias, smtNow, dispEntry, rdec ? re : na, isRaidKillzone(t1m), isSilverBullet(t1m))
+        raids.processCandle(levels, feed, t1m, o1m, h1m, l1m, c1m, ctx)
+        // 8. core.onCandle (expiry) + re-arm
+        mach.expiry()
+        mach.processRearm(t1m)
+        // 9. bias on each completed 15m/30m bar (= the first 1m of a new 15m bucket)
+        int b15 = math.floor(t1m / (15 * MS_MIN))
+        if not na(last15Bucket) and b15 != last15Bucket
+            int biasNow = rdec ? rd : 0       // bias.source = RANGE; the vote is cold-start only (PORT_MAP B2)
+            mach.recordHtfBias(biasNow)
+            mach.lastBias := biasNow
+        last15Bucket := b15
+        // 10. OTE window (ote.windowBars x 5 feed bars)
+        if mach.state == ST_OTE_ARMED
+            mach.barsInOte := mach.barsInOte + 1
+            if mach.barsInOte > i_oteWindowBars * 5
+                mach.invalidate("OTE window expired")
+                mach.barsInOte := 0
+        else
+            mach.barsInOte := 0
+        // 11. state transitions (one candle may chain several, exactly like the runner)
+        if mach.state == ST_BIAS_SET
+            mach.tryRecordSweep(raids, levels, feed, ctx)
+        else if mach.state == ST_SWEEP_DONE
+            mach.tryRefreshSweep(raids, levels, feed, ctx)
+        if mach.state == ST_SWEEP_DONE
+            bool took = false
+            if i_entryModel == "IMPULSE_LEG"
+                took := mach.tryImpulseLeg(buf, anat, feed, rh, rl, t1m, o1m, h1m, l1m, c1m)
+            if not took and mach.state == ST_SWEEP_DONE
+                mach.tryRecordDisplacement(buf, anat)
+        if mach.state == ST_DISPLACED
+            mach.tryRecordMss(buf, anat)
+        if mach.state == ST_MSS
+            mach.tryArmOte(buf, rh, rl, t1m, h1m, l1m, c1m)
+        if mach.state == ST_OTE_ARMED
+            if mach.alarm(buf, t1m, o1m, h1m, l1m, c1m)
+                [ok, en, sp, a1, a2, a3, fi, r1, rf] = mach.tryEmit(t1m, rh, rl, re, rdec)
+                if ok
+                    coreSignalLong  := mach.zone.bullish
+                    coreSignalShort := not mach.zone.bullish
+                    sigEntryRef  := en
+                    sigStop      := sp
+                    sigT1        := a1
+                    sigT2        := a2
+                    sigT3        := a3
+                    sigFinal     := fi
+                    sigRrT1      := r1
+                    sigRrFinal   := rf
+                    sigPdKind    := mach.alarmKind
+                    sigModel     := mach.model
+                    sigLevelType := levelName(mach.raidKind)
+                    sigRaidScore := mach.raidScore
+                    sigTs1m      := t1m
+                    sigSession   := sessionWindow(t1m)
+        // 12. OteSetupDriver.afterCandle
+        mach.afterCandle()
+
+// =============================================================================
+// EXPORTS — named series for Agent 03 (80_strategy) and the debug overlay (95).
+// Values are final at the confirmed 5m close; consume them only when barstate.isconfirmed.
+// =============================================================================
+int    bias             = mach.lastBias                          // +1 BULLISH / -1 BEARISH / 0 NEUTRAL (last 15m read)
+int    setupBias        = mach.htfBias                           // the setup's bias
+int    setupState       = mach.state                             // ST_* constant
+string setupStateName   = stateName(mach.state)
+int    raidScore        = mach.raidScore                         // M4 score of the setup's sweep (na before SWEEP_DONE)
+string raidLevelType    = na(mach.raidKind) ? "" : levelName(mach.raidKind)
+bool   sweepDone        = mach.hasSweep
+float  sweptLevel       = mach.swLevel
+bool   displaced        = mach.state >= ST_DISPLACED and mach.state <= ST_IN_TRADE
+bool   mssConfirmed     = mach.state >= ST_MSS and mach.state <= ST_IN_TRADE
+bool   oteArmed         = mach.state == ST_OTE_ARMED
+float  oteLow           = mach.zone.valid ? mach.zone.bandLo() : na   // OTE band low  (min of f62/f79)
+float  oteHigh          = mach.zone.valid ? mach.zone.bandHi() : na   // OTE band high (max of f62/f79)
+float  ote705           = mach.zone.valid ? mach.zone.f705 : na
+float  oteEq            = mach.zone.valid ? mach.zone.eq50 : na
+float  oteInvalidation  = mach.zone.valid ? mach.zone.one00 : na
+bool   smt              = smtNow                              // SMT divergence on the last 1m of this bar
+int    rangeDir         = rDirNow                             // dealing range (PORT_MAP B1)
+float  rangeHigh        = rHiNow
+float  rangeLow         = rLoNow
+float  rangeEq          = rEqNow
+bool   rangeDecisive    = rDecNow
+string lastGateFailed   = mach.lastGate
+string impulseVerdict   = mach.verdict
+int    sessionNow       = sessionWindow(time)
+bool   primeKillzoneNow = isPrimeKillzone(time)

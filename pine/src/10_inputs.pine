@@ -1,0 +1,96 @@
+// =============================================================================
+// 10_inputs — input groups (master prompt Section 6).
+// Agent 02 owns [Strategy] [SMT] [Time] [Debug]; Agent 03 owns [Account] + [Risk];
+// Agent 04 owns [Relay]. Every [Strategy] default = the Java EFFECTIVE default
+// (classpath engine-defaults.properties, no -D flags) and every tooltip names the
+// EngineConfig key it mirrors (task 02.2). Tolerances are in TICKS only (02.3/AP-6).
+// =============================================================================
+const string G_ACCOUNT = "Account"
+const string G_RISK    = "Risk"
+const string G_TIME    = "Time (America/New_York)"
+const string G_STRAT   = "Strategy (V5 effective config)"
+const string G_SMT     = "SMT"
+const string G_RELAY   = "Relay"
+const string G_DEBUG   = "Debug"
+
+// ---- [Account] (Agent 03: AccountProfile dropdown + CUSTOM numbers, generated from config/lucid_profiles.yaml)
+
+// ---- [Risk] (Agent 03 extends). rrMin/rrMax are declared here because the M7 gate (PORT_MAP O10) reads them.
+i_rrMin = input.float(1.0, "rrMin (RR(T1) floor)", minval = 0.1, step = 0.1, group = G_RISK, tooltip = "EngineConfig: risk.rrFloor = 1.0 (validator M7: reject when RR(T1) < floor)")
+i_rrMax = input.float(5.0, "rrMax (RR(final) ceiling)", minval = 0.5, step = 0.5, group = G_RISK, tooltip = "EngineConfig: risk.rrCeiling = 5.0 (target = furthest rung with RR <= ceiling; validator M7 rejects RR(final) > ceiling)")
+
+// ---- [Time] — every window is an ET wall-clock HHMM (R9 / AP-7). Owner's chart is CT = ET - 1h.
+i_noEntryAfter  = input.int(1545, "noEntryAfter (HHMM ET)", minval = 0, maxval = 2359, group = G_TIME, tooltip = "No NEW entries at/after this ET time until 18:00 ET. Java parity default 1545 ET = 14:45 CT (SessionClassifier NO_ENTRY 15:45-18:00 ET, RiskConfig no-entry block). Sacred outer limit I3: never later than 1630 ET (15:30 CT).")
+i_flattenAt     = input.int(1640, "flattenAt (HHMM ET)", minval = 0, maxval = 2359, group = G_TIME, tooltip = "Flatten everything at this ET time (I3 = 16:40 ET / 15:40 CT). Java flattened at 15:45 ET (LiveEngineRunner.checkFlattenByTime); use 1545 for the parity run. Consumed by Agent 03.")
+i_fridayFlatAt  = input.int(1640, "fridayFlattenAt (HHMM ET)", minval = 0, maxval = 2359, group = G_TIME, tooltip = "Pre-weekend flatten on Friday (ET). Consumed by Agent 03.")
+i_blackout      = input.string("", "manualBlackout (ET, e.g. 0828-0835,1358-1405)", group = G_TIME, tooltip = "Optional manual news blackout windows, comma-separated HHMM-HHMM in ET. Replaces Java news gating (PORT_MAP §8: DROP, LucidFlex allows news). Empty = none.")
+i_kzAsia        = input.bool(true, "Allow ASIA (19:00-02:00 ET)", group = G_TIME, tooltip = "EngineConfig: session.allSessions = true, session.gateMode = SCORING (SessionClassifier ASIA). Untick to forbid entries in this window.")
+i_kzLondon      = input.bool(true, "Allow LONDON (02:00-08:00 ET)", group = G_TIME, tooltip = "EngineConfig: session.allSessions = true (SessionClassifier LONDON)")
+i_kzPreNy       = input.bool(true, "Allow PRE_NY (08:00-09:30 ET)", group = G_TIME, tooltip = "EngineConfig: session.allSessions = true (SessionClassifier PRE_NY)")
+i_kzNyAm        = input.bool(true, "Allow NY_AM (09:30-12:00 ET)", group = G_TIME, tooltip = "EngineConfig: session.allSessions = true (SessionClassifier NY_AM)")
+i_kzNyLunch     = input.bool(true, "Allow NY_LUNCH (12:00-13:30 ET)", group = G_TIME, tooltip = "EngineConfig: session.allSessions = true (SessionClassifier NY_LUNCH)")
+i_kzNyPm        = input.bool(true, "Allow NY_PM (13:30-15:45 ET)", group = G_TIME, tooltip = "EngineConfig: session.allSessions = true (SessionClassifier NY_PM)")
+i_kzPreAsia     = input.bool(true, "Allow PRE_ASIA (18:00-19:00 ET)", group = G_TIME, tooltip = "EngineConfig: session.allSessions = true (SessionClassifier PRE_ASIA)")
+
+// ---- [Strategy] — V5 effective parameters
+i_minRaidScore    = input.int(5, "minRaidScore (M4 floor)", minval = 1, maxval = 10, group = G_STRAT, tooltip = "EngineConfig: TradeableInstrument.MNQ raidMinQuality = 5 (StdvOteStrategy.recordSweep floor + validator M4)")
+i_raidTolTicks    = input.int(4, "raid tolerance (ticks)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: InstrumentRaidConfig.forNQ toleranceTicks = 4 (bar must trade FROM the level: low <= level + tol)")
+i_raidPenTicks    = input.int(4, "raid min penetration (ticks)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: InstrumentRaidConfig.forNQ minPenetrationTicks = 4 (high > level + minPen)")
+i_raidStrongTicks = input.int(8, "raid strong close-back (ticks)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: InstrumentRaidConfig.forNQ strongPenetrationTicks = 8 (RaidQualityScorer strongCloseBackTicks)")
+i_raidThreshold   = input.int(4, "raid registration threshold", minval = 1, maxval = 10, group = G_STRAT, tooltip = "EngineConfig: InstrumentRaidConfig.forNQ minQualityThreshold = 4 (RaidDetector registers a level raid only at/above this score)")
+i_sweepRecency    = input.int(3, "sweep recency (1m bars)", minval = 1, group = G_STRAT, tooltip = "EngineConfig: StdvOteRunnerStrategy.SWEEP_RECENCY_BARS = 3 (raid / swing sweep consumable for this many 1m bars)")
+i_swingSweepLen   = input.int(10, "swing-sweep window (1m bars)", minval = 2, group = G_STRAT, tooltip = "EngineConfig: LiquidityDetector recent window = 10 bars (raid.sweepMode = PIPELINE)")
+i_rearmLvlTicks   = input.int(100, "level re-arm distance (ticks)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: levels.rearmDistanceTicks = 100")
+i_minBarsPerDay   = input.int(60, "min 1m bars per day (PDH/PDL)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: levels.minBarsPerDay = 60")
+i_asiaStart       = input.int(2000, "ASIA level window start (HHMM ET)", group = G_STRAT, tooltip = "EngineConfig: levels.asia.start = 20:00")
+i_asiaEnd         = input.int(0,    "ASIA level window end (HHMM ET)",   group = G_STRAT, tooltip = "EngineConfig: levels.asia.end = 00:00")
+i_londonStart     = input.int(400,  "LONDON level window start (HHMM ET)", group = G_STRAT, tooltip = "EngineConfig: levels.london.start = 04:00")
+i_londonEnd       = input.int(600,  "LONDON level window end (HHMM ET)",   group = G_STRAT, tooltip = "EngineConfig: levels.london.end = 06:00")
+i_nyamStart       = input.int(930,  "NY_AM level window start (HHMM ET)",  group = G_STRAT, tooltip = "EngineConfig: levels.nyam.start = 09:30")
+i_nyamEnd         = input.int(1200, "NY_AM level window end (HHMM ET)",    group = G_STRAT, tooltip = "EngineConfig: levels.nyam.end = 12:00")
+i_nypmStart       = input.int(1330, "NY_PM level window start (HHMM ET)",  group = G_STRAT, tooltip = "EngineConfig: levels.nypm.start = 13:30")
+i_nypmEnd         = input.int(1600, "NY_PM level window end (HHMM ET)",    group = G_STRAT, tooltip = "EngineConfig: levels.nypm.end = 16:00")
+i_nyStart         = input.int(930,  "NY level window start (HHMM ET)",     group = G_STRAT, tooltip = "EngineConfig: levels.ny.start = 09:30")
+i_nyEnd           = input.int(1600, "NY level window end (HHMM ET)",       group = G_STRAT, tooltip = "EngineConfig: levels.ny.end = 16:00")
+i_eqTolTicks      = input.int(4, "equal highs/lows cluster tolerance (ticks)", minval = 0, group = G_STRAT, tooltip = "PORT_APPROX of EqualLevelDetector: 5m swing points within this many ticks form an EQUAL_HIGH/EQUAL_LOW cluster (Java tolerance = InstrumentRaidConfig toleranceTicks = 4)")
+i_rangeWindow     = input.string("AUTO", "dealing range window", options = ["AUTO", "SESSION_DAY", "RTH_FIRST"], group = G_STRAT, tooltip = "EngineConfig: bias.range.window = AUTO (DealingRangeTracker)")
+i_rangeMinPct     = input.float(0.08, "dealing range decisive span (%)", minval = 0.0, step = 0.01, group = G_STRAT, tooltip = "EngineConfig: bias.range.minRangePct = 0.08")
+i_rangeReanchor   = input.float(0.5, "dealing range re-anchor fraction", minval = 0.0, maxval = 1.0, step = 0.05, group = G_STRAT, tooltip = "EngineConfig: bias.range.reanchorFraction = 0.5")
+i_rangeMinLegTk   = input.int(400, "RTH impulse leg min (ticks)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: bias.range.minLegTicks = 400 (AUTO: RTH leg governs once >= this)")
+i_rangeCarry      = input.bool(true, "carry range across 18:00 reopen", group = G_STRAT, tooltip = "EngineConfig: bias.range.carryAcrossReopen = true")
+i_biasHysteresis  = input.bool(true, "bias hysteresis", group = G_STRAT, tooltip = "EngineConfig: bias.hysteresis = true")
+i_neutralGrace    = input.int(3, "bias NEUTRAL grace (15m reads)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: bias.neutralGraceBars = 3")
+i_dispAtrMult     = input.float(1.2, "displacement ATR multiple", minval = 0.1, step = 0.1, group = G_STRAT, tooltip = "EngineConfig: displacement.atrMult = 1.2 (range >= mult x mean TRUE range of the PRIOR bars)")
+i_dispBodyPct     = input.float(0.50, "displacement min body/range", minval = 0.0, maxval = 1.0, step = 0.05, group = G_STRAT, tooltip = "EngineConfig: displacement.bodyPct = 0.50")
+i_dispAtrLen      = input.int(14, "displacement ATR length (prior bars)", minval = 1, group = G_STRAT, tooltip = "EngineConfig: displacement prior ATR length = 14 (DisplacementDetector priorAtrLen)")
+i_dispRecent      = input.int(12, "displacement recency (5m bars)", minval = 1, group = G_STRAT, tooltip = "EngineConfig: displacement.recentBars = 12 (POST_SWEEP path)")
+i_fvgLinkBars     = input.int(3, "FVG link bars", minval = 0, group = G_STRAT, tooltip = "EngineConfig: fvg.linkBars = 3")
+i_mssFreshBars    = input.int(30, "MSS freshness (5m bars)", minval = 1, group = G_STRAT, tooltip = "EngineConfig: mss.freshBars = 30")
+i_entryModel      = input.string("IMPULSE_LEG", "OTE entry model", options = ["IMPULSE_LEG", "POST_SWEEP"], group = G_STRAT, tooltip = "EngineConfig: ote.entryModel = IMPULSE_LEG (falls back to the POST_SWEEP path when the impulse-leg arm fails, exactly like OteSetupDriver)")
+i_fib62           = input.float(0.618, "OTE fib 0.62", step = 0.001, group = G_STRAT, tooltip = "EngineConfig: ote.fib62 = 0.618")
+i_fib705          = input.float(0.705, "OTE fib 0.705", step = 0.001, group = G_STRAT, tooltip = "EngineConfig: ote.fib705 = 0.705")
+i_fib79           = input.float(0.786, "OTE fib 0.79", step = 0.001, group = G_STRAT, tooltip = "EngineConfig: ote.fib79 = 0.786")
+i_minSweepFib     = input.float(0.705, "impulse-leg min sweep fib", step = 0.005, group = G_STRAT, tooltip = "EngineConfig: ote.impulseLeg.minSweepFib = 0.705")
+i_oteWindowBars   = input.int(8, "OTE window (5m bars)", minval = 1, group = G_STRAT, tooltip = "EngineConfig: ote.windowBars = 8 (x5 = 40 one-minute feed bars)")
+i_pdSource        = input.string("ICT_OB", "PD array source", options = ["ICT_OB", "DETECTOR"], group = G_STRAT, tooltip = "EngineConfig: ote.pdArraySource = ICT_OB (newest opposite-close 1m bar among the bars before the sweep)")
+i_obLookback      = input.int(5, "ICT_OB lookback (1m bars)", minval = 1, group = G_STRAT, tooltip = "EngineConfig: ote.obLookbackBars = 5")
+i_stopBufTicks    = input.int(4, "stop buffer (ticks)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: stdvOte.stopBufferTicks = 4 (ote.stopMode = BAND)")
+i_pdGateOn        = input.bool(true, "premium/discount gate (M2b)", group = G_STRAT, tooltip = "EngineConfig: pd.gate.mode = BLOCK")
+i_pdEqBandTicks   = input.int(2, "premium/discount eq band (ticks)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: pd.eqBandTicks = 2")
+i_pdMinRangeTicks = input.int(80, "premium/discount min range (ticks)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: pd.minRangeTicks = 80")
+i_preSweepMin     = input.int(480, "expiry: BIAS_SET -> sweep (min)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: setup.preSweepExpiryMinutes = 480")
+i_sweepDispMin    = input.int(60, "expiry: sweep -> displacement (min)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: setup.expiry.sweepToDisplacement = 60")
+i_dispMssMin      = input.int(60, "expiry: displacement -> MSS (min)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: setup.expiry.displacementToMss = 60")
+i_mssOteMin       = input.int(240, "expiry: MSS -> OTE (min)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: setup.expiry.mssToOte = 240")
+i_rearmCooldown   = input.int(5, "re-arm cooldown (1m bars)", minval = 0, group = G_STRAT, tooltip = "EngineConfig: setup.rearmCooldownBars = 5 (setup.rearmAfterClose = true, stdvOte.rearmOnInvalidated = true)")
+
+// ---- [SMT] — data only, NEVER traded (I1)
+i_smtEnabled  = input.bool(true, "SMT enabled", group = G_SMT, tooltip = "CorrelationTracker.hasSMTDivergence(MNQ, MES, 20): +2 raid score (RaidQualityScorer). Read-only via request.security_lower_tf; no order ever references this symbol (lint I1).")
+i_smtSymbol   = input.symbol("CME_MINI:MES1!", "smtSymbol", group = G_SMT, tooltip = "SMT correlate (Java: MES). Data only.")
+i_smtLookback = input.int(20, "SMT lookback (1m closes)", minval = 3, group = G_SMT, tooltip = "EngineConfig: StdvOteRunnerStrategy hasSMTDivergence lookback = 20")
+
+// ---- [Relay] (Agent 04)
+
+// ---- [Debug]
+i_dbgOverlay = input.bool(false, "debug overlay (raids, OTE band, MSS, range)", group = G_DEBUG, tooltip = "Off by default (task 02.5). Draws raid markers with score, the OTE band, the MSS line and the dealing-range eq.")
+i_dbgTable   = input.bool(false, "gate table", group = G_DEBUG, tooltip = "Shows the setup state machine and every M-gate on the last bar.")

@@ -1,0 +1,248 @@
+// =============================================================================
+// 30_levels — known liquidity levels (Java chartstate/LevelEngine.java).
+// PDH/PDL (day rolls 18:00 ET, days < levels.minBarsPerDay ignored), PWH/PWL,
+// ASIA / LONDON / NY_AM / NY_PM / NY session H/L (registered when the window ends),
+// EQUAL_HIGH / EQUAL_LOW clusters (tick tolerance). A raided level re-arms once price
+// leaves it by levels.rearmDistanceTicks. OPEN prices are never raided (not stored).
+// Built from the 1m feed (request.security_lower_tf, see 70) exactly like Java, which
+// builds them from 1m candles; no HTF request is needed (and none can repaint).
+// =============================================================================
+TICK = syminfo.mintick
+
+// Java Math.round(p / tick) * tick (half-up), PORT_MAP O7
+roundTick(float p) =>
+    na(p) ? na : math.floor(p / TICK + 0.5) * TICK
+
+// LevelType ids + significance (chartstate/LevelType.java)
+const int LV_PDH       = 0
+const int LV_PDL       = 1
+const int LV_PWH       = 2
+const int LV_PWL       = 3
+const int LV_ASIA_H    = 4
+const int LV_ASIA_L    = 5
+const int LV_LONDON_H  = 6
+const int LV_LONDON_L  = 7
+const int LV_NYAM_H    = 8
+const int LV_NYAM_L    = 9
+const int LV_NYPM_H    = 10
+const int LV_NYPM_L    = 11
+const int LV_EQH       = 12
+const int LV_EQL       = 13
+const int LV_NY_H      = 14
+const int LV_NY_L      = 15
+const int LV_COUNT     = 16
+const int LV_SESSION_H = 16   // synthetic: swing-sweep prior extreme (RaidDetector.scoreSweep)
+const int LV_SESSION_L = 17
+
+levelName(int k) =>
+    switch k
+        LV_PDH       => "PDH"
+        LV_PDL       => "PDL"
+        LV_PWH       => "PWH"
+        LV_PWL       => "PWL"
+        LV_ASIA_H    => "ASIA_HIGH"
+        LV_ASIA_L    => "ASIA_LOW"
+        LV_LONDON_H  => "LONDON_HIGH"
+        LV_LONDON_L  => "LONDON_LOW"
+        LV_NYAM_H    => "NY_AM_HIGH"
+        LV_NYAM_L    => "NY_AM_LOW"
+        LV_NYPM_H    => "NY_PM_HIGH"
+        LV_NYPM_L    => "NY_PM_LOW"
+        LV_EQH       => "EQUAL_HIGH"
+        LV_EQL       => "EQUAL_LOW"
+        LV_NY_H      => "NY_HIGH"
+        LV_NY_L      => "NY_LOW"
+        LV_SESSION_H => "SESSION_HIGH"
+        LV_SESSION_L => "SESSION_LOW"
+        => "?"
+
+levelSignificance(int k) =>
+    switch k
+        LV_PDH       => 10
+        LV_PDL       => 10
+        LV_PWH       => 9
+        LV_PWL       => 9
+        LV_ASIA_H    => 7
+        LV_ASIA_L    => 7
+        LV_LONDON_H  => 7
+        LV_LONDON_L  => 7
+        LV_NYAM_H    => 7
+        LV_NYAM_L    => 7
+        LV_NYPM_H    => 6
+        LV_NYPM_L    => 6
+        LV_EQH       => 6
+        LV_EQL       => 6
+        LV_NY_H      => 7
+        LV_NY_L      => 7
+        => 5
+
+levelIsHigh(int k) =>
+    k == LV_PDH or k == LV_PWH or k == LV_ASIA_H or k == LV_LONDON_H or k == LV_NYAM_H or k == LV_NYPM_H or k == LV_EQH or k == LV_NY_H or k == LV_SESSION_H
+
+levelIsSessionExtreme(int k) =>
+    k >= LV_ASIA_H and k <= LV_NYPM_L
+
+type Level
+    int   kind
+    float price   = na
+    bool  active  = false
+    bool  raided  = false
+    int   cluster = 1
+
+type LevelState
+    array<Level> lv
+    int   day        = na
+    int   week       = na
+    float todayHigh  = na
+    float todayLow   = na
+    int   todayBars  = 0
+    float weekHigh   = na
+    float weekLow    = na
+    float asiaH      = na
+    float asiaL      = na
+    float londonH    = na
+    float londonL    = na
+    float nyamH      = na
+    float nyamL      = na
+    float nypmH      = na
+    float nypmL      = na
+    float nyH        = na
+    float nyL        = na
+    bool  inAsia     = false
+    bool  inLondon   = false
+    bool  inNyam     = false
+    bool  inNypm     = false
+    bool  inNy       = false
+    // EQUAL clusters (seeded by 5m swing points, 50_structure)
+    float eqHiRef    = na
+    int   eqHiCount  = 0
+    float eqLoRef    = na
+    int   eqLoCount  = 0
+
+newLevelState() =>
+    array<Level> a = array.new<Level>()
+    for k = 0 to LV_COUNT - 1
+        a.push(Level.new(k))
+    LevelState.new(a)
+
+method register(LevelState this, int kind, float price) =>
+    if not na(price) and price > 0
+        Level x = this.lv.get(kind)
+        x.price   := price
+        x.active  := true
+        x.raided  := false
+        x.cluster := 1
+
+hiOf(float a, float b) => na(a) ? b : math.max(a, b)
+loOf(float a, float b) => na(a) ? b : math.min(a, b)
+
+// LevelEngine.processCandle (1m)
+method processCandle(LevelState this, int t, float h, float l) =>
+    if not inHalt(t)
+        int d = tradingDayKey(t)
+        int w = weekKey(t)
+        if na(this.day) or d != this.day
+            if not na(this.day) and not na(this.todayHigh) and this.todayBars >= i_minBarsPerDay
+                this.register(LV_PDH, this.todayHigh)
+                this.register(LV_PDL, this.todayLow)
+            this.day       := d
+            this.todayHigh := h
+            this.todayLow  := l
+            this.todayBars := 0
+            this.asiaH   := na
+            this.asiaL   := na
+            this.londonH := na
+            this.londonL := na
+            this.nyamH   := na
+            this.nyamL   := na
+            this.nypmH   := na
+            this.nypmL   := na
+            this.nyH     := na
+            this.nyL     := na
+        if na(this.week) or w != this.week
+            if not na(this.week) and not na(this.weekHigh)
+                this.register(LV_PWH, this.weekHigh)
+                this.register(LV_PWL, this.weekLow)
+            this.week     := w
+            this.weekHigh := h
+            this.weekLow  := l
+        // session tracking (updateSessionTracking): register on window exit
+        bool wasAsia = this.inAsia
+        bool wasLon  = this.inLondon
+        bool wasNy   = this.inNy
+        bool wasNyam = this.inNyam
+        bool wasNypm = this.inNypm
+        this.inAsia   := inWinHHMM(t, i_asiaStart, i_asiaEnd)
+        this.inLondon := inWinHHMM(t, i_londonStart, i_londonEnd)
+        this.inNy     := inWinHHMM(t, i_nyStart, i_nyEnd)
+        this.inNyam   := inWinHHMM(t, i_nyamStart, i_nyamEnd)
+        this.inNypm   := inWinHHMM(t, i_nypmStart, i_nypmEnd)
+        if not this.inNyam and wasNyam and not na(this.nyamH)
+            this.register(LV_NYAM_H, this.nyamH)
+            this.register(LV_NYAM_L, this.nyamL)
+        if not this.inNypm and wasNypm and not na(this.nypmH)
+            this.register(LV_NYPM_H, this.nypmH)
+            this.register(LV_NYPM_L, this.nypmL)
+        if this.inNyam
+            this.nyamH := hiOf(this.nyamH, h)
+            this.nyamL := loOf(this.nyamL, l)
+        if this.inNypm
+            this.nypmH := hiOf(this.nypmH, h)
+            this.nypmL := loOf(this.nypmL, l)
+        if not this.inAsia and wasAsia and not na(this.asiaH)
+            this.register(LV_ASIA_H, this.asiaH)
+            this.register(LV_ASIA_L, this.asiaL)
+        if not this.inLondon and wasLon and not na(this.londonH)
+            this.register(LV_LONDON_H, this.londonH)
+            this.register(LV_LONDON_L, this.londonL)
+        if not this.inNy and wasNy and not na(this.nyH)
+            this.register(LV_NY_H, this.nyH)
+            this.register(LV_NY_L, this.nyL)
+        if this.inAsia
+            this.asiaH := hiOf(this.asiaH, h)
+            this.asiaL := loOf(this.asiaL, l)
+        if this.inLondon
+            this.londonH := hiOf(this.londonH, h)
+            this.londonL := loOf(this.londonL, l)
+        if this.inNy
+            this.nyH := hiOf(this.nyH, h)
+            this.nyL := loOf(this.nyL, l)
+        // rearmRaidedLevels
+        float dist = i_rearmLvlTicks * TICK
+        if dist > 0
+            for x in this.lv
+                if x.active and x.raided
+                    bool left = levelIsHigh(x.kind) ? h < x.price - dist : l > x.price + dist
+                    if left
+                        x.raided := false
+        this.todayBars := this.todayBars + 1
+        this.todayHigh := hiOf(this.todayHigh, h)
+        this.todayLow  := loOf(this.todayLow, l)
+        this.weekHigh  := hiOf(this.weekHigh, h)
+        this.weekLow   := loOf(this.weekLow, l)
+
+// EQUAL_HIGH / EQUAL_LOW (PORT_APPROX of EqualLevelDetector): a new 5m swing point within
+// i_eqTolTicks of the running cluster reference joins it; >= 2 members registers the level
+// at the cluster extreme, cluster size feeds the +1 (>= 3) raid-score term.
+method onSwingPoint(LevelState this, bool isHigh, float price) =>
+    float tol = i_eqTolTicks * TICK
+    if isHigh
+        if not na(this.eqHiRef) and math.abs(price - this.eqHiRef) <= tol
+            this.eqHiCount := this.eqHiCount + 1
+            this.eqHiRef := math.max(this.eqHiRef, price)
+            this.register(LV_EQH, this.eqHiRef)
+            Level qh = this.lv.get(LV_EQH)
+            qh.cluster := this.eqHiCount
+        else
+            this.eqHiRef   := price
+            this.eqHiCount := 1
+    else
+        if not na(this.eqLoRef) and math.abs(price - this.eqLoRef) <= tol
+            this.eqLoCount := this.eqLoCount + 1
+            this.eqLoRef := math.min(this.eqLoRef, price)
+            this.register(LV_EQL, this.eqLoRef)
+            Level ql = this.lv.get(LV_EQL)
+            ql.cluster := this.eqLoCount
+        else
+            this.eqLoRef   := price
+            this.eqLoCount := 1

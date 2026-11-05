@@ -1,0 +1,218 @@
+// =============================================================================
+// 60_fvg_ote — PD arrays (FVG / IFVG / BREAKER / OB / WICK) on the 5m anatomy buffer,
+// OTE zone (fibs from the terminus, tick-rounded), entry level, target ladder, reactions.
+// Java: strategy/stdvote/PdArrayLocator.java, strategy/stdvote/OteEntryCalculator.java,
+//       strategy/stdvote/OteSetupDriver.java (impulseCandidates, ictOrderBlock, reaction, impulseReaction).
+// =============================================================================
+const int PD_SCAN_BARS = 60
+
+type PdArr
+    string kind
+    bool   bullish
+    float  bottom
+    float  top
+    int    at
+
+method farEdge(PdArr this) =>
+    this.bullish ? this.bottom : this.top
+
+// OteZone (OteEntryCalculator.buildZone)
+type Zone
+    bool  valid   = false
+    bool  bullish = false
+    float legLow  = na
+    float legHigh = na
+    float eq50    = na
+    float f62     = na
+    float f705    = na
+    float f79     = na
+    float one00   = na
+
+method bandLo(Zone this) => math.min(this.f62, this.f79)
+method bandHi(Zone this) => math.max(this.f62, this.f79)
+method contains(Zone this, float p) => not na(p) and p >= this.bandLo() and p <= this.bandHi()
+
+buildZone(float lo, float hi, bool bullish) =>
+    Zone z = Zone.new()
+    if not na(lo) and not na(hi) and hi > lo
+        float rng = hi - lo
+        float eq50 = bullish ? hi - 0.5 * rng : lo + 0.5 * rng
+        float f62  = bullish ? hi - i_fib62 * rng : lo + i_fib62 * rng
+        float f705 = bullish ? hi - i_fib705 * rng : lo + i_fib705 * rng
+        float f79  = bullish ? hi - i_fib79 * rng : lo + i_fib79 * rng
+        float one  = bullish ? lo : hi
+        f62  := roundTick(f62)
+        f705 := roundTick(f705)
+        f79  := roundTick(f79)
+        if f62 != f705 and f705 != f79
+            z := Zone.new(true, bullish, roundTick(lo), roundTick(hi), roundTick(eq50), f62, f705, f79, roundTick(one))
+    z
+
+// OteEntryCalculator.fibLevel / targetLadder: [T1 = 0.5, T2 = 0.382, T3 = 0.0] of the leg
+method fibLevel(Zone this, float r) =>
+    float rng = this.legHigh - this.legLow
+    roundTick(this.bullish ? this.legHigh - r * rng : this.legLow + r * rng)
+
+rewardToRisk(float entry, float stop, float target) =>
+    float risk = math.abs(entry - stop)
+    risk <= 0 ? 0.0 : math.abs(target - entry) / risk
+
+// PdArrayLocator.gapAt(m): 3-bar gap with c2 = m
+gapAt(Buf5 b, int m, bool bullish) =>
+    PdArr g = na
+    if b.has(m - 1) and b.has(m) and b.has(m + 1)
+        float h1 = b.bH(m - 1)
+        float l1 = b.bL(m - 1)
+        float h3 = b.bH(m + 1)
+        float l3 = b.bL(m + 1)
+        if bullish and h1 < l3
+            g := PdArr.new("FVG", true, h1, l3, b.bT(m))
+        else if not bullish and l1 > h3
+            g := PdArr.new("FVG", false, h3, l1, b.bT(m))
+    g
+
+// linkedFvg(dispIdx): first gap whose middle bar is the displacement bar .. +linkBars, else the gap ending on it
+linkedFvg(Buf5 b, int dispIdx, bool bullish) =>
+    PdArr g = na
+    if dispIdx >= 0
+        for m = dispIdx to dispIdx + i_fvgLinkBars
+            PdArr x = gapAt(b, m, bullish)
+            if not na(x)
+                g := x
+                break
+        if na(g)
+            g := gapAt(b, dispIdx - 1, bullish)
+    g
+
+linkWindowClosed(Buf5 b, int dispIdx) =>
+    b.lastIdx >= dispIdx + i_fvgLinkBars + 1
+
+// PdArrayLocator.orderBlock(dispIdx): newest opposite-close bar among the 5 before the
+// displacement whose range is closed through within the link window
+orderBlockAt(Buf5 b, int dispIdx, bool bullish) =>
+    PdArr ob = na
+    bool done = false
+    for j = dispIdx - 1 to dispIdx - 5
+        if done or not b.has(j)
+            break
+        bool opp = bullish ? b.bC(j) < b.bO(j) : b.bC(j) > b.bO(j)
+        if opp
+            done := true
+            int kEnd = math.min(b.lastIdx, dispIdx + i_fvgLinkBars)
+            if kEnd >= dispIdx
+                for k = dispIdx to kEnd
+                    if b.has(k)
+                        bool broke = bullish ? b.bC(k) > b.bH(j) : b.bC(k) < b.bL(j)
+                        if broke
+                            ob := PdArr.new("OB", bullish, b.bL(j), b.bH(j), b.bT(j))
+                            break
+    ob
+
+// largest same-direction gap in [fromIdx, toIdx] (gapInWindow)
+gapInWindow(Buf5 b, int fromIdx, int toIdx, bool bullish) =>
+    PdArr best = na
+    if toIdx >= fromIdx
+        for m = fromIdx to toIdx
+            PdArr g = gapAt(b, m, bullish)
+            if not na(g) and (na(best) or g.top - g.bottom > best.top - best.bottom)
+                best := g
+    best
+
+filledAfter(Buf5 b, PdArr g, int fromIdx) =>
+    bool hit = false
+    if b.lastIdx >= fromIdx + 1
+        for k = fromIdx + 1 to b.lastIdx
+            if b.has(k) and (g.bullish ? b.bL(k) < g.bottom : b.bH(k) > g.top)
+                hit := true
+                break
+    hit
+
+closedThroughAfter(Buf5 b, float bottom, float top, int fromIdx, bool dirBullish) =>
+    bool hit = false
+    if b.lastIdx >= fromIdx
+        for k = fromIdx to b.lastIdx
+            if b.has(k) and (dirBullish ? b.bC(k) > top : b.bC(k) < bottom)
+                hit := true
+                break
+    hit
+
+// PdArrayLocator.candidates(bullish): unfilled FVGs, IFVGs, BREAKERs over the last 60 bars
+pdCandidates(Buf5 b, bool bullish) =>
+    array<PdArr> out = array.new<PdArr>()
+    if b.t.size() >= 3
+        int first = math.max(b.firstIdx + 1, b.lastIdx - PD_SCAN_BARS)
+        if b.lastIdx - 1 >= first
+            for m = first to b.lastIdx - 1
+                PdArr g = gapAt(b, m, bullish)
+                if not na(g) and not filledAfter(b, g, m + 1)
+                    out.push(g)
+                PdArr gi = gapAt(b, m, not bullish)
+                if not na(gi) and closedThroughAfter(b, gi.bottom, gi.top, m + 1, bullish)
+                    out.push(PdArr.new("IFVG", bullish, gi.bottom, gi.top, gi.at))
+                if b.has(m + 1)
+                    bool oppOb = bullish ? (b.bC(m) > b.bO(m) and b.bC(m + 1) < b.bL(m)) : (b.bC(m) < b.bO(m) and b.bC(m + 1) > b.bH(m))
+                    if oppOb and closedThroughAfter(b, b.bL(m), b.bH(m), m + 2, bullish)
+                        out.push(PdArr.new("BREAKER", bullish, b.bL(m), b.bH(m), b.bT(m)))
+    out
+
+// sweepOrderBlock: the 5m bar containing the sweep, opposite close, took the level
+sweepOrderBlock(Buf5 b, int idx, bool bullish, float level) =>
+    PdArr ob = na
+    if b.has(idx)
+        bool opp = bullish ? b.bC(idx) < b.bO(idx) : b.bC(idx) > b.bO(idx)
+        bool took = bullish ? b.bL(idx) <= level : b.bH(idx) >= level
+        if opp and took
+            ob := PdArr.new("OB", bullish, b.bL(idx), b.bH(idx), b.bT(idx))
+    ob
+
+pdOverlaps(PdArr p, Zone z) =>
+    p.bottom <= z.bandHi() and p.top >= z.bandLo()
+
+// PdArrayLocator.entryLevel: OB midpoint, else the near edge; clamped into the band
+pdEntryLevel(PdArr p, Zone z) =>
+    float raw = p.kind == "OB" ? (p.bottom + p.top) / 2.0 : (p.bullish ? p.top : p.bottom)
+    math.max(z.bandLo(), math.min(z.bandHi(), raw))
+
+pdRank(PdArr p) =>
+    p.kind == "OB" ? 0 : p.kind == "FVG" ? 1 : p.kind == "IFVG" ? 2 : 3
+
+// bestInBand: overlaps the band, entry nearest 0.705, tie OB > FVG > IFVG > BREAKER (WICK ranks last)
+bestInBand(array<PdArr> cands, Zone z) =>
+    PdArr best = na
+    float bestD = na
+    for p in cands
+        if not na(p) and p.bullish == z.bullish and pdOverlaps(p, z)
+            float d = math.abs(pdEntryLevel(p, z) - z.f705)
+            if na(best) or d < bestD - 1e-9 or (math.abs(d - bestD) <= 1e-9 and pdRank(p) < pdRank(best))
+                best := p
+                bestD := d
+    best
+
+// OteSetupDriver.reaction (POST_SWEEP alarm)
+reactionPostSweep(Zone z, float o, float h, float l, float c) =>
+    bool ok = false
+    if z.bullish
+        if l <= z.bandHi()
+            ok := l <= z.f705 or c > z.bandHi() or c > o
+    else
+        if h >= z.bandLo()
+            ok := h >= z.f705 or c < z.bandLo() or c < o
+    ok
+
+// OteSetupDriver.impulseReaction (IMPULSE_LEG alarm): touches the band AND closes back beyond the
+// swept level in the trade direction (stdvOte.reactionWickTicks is dead — PORT_MAP §10.3)
+reactionImpulse(Zone z, float o, float h, float l, float c, float swept) =>
+    bool ok = false
+    if z.bullish
+        if l <= z.bandHi()
+            ok := c > swept and c > o
+    else
+        if h >= z.bandLo()
+            ok := c < swept and c < o
+    ok
+
+closedBeyondExtreme(Zone z, float c) =>
+    z.bullish ? c < z.one00 : c > z.one00
+
+tradedIntoBand(Zone z, float h, float l) =>
+    z.bullish ? l <= z.bandHi() : h >= z.bandLo()
