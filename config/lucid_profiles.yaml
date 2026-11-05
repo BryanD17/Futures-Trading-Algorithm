@@ -1,0 +1,230 @@
+# config/lucid_profiles.yaml — Lucid account profiles (DATA ONLY, no code)
+# Agent 01 (V6). Retrieval date for every source: 2026-11-05.
+# Consumed by: tools/pine_build.py (Agent 03 presets), RiskProfile loader (Agent 05).
+# Rule: every number carries a source URL. Numbers marked conservative_unverified
+# are NOT on a Lucid page and must be re-checked when the owner gets a reply.
+# Micro math: 1 mini = 10 micros (Lucid states sizes as "N minis or 10N micros").
+
+meta:
+  retrieved: "2026-11-05"
+  venue: "Lucid Trading"
+  platform: "Tradovate (CQG feed)"
+  timezone_rules: "America/New_York (Lucid writes 'EST'); CT = ET - 1h"
+  sources:
+    eval:        "https://support.lucidtrading.com/en/articles/12945790-lucidflex-evaluation-account"
+    funded:      "https://support.lucidtrading.com/en/articles/12945795-lucidflex-funded-account"
+    drawdown:    "https://support.lucidtrading.com/en/articles/12945815-lucidflex-drawdown"
+    scaling:     "https://support.lucidtrading.com/en/articles/12945808-lucidflex-scaling-plan"
+    consistency: "https://support.lucidtrading.com/en/articles/12945805-lucidflex-consistency-percentage"
+    payouts:     "https://support.lucidtrading.com/en/articles/12945796-lucidflex-payouts"
+    customize:   "https://support.lucidtrading.com/en/articles/16226050-lucidflex-customization"
+    hours:       "https://support.lucidtrading.com/en/articles/11404729-allowed-trading-times"
+    microscalp:  "https://support.lucidtrading.com/en/articles/11404742-prohibited-microscalping"
+    hedging:     "https://support.lucidtrading.com/en/articles/11404734-prohibited-hedging"
+    hft:         "https://support.lucidtrading.com/en/articles/11404736-prohibited-high-frequency-trading"
+    automation:  "https://support.lucidtrading.com/en/articles/11404728-other-trading-activities"
+    accounts:    "https://support.lucidtrading.com/en/articles/11404617-maximum-number-of-accounts"
+    commissions: "https://support.lucidtrading.com/en/articles/11508978-approved-products-and-commissions"
+    inactivity:  "https://support.lucidtrading.com/en/articles/11404632-inactivity-policy"
+
+# Rules shared by every LucidFlex profile (eval and funded).
+common:
+  forced_flat_et: "16:45"            # source: hours  ("closed by 4:45 PM EST")
+  forced_flat_ct: "15:45"
+  session_open_et: "18:00"           # source: hours  (Sun–Thu 6:00 PM EST)
+  overnight_allowed: false           # source: hours
+  v6_no_entry_after_et: "16:30"      # master prompt I3 (5 min inside Lucid's flat)
+  v6_flatten_at_et: "16:40"          # master prompt I3
+  drawdown_type: "EOD_TRAILING"      # source: drawdown
+  drawdown_lock_offset_usd: 100      # source: drawdown (Locked MLL = initial + $100)
+  drawdown_breach_rule: "balance_touches_mll"   # source: drawdown
+  payout_locks_mll: true             # source: drawdown
+  news_trading_allowed: true         # source: automation (Flex/Pro/Direct)
+  automation_allowed: true           # source: automation
+  trade_copier_allowed: true         # source: automation
+  hedging_prohibited: true           # source: hedging
+  hedging_definition: "multiple accounts taking opposing positions on the same trade; also opposing correlated instruments across accounts"  # source: hedging
+  hft_prohibited: true               # source: hft (no numeric threshold published)
+  microscalp_hold_seconds: 5         # source: microscalp
+  microscalp_profit_share_max: 0.50  # source: microscalp (">50% of profits from trades held <=5s")
+  max_accounts_total_household: 10   # source: accounts
+  max_funded_accounts_household: 5   # source: accounts
+  inactivity_days: 30                # source: inactivity
+  commission_per_side_usd:
+    MNQ: 0.50                        # source: commissions
+    MES: 0.50
+    NQ: 1.75
+    ES: 1.75
+  tick_value_usd:                    # CME contract specs (not Lucid); used for micro math
+    MNQ: 0.50
+    MES: 1.25
+    NQ: 2.00
+    ES: 12.50
+
+profiles:
+
+  LUCID_FLEX_50K_EVAL:
+    plan: "LucidFlex"
+    stage: "EVAL"
+    starting_balance_usd: 50000           # source: eval
+    profit_target_usd: 3000               # source: eval
+    max_loss_limit_usd: 2000              # source: eval, funded, drawdown
+    initial_trail_balance_usd: 52100      # source: drawdown
+    locked_mll_balance_usd: 50100         # source: drawdown
+    daily_loss_limit:
+      optional: true                      # source: eval, customize ("On or Off" at checkout)
+      amount_usd: null                    # NOT PUBLISHED -> OA-7; conservative_unverified
+      breach_type: "soft_lockout_until_next_session"   # source: customize
+    v6_soft_daily_loss_usd: 600           # master prompt 03.5 default = 30% of MLL; conservative_unverified
+    max_contracts_minis: 4                # source: eval
+    max_contracts_micros: 40              # source: eval
+    scaling_plan_applies: false           # source: scaling ("no scaling plan in the evaluation phase")
+    scaling_cap_micros: 40                # = max size (no scaling in eval)
+    consistency_max_pct: 40               # source: consistency (50 with paid add-on)
+    consistency_addon_pct: 50             # source: consistency
+    consistency_formula: "largest_single_day_profit / account_profit"   # source: consistency
+    min_trading_days: 3                   # source: eval (2 with 50% add-on)
+    min_trading_days_with_addon: 2        # source: eval
+    time_limit_days: null                 # source: eval ("take as long as you need")
+    activation_fee_usd: 0                 # source: eval
+    purchase_price_usd: null              # lucidtrading.com returned HTTP 403; not needed by code
+
+  LUCID_FLEX_50K_FUNDED:
+    plan: "LucidFlex"
+    stage: "FUNDED"
+    starting_balance_usd: 50000           # source: funded
+    profit_target_usd: null               # no target once funded
+    max_loss_limit_usd: 2000              # source: funded, drawdown
+    initial_trail_balance_usd: 52100      # source: drawdown
+    locked_mll_balance_usd: 50100         # source: drawdown
+    daily_loss_limit:
+      optional: true                      # source: funded (inherits eval checkout choice)
+      amount_usd: null                    # NOT PUBLISHED -> OA-7; conservative_unverified
+      breach_type: "soft_lockout_until_next_session"   # source: customize
+    v6_soft_daily_loss_usd: 600           # conservative_unverified (30% of MLL)
+    max_contracts_minis: 4                # source: funded (hard ceiling)
+    max_contracts_micros: 40              # source: funded
+    scaling_plan_applies: true            # source: scaling
+    scaling_plan:                         # source: scaling  (profit band -> minis / micros)
+      - { profit_from_usd: 0,    profit_to_usd: 999,  minis: 2, micros: 20 }
+      - { profit_from_usd: 1000, profit_to_usd: 1999, minis: 3, micros: 30 }
+      - { profit_from_usd: 2000, profit_to_usd: null, minis: 4, micros: 40 }
+    scaling_cap_micros: 20                # band 0 at funding day (source: scaling)
+    consistency_max_pct: null             # source: funded ("no Consistency Percentage on LucidFlex funded")
+    payout_buffer_usd: 0                  # source: funded, payouts
+    profit_split_trader_pct: 90           # source: payouts
+    payout_min_profitable_days: 5         # source: payouts
+    payout_min_daily_profit_usd: 150      # source: payouts (50K row)
+    payout_max_per_request_usd: 2000      # source: payouts (50K cap)
+    payout_min_request_usd: 500           # source: payouts
+    payout_max_count_before_live: 5       # source: payouts
+    activation_fee_usd: 0                 # source: eval
+
+  LUCID_FLEX_25K_EVAL:
+    plan: "LucidFlex"
+    stage: "EVAL"
+    starting_balance_usd: 25000
+    profit_target_usd: 1250               # source: eval
+    max_loss_limit_usd: 1000              # source: eval
+    initial_trail_balance_usd: 26100      # source: drawdown
+    locked_mll_balance_usd: 25100         # source: drawdown
+    max_contracts_minis: 2                # source: eval
+    max_contracts_micros: 20
+    scaling_cap_micros: 20
+    consistency_max_pct: 40
+    min_trading_days: 3
+    v6_soft_daily_loss_usd: 300           # conservative_unverified (30% of MLL)
+
+  LUCID_FLEX_25K_FUNDED:
+    plan: "LucidFlex"
+    stage: "FUNDED"
+    starting_balance_usd: 25000
+    max_loss_limit_usd: 1000              # source: funded
+    initial_trail_balance_usd: 26100
+    locked_mll_balance_usd: 25100
+    max_contracts_minis: 2
+    max_contracts_micros: 20
+    scaling_plan:                         # source: scaling
+      - { profit_from_usd: 0,    profit_to_usd: 999, minis: 1, micros: 10 }
+      - { profit_from_usd: 1000, profit_to_usd: null, minis: 2, micros: 20 }
+    scaling_cap_micros: 10
+    payout_min_daily_profit_usd: 100      # source: payouts
+    payout_max_per_request_usd: 1000      # source: payouts
+    v6_soft_daily_loss_usd: 300           # conservative_unverified
+
+  LUCID_FLEX_100K_EVAL:
+    plan: "LucidFlex"
+    stage: "EVAL"
+    starting_balance_usd: 100000
+    profit_target_usd: 6000               # source: eval
+    max_loss_limit_usd: 3000              # source: eval
+    initial_trail_balance_usd: 103100     # source: drawdown
+    locked_mll_balance_usd: 100100        # source: drawdown
+    max_contracts_minis: 6                # source: eval
+    max_contracts_micros: 60
+    scaling_cap_micros: 60
+    consistency_max_pct: 40
+    min_trading_days: 3
+    v6_soft_daily_loss_usd: 900           # conservative_unverified
+
+  LUCID_FLEX_100K_FUNDED:
+    plan: "LucidFlex"
+    stage: "FUNDED"
+    starting_balance_usd: 100000
+    max_loss_limit_usd: 3000              # source: funded
+    initial_trail_balance_usd: 103100
+    locked_mll_balance_usd: 100100
+    max_contracts_minis: 6
+    max_contracts_micros: 60
+    scaling_plan:                         # source: scaling
+      - { profit_from_usd: 0,    profit_to_usd: 999,  minis: 3, micros: 30 }
+      - { profit_from_usd: 1000, profit_to_usd: 1999, minis: 4, micros: 40 }
+      - { profit_from_usd: 2000, profit_to_usd: 2999, minis: 5, micros: 50 }
+      - { profit_from_usd: 3000, profit_to_usd: null, minis: 6, micros: 60 }
+    scaling_cap_micros: 30
+    payout_min_daily_profit_usd: 200      # source: payouts
+    payout_max_per_request_usd: 2500      # source: payouts
+    v6_soft_daily_loss_usd: 900           # conservative_unverified
+
+  LUCID_FLEX_150K_EVAL:
+    plan: "LucidFlex"
+    stage: "EVAL"
+    starting_balance_usd: 150000
+    profit_target_usd: 9000               # source: eval
+    max_loss_limit_usd: 4500              # source: eval
+    initial_trail_balance_usd: 154600     # source: drawdown
+    locked_mll_balance_usd: 150100        # source: drawdown
+    max_contracts_minis: 10               # source: eval
+    max_contracts_micros: 100
+    scaling_cap_micros: 100
+    consistency_max_pct: 40
+    min_trading_days: 3
+    v6_soft_daily_loss_usd: 1350          # conservative_unverified
+
+  LUCID_FLEX_150K_FUNDED:
+    plan: "LucidFlex"
+    stage: "FUNDED"
+    starting_balance_usd: 150000
+    max_loss_limit_usd: 4500              # source: funded
+    initial_trail_balance_usd: 154600
+    locked_mll_balance_usd: 150100
+    max_contracts_minis: 10
+    max_contracts_micros: 100
+    scaling_plan:                         # source: scaling
+      - { profit_from_usd: 0,    profit_to_usd: 999,  minis: 4,  micros: 40 }
+      - { profit_from_usd: 1000, profit_to_usd: 1999, minis: 5,  micros: 50 }
+      - { profit_from_usd: 2000, profit_to_usd: 2999, minis: 6,  micros: 60 }
+      - { profit_from_usd: 3000, profit_to_usd: 4499, minis: 8,  micros: 80 }
+      - { profit_from_usd: 4500, profit_to_usd: null, minis: 10, micros: 100 }
+    scaling_cap_micros: 40
+    payout_min_daily_profit_usd: 250      # source: payouts
+    payout_max_per_request_usd: 3000      # source: payouts
+    v6_soft_daily_loss_usd: 1350          # conservative_unverified
+
+owner_actions:
+  - id: OA-4
+    topic: "hedging definition (same-direction copies, stop-fill asymmetry, correlated rule)"
+    where: "docs/LUCID_RULES.md section 2 has the exact question text"
+  - id: OA-7
+    topic: "Daily Loss Limit dollar amount and measurement when purchased 'On'"
+    where: "docs/LUCID_RULES.md section 6 has the exact question text"
