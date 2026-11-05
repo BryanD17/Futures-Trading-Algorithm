@@ -94,6 +94,18 @@ class LintTest(unittest.TestCase):
         combined = bad.replace("if go", "if go and barstate.isconfirmed")
         ok, r = rules(HEAD + combined)
         self.assertTrue(r["L6"][0], r["L6"])
+        # `or` dilutes the guard: the entry can fire on an unconfirmed bar (Fable verifier, 2026-11-05)
+        diluted = bad.replace("if go", "if go or barstate.isconfirmed")
+        ok, r = rules(HEAD + diluted)
+        self.assertFalse(r["L6"][0], r["L6"])
+        # a nested guard still counts; an unrelated `or` on an inner line does not break it
+        nested = ("// ==== file: 80_strategy.pine ====\n"
+                  "if barstate.isconfirmed\n"
+                  "    if go or go2\n"
+                  "        strategy.entry(\"L\", strategy.long)\n"
+                  "        strategy.exit(\"x\", from_entry = \"L\", stop = sp)\n")
+        ok, r = rules(HEAD + nested)
+        self.assertTrue(r["L6"][0], r["L6"])
 
     def test_entry_without_stop_fails(self):
         bad = GOOD_80.replace("stop = sp, ", "")

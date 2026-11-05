@@ -16,7 +16,8 @@ Rules (each prints PASS/FAIL with evidence):
   L5 no-foreign-orders no order call (entry/order/exit/close/close_all/cancel) references a
                        foreign request.* symbol, a variable assigned from such a request, or any
                        request.* call                                                           (I1)
-  L6 confirmed-entries every strategy.entry sits inside an `if ... barstate.isconfirmed ...` block (I8)
+  L6 confirmed-entries every strategy.entry sits inside an `if ... barstate.isconfirmed ...` block whose
+                       condition is not negated and not diluted by `or`                          (I8)
   L7 entry-has-stop    every strategy.entry id has a strategy.exit(from_entry = <id>, stop = ...)
                        (an exit without from_entry covers all entries)                         (I2)
   L8 no-secrets        no URLs, webhook endpoints, key/secret/password literals or long tokens  (R5/AP-9)
@@ -296,10 +297,13 @@ class Lint:
         ents = self.entries()
         for line, _, _ in ents:
             anc = self.ancestors(line)
+            # the guard must be an `if` whose condition contains barstate.isconfirmed, not negated and not
+            # diluted by `or` (if a or barstate.isconfirmed can fire intrabar)
             ok = any(re.match(r"^(else\s+)?if\b", a) and re.search(r"(?<!not )barstate\.isconfirmed", a)
-                     and not re.search(r"not\s+barstate\.isconfirmed", a) for a in anc)
+                     and not re.search(r"not\s+barstate\.isconfirmed", a)
+                     and not re.search(r"(?<![\w.])or(?![\w.])", a) for a in anc)
             if not ok:
-                bad.append("strategy.entry at line {} is not inside an `if barstate.isconfirmed` block".format(line))
+                bad.append("strategy.entry at line {} is not inside an `if barstate.isconfirmed` block (and-only guard)".format(line))
         detail = "; ".join(bad) if bad else ("{} strategy.entry call(s), all guarded".format(len(ents)) if ents
                                               else "0 strategy.entry calls — vacuous PASS")
         self.add("L6 confirmed-entries", not bad, detail)

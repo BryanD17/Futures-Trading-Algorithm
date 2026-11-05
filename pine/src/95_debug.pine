@@ -24,9 +24,9 @@ if i_dbgOverlay and barstate.isconfirmed
         for k = 0 to nr - 1
             bool lowR = raids.dbgLow.get(k)
             label.new(raids.dbgT.get(k), raids.dbgP.get(k), "raid " + str.tostring(raids.dbgS.get(k)), xloc = xloc.bar_time, style = lowR ? label.style_label_up : label.style_label_down, color = lowR ? color.new(color.green, 20) : color.new(color.red, 20), textcolor = color.white, size = size.tiny)
-    if not na(st.dbgMssTs) and (na(dbgLastMssTs) or st.dbgMssTs != dbgLastMssTs)
-        dbgLastMssTs := st.dbgMssTs
-        line.new(st.dbgMssTs - 10 * 5 * MS_MIN, st.dbgMssLevel, st.dbgMssTs, st.dbgMssLevel, xloc = xloc.bar_time, color = st.dbgMssBull ? color.new(color.green, 0) : color.new(color.red, 0), style = line.style_dashed, width = 1)
+    if not na(anat.dbgMssTs) and (na(dbgLastMssTs) or anat.dbgMssTs != dbgLastMssTs)
+        dbgLastMssTs := anat.dbgMssTs
+        line.new(anat.dbgMssTs - 10 * 5 * MS_MIN, anat.dbgMssLevel, anat.dbgMssTs, anat.dbgMssLevel, xloc = xloc.bar_time, color = anat.dbgMssBull ? color.new(color.green, 0) : color.new(color.red, 0), style = line.style_dashed, width = 1)
     if coreSignalLong or coreSignalShort
         label.new(bar_index, coreSignalLong ? low : high, (coreSignalLong ? "BUY " : "SELL ") + sigModel + " " + sigPdKind + "\nref " + str.tostring(sigEntryRef, format.mintick) + " stop " + str.tostring(sigStop, format.mintick) + "\nT1 " + str.tostring(sigT1, format.mintick) + " RR " + str.tostring(sigRrT1, "#.##") + "\n" + sigLevelType + " score " + str.tostring(sigRaidScore), style = coreSignalLong ? label.style_label_up : label.style_label_down, color = color.new(color.blue, 10), textcolor = color.white, size = size.small)
 

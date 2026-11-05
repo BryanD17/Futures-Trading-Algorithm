@@ -182,9 +182,9 @@ PHASE 0 — FABLE MAP  (00 and 01 have zero dependencies → may run in parallel
        config/lucid_profiles.yaml; ⛔ OA-4 hedging wording, ⛔ OA-7 DLL amount)
 
 PHASE 1 — OPUS BUILD  (sequential: 02 → 03 → 04; 05 parallel with 02–04)
-  [🔄 READY-FOR-FABLE] Agent 02 — Opus — Pine Core Library (ICT detectors)  (2026-11-05:
-       pine/src 00–70,95 + stubs 80/90, tools/pine_build.py + pine_lint.py + 27 unit tests,
-       lint 9/9 PASS, deterministic build; ⛔ OA-1 compile on TradingView — Appendix D)
+  [✅] Agent 02 — Opus — Pine Core Library (ICT detectors)  (2026-11-05: Fable-verified (static);
+       compile pending ⛔ OA-1 — Appendix D. pine/src 00–70,95 + stubs 80/90, tools/pine_build.py +
+       pine_lint.py + 27 unit tests, lint 9/9 PASS, deterministic build, BUILD_ID 1808daab3a6dfee3)
   [⬜] Agent 03 — Opus — Pine Strategy, Sizing + AccountProfile Envelope
   [⬜] Agent 04 — Opus — Relay Payload Adapter + Order Lifecycle
   [✅] Agent 05 — Opus — Java Repurpose: Topstep Out, Lucid Profiles, Parity Harness
@@ -753,6 +753,37 @@ APPENDIX A — PER-AGENT VERIFICATION LOG  (append-only; never delete)
         with SOURCE_DATE_EPOCH=1762300800 -> identical file sha256 9ccff437c8d3...92a1; without it they
         differ only in the build-time token (tools/tests/test_pine_build.py) | Java: ./gradlew clean
         build (JDK 21) green, 1,046 tests / 0 failures / 0 errors | OA-1: ⛔ issued (Appendix D)
+  A-02v FABLE-VERIFIED (static; compile pending OA-1) 2026-11-05, PR #180 | Pine v6 doc checks (migration
+        guide, language/arrays, language/loops, concepts/other-timeframes-and-data, fetched 2026-11-05):
+        lazy and/or ("now evaluate conditions lazily") -> the `while mesPtr < nMes and mesT.get(mesPtr)`
+        guard is safe; bool cannot be na -> no bool field/var is na; na(array) is used by the docs' own
+        code -> the na(ltT)/na(mesT) guards compile; for a to b counts DOWN when a > b ("the loop subtracts")
+        -> the 9 descending loops are correct; request.security_lower_tf has NO lookahead parameter, returns
+        a tuple of arrays, and an EMPTY array where no intrabar data exists -> covered by the size()==0
+        fallback | repaint (I8): the whole engine runs inside `if barstate.isconfirmed`; every value used
+        on bar t comes from t's own 1m intrabars or the completed bar t-1 (time[1]/open[1]/...); no HTF
+        request; realtime vs historical identical at the confirmed tick (residual: provider-side intrabar
+        differences, docs call it "minor repainting") | fidelity spot-checks vs Java (f1f5df7): raid score
+        weights + STRONG_WICK 0.50 / MODERATE_WICK 0.30 / wick = wick/range / rejectionTicks (RaidQualityScorer
+        :110-275, LiquidityRaid :107-122) MATCH; displacement prior-TR window from=max(1,n-atrLen)..n-1 and
+        2-3 bar run with 0.8-relaxed body (DisplacementDetector :216-314) MATCH; MSS swing 2/2 ties allowed
+        + close-beyond-newest-swing >= 2 bars old, broken once (MarketStructureShiftDetector :205-330) MATCH;
+        OTE fibs 0.618/0.705/0.786 + eq 0.5 + ladder 0.5/0.382/0.0 + half-up tick rounding (OteEntryCalculator
+        :48-200) MATCH; anchoredStop far = max(f79, PD far edge, sweep extreme) + 4 ticks (StdvOteStrategy
+        :944) MATCH; impulseReaction (close beyond swept AND directional close) MATCH; SMT 20-close loop
+        MATCH; runner call order updatePrimary -> levels -> anatomy -> onFeedCandle -> range -> raids ->
+        expiry -> rearm -> recordHtfBias -> transitions (runner :828-1178) MATCH; tick math only (AP-6),
+        America/New_York everywhere (AP-7), 50/50 [Strategy] inputs name a Java key | fixes on the PR
+        branch: (1) renamed globals m->mach, st->anat, lvs->levels and the recordHtfBias param bias->newBias
+        so no identifier is both a global and a function local/param (Pine "Shadowing variable" warning
+        risk on OA-1; exported names unchanged), (2) `for p in pdCandidates(...)` -> local array first
+        (for-in over a call expression is not documented), (3) lint L6 now rejects an `or`-diluted guard
+        (`if x or barstate.isconfirmed`) + negative tests | re-run: 27/27 tools tests, two builds with
+        SOURCE_DATE_EPOCH=1762300800 identical (file sha256 90765b485d68...79cd), --check OK, lint 9/9,
+        src-sha256 1808daab3a6dfee3 (= BUILD_ID), dist 2,389 lines | Java: ./gradlew clean build (JDK 21)
+        green, 1,046 tests (trading-engine 1,038 + api-backend 8) / 0 failures / 0 errors | residual compile risks for OA-1 (all low): method overloads on different UDTs,
+        strategy.position_size read inside a method, `int(float)` cast in the blackout parser, `[1]`
+        history reads inside the global for loop
   A-03  invariant → line-range table: __ | OA-2: __
   A-04  payload_check results: __ | lifecycle table rows: __
   A-05  tests before/after: trading-engine 1,038 (1 skipped) + api-backend 8 = 1,046 / trading-engine 1,015

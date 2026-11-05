@@ -341,11 +341,11 @@ method invalidate(Machine this, string why) =>
     this.lastGate := why
 
 // StdvOteStrategy.recordHtfBias (bias.hysteresis, bias.neutralGraceBars)
-method recordHtfBias(Machine this, int bias) =>
-    this.lastRecordedBias := bias
-    if this.htfBias != 0 and bias != 0 and bias != this.htfBias and this.state < ST_IN_TRADE
+method recordHtfBias(Machine this, int newBias) =>
+    this.lastRecordedBias := newBias
+    if this.htfBias != 0 and newBias != 0 and newBias != this.htfBias and this.state < ST_IN_TRADE
         this.invalidate("HTF bias flip")
-    if bias == 0 and this.state != ST_IDLE and this.state < ST_IN_TRADE
+    if newBias == 0 and this.state != ST_IDLE and this.state < ST_IN_TRADE
         if not i_biasHysteresis
             this.invalidate("HTF bias became NEUTRAL")
         else
@@ -354,8 +354,8 @@ method recordHtfBias(Machine this, int bias) =>
                 this.invalidate("HTF bias NEUTRAL beyond grace")
     else
         this.neutralGrace := 0
-        this.htfBias := bias
-        if bias != 0 and this.state == ST_IDLE
+        this.htfBias := newBias
+        if newBias != 0 and this.state == ST_IDLE
             this.state := ST_BIAS_SET
             this.createdAt := this.barIndex
 
@@ -751,7 +751,8 @@ method alarm(Machine this, Buf5 b, int t, float o, float h, float l, float c) =>
                     cands.push(this.linked)
                 if not na(this.orderBlock)
                     cands.push(this.orderBlock)
-                for p in pdCandidates(b, bull)
+                array<PdArr> dc = pdCandidates(b, bull)
+                for p in dc
                     cands.push(p)
             PdArr best = bestInBand(cands, this.zone)
             if na(best)
@@ -852,14 +853,14 @@ method tryEmit(Machine this, int t, float rHi, float rLo, float rEq, bool rDec) 
 if barstate.isfirst and timeframe.period != "5"
     runtime.error("LucidICT V6 runs on a 5-minute chart (EngineConfig stdvote.detectorTimeframe = 5).")
 
-var LevelState lvs   = newLevelState()
+var LevelState levels = newLevelState()
 var Feed1      feed  = newFeed1()
 var RaidState  raids = newRaidState()
 var Buf5       buf   = newBuf5()
-var Structure  st    = newStructure()
+var Structure  anat   = newStructure()
 var DRange     dr    = DRange.new(rth = DLeg.new(), sessionLeg = DLeg.new())
 var Smt        smtS  = Smt.new(array.new<float>(), array.new<float>())
-var Machine    m     = newMachine()
+var Machine    mach   = newMachine()
 var int        last15Bucket = na
 var bool       smtNow  = false
 var int        rDirNow = 0
@@ -892,15 +893,15 @@ if barstate.isconfirmed
     raids.dbgS.clear()
     raids.dbgLow.clear()
     // IN_TRADE latch release (processLegacyRearm: pendingPositionClosed / executedSinceEmit)
-    if m.state == ST_IN_TRADE
+    if mach.state == ST_IN_TRADE
         if strategy.position_size != 0
-            m.positionSeen := true
-        else if bar_index > m.emitBar and not m.closedAwaitingRearm
-            if not m.positionSeen
-                m.invalidate("signal not executed (released)")
+            mach.positionSeen := true
+        else if bar_index > mach.emitBar and not mach.closedAwaitingRearm
+            if not mach.positionSeen
+                mach.invalidate("signal not executed (released)")
             else
-                m.closedAwaitingRearm := true
-                m.rearmCD := i_rearmCooldown
+                mach.closedAwaitingRearm := true
+                mach.rearmCD := i_rearmCooldown
     int nLtf = na(ltT) ? 0 : ltT.size()
     bool useLtf = nLtf > 0
     int cnt = useLtf ? nLtf : 1
@@ -916,18 +917,18 @@ if barstate.isconfirmed
         feed.add(t1m, o1m, h1m, l1m, c1m)
         raids.detectSwingSweep(feed)
         // 2. LevelEngine.processCandle
-        lvs.processCandle(t1m, h1m, l1m)
+        levels.processCandle(t1m, h1m, l1m)
         // 3. the 5m anatomy bar completed by the first 1m of this bucket: displacement, MSS, PD arrays
         if i == 0 and bar_index > 0
             buf.add(time[1], open[1], high[1], low[1], close[1])
-            st.detectDisplacement(buf)
-            [nh, nhp, nl, nlp] = st.updateMss(buf)
+            anat.detectDisplacement(buf)
+            [nh, nhp, nl, nlp] = anat.updateMss(buf)
             if nh
-                lvs.onSwingPoint(true, nhp)
+                levels.onSwingPoint(true, nhp)
             if nl
-                lvs.onSwingPoint(false, nlp)
+                levels.onSwingPoint(false, nlp)
         // 4. OteSetupDriver.onFeedCandle
-        m.onFeedCandle(feed, t1m, o1m, h1m, l1m, c1m)
+        mach.onFeedCandle(feed, t1m, o1m, h1m, l1m, c1m)
         // 5. SMT (CorrelationTracker): correlate closes up to this minute first
         if nMes > 0
             while mesPtr < nMes and mesT.get(mesPtr) <= t1m
@@ -944,49 +945,49 @@ if barstate.isconfirmed
         rEqNow  := re
         rDecNow := rdec
         // 7. RaidDetector.processCandle with this candle's scoring context
-        int scoringBias = m.htfBias != 0 ? m.htfBias : m.lastBias
-        bool dispEntry = scoringBias != 0 and st.dispEntryTrigger(buf, scoringBias > 0)
+        int scoringBias = mach.htfBias != 0 ? mach.htfBias : mach.lastBias
+        bool dispEntry = scoringBias != 0 and anat.dispEntryTrigger(buf, scoringBias > 0)
         ScoreCtx ctx = ScoreCtx.new(scoringBias, smtNow, dispEntry, rdec ? re : na, isRaidKillzone(t1m), isSilverBullet(t1m))
-        raids.processCandle(lvs, feed, t1m, o1m, h1m, l1m, c1m, ctx)
+        raids.processCandle(levels, feed, t1m, o1m, h1m, l1m, c1m, ctx)
         // 8. core.onCandle (expiry) + re-arm
-        m.expiry()
-        m.processRearm(t1m)
+        mach.expiry()
+        mach.processRearm(t1m)
         // 9. bias on each completed 15m/30m bar (= the first 1m of a new 15m bucket)
         int b15 = math.floor(t1m / (15 * MS_MIN))
         if not na(last15Bucket) and b15 != last15Bucket
             int biasNow = rdec ? rd : 0       // bias.source = RANGE; the vote is cold-start only (PORT_MAP B2)
-            m.recordHtfBias(biasNow)
-            m.lastBias := biasNow
+            mach.recordHtfBias(biasNow)
+            mach.lastBias := biasNow
         last15Bucket := b15
         // 10. OTE window (ote.windowBars x 5 feed bars)
-        if m.state == ST_OTE_ARMED
-            m.barsInOte := m.barsInOte + 1
-            if m.barsInOte > i_oteWindowBars * 5
-                m.invalidate("OTE window expired")
-                m.barsInOte := 0
+        if mach.state == ST_OTE_ARMED
+            mach.barsInOte := mach.barsInOte + 1
+            if mach.barsInOte > i_oteWindowBars * 5
+                mach.invalidate("OTE window expired")
+                mach.barsInOte := 0
         else
-            m.barsInOte := 0
+            mach.barsInOte := 0
         // 11. state transitions (one candle may chain several, exactly like the runner)
-        if m.state == ST_BIAS_SET
-            m.tryRecordSweep(raids, lvs, feed, ctx)
-        else if m.state == ST_SWEEP_DONE
-            m.tryRefreshSweep(raids, lvs, feed, ctx)
-        if m.state == ST_SWEEP_DONE
+        if mach.state == ST_BIAS_SET
+            mach.tryRecordSweep(raids, levels, feed, ctx)
+        else if mach.state == ST_SWEEP_DONE
+            mach.tryRefreshSweep(raids, levels, feed, ctx)
+        if mach.state == ST_SWEEP_DONE
             bool took = false
             if i_entryModel == "IMPULSE_LEG"
-                took := m.tryImpulseLeg(buf, st, feed, rh, rl, t1m, o1m, h1m, l1m, c1m)
-            if not took and m.state == ST_SWEEP_DONE
-                m.tryRecordDisplacement(buf, st)
-        if m.state == ST_DISPLACED
-            m.tryRecordMss(buf, st)
-        if m.state == ST_MSS
-            m.tryArmOte(buf, rh, rl, t1m, h1m, l1m, c1m)
-        if m.state == ST_OTE_ARMED
-            if m.alarm(buf, t1m, o1m, h1m, l1m, c1m)
-                [ok, en, sp, a1, a2, a3, fi, r1, rf] = m.tryEmit(t1m, rh, rl, re, rdec)
+                took := mach.tryImpulseLeg(buf, anat, feed, rh, rl, t1m, o1m, h1m, l1m, c1m)
+            if not took and mach.state == ST_SWEEP_DONE
+                mach.tryRecordDisplacement(buf, anat)
+        if mach.state == ST_DISPLACED
+            mach.tryRecordMss(buf, anat)
+        if mach.state == ST_MSS
+            mach.tryArmOte(buf, rh, rl, t1m, h1m, l1m, c1m)
+        if mach.state == ST_OTE_ARMED
+            if mach.alarm(buf, t1m, o1m, h1m, l1m, c1m)
+                [ok, en, sp, a1, a2, a3, fi, r1, rf] = mach.tryEmit(t1m, rh, rl, re, rdec)
                 if ok
-                    coreSignalLong  := m.zone.bullish
-                    coreSignalShort := not m.zone.bullish
+                    coreSignalLong  := mach.zone.bullish
+                    coreSignalShort := not mach.zone.bullish
                     sigEntryRef  := en
                     sigStop      := sp
                     sigT1        := a1
@@ -995,42 +996,42 @@ if barstate.isconfirmed
                     sigFinal     := fi
                     sigRrT1      := r1
                     sigRrFinal   := rf
-                    sigPdKind    := m.alarmKind
-                    sigModel     := m.model
-                    sigLevelType := levelName(m.raidKind)
-                    sigRaidScore := m.raidScore
+                    sigPdKind    := mach.alarmKind
+                    sigModel     := mach.model
+                    sigLevelType := levelName(mach.raidKind)
+                    sigRaidScore := mach.raidScore
                     sigTs1m      := t1m
                     sigSession   := sessionWindow(t1m)
         // 12. OteSetupDriver.afterCandle
-        m.afterCandle()
+        mach.afterCandle()
 
 // =============================================================================
 // EXPORTS — named series for Agent 03 (80_strategy) and the debug overlay (95).
 // Values are final at the confirmed 5m close; consume them only when barstate.isconfirmed.
 // =============================================================================
-int    bias             = m.lastBias                          // +1 BULLISH / -1 BEARISH / 0 NEUTRAL (last 15m read)
-int    setupBias        = m.htfBias                           // the setup's bias
-int    setupState       = m.state                             // ST_* constant
-string setupStateName   = stateName(m.state)
-int    raidScore        = m.raidScore                         // M4 score of the setup's sweep (na before SWEEP_DONE)
-string raidLevelType    = na(m.raidKind) ? "" : levelName(m.raidKind)
-bool   sweepDone        = m.hasSweep
-float  sweptLevel       = m.swLevel
-bool   displaced        = m.state >= ST_DISPLACED and m.state <= ST_IN_TRADE
-bool   mssConfirmed     = m.state >= ST_MSS and m.state <= ST_IN_TRADE
-bool   oteArmed         = m.state == ST_OTE_ARMED
-float  oteLow           = m.zone.valid ? m.zone.bandLo() : na   // OTE band low  (min of f62/f79)
-float  oteHigh          = m.zone.valid ? m.zone.bandHi() : na   // OTE band high (max of f62/f79)
-float  ote705           = m.zone.valid ? m.zone.f705 : na
-float  oteEq            = m.zone.valid ? m.zone.eq50 : na
-float  oteInvalidation  = m.zone.valid ? m.zone.one00 : na
+int    bias             = mach.lastBias                          // +1 BULLISH / -1 BEARISH / 0 NEUTRAL (last 15m read)
+int    setupBias        = mach.htfBias                           // the setup's bias
+int    setupState       = mach.state                             // ST_* constant
+string setupStateName   = stateName(mach.state)
+int    raidScore        = mach.raidScore                         // M4 score of the setup's sweep (na before SWEEP_DONE)
+string raidLevelType    = na(mach.raidKind) ? "" : levelName(mach.raidKind)
+bool   sweepDone        = mach.hasSweep
+float  sweptLevel       = mach.swLevel
+bool   displaced        = mach.state >= ST_DISPLACED and mach.state <= ST_IN_TRADE
+bool   mssConfirmed     = mach.state >= ST_MSS and mach.state <= ST_IN_TRADE
+bool   oteArmed         = mach.state == ST_OTE_ARMED
+float  oteLow           = mach.zone.valid ? mach.zone.bandLo() : na   // OTE band low  (min of f62/f79)
+float  oteHigh          = mach.zone.valid ? mach.zone.bandHi() : na   // OTE band high (max of f62/f79)
+float  ote705           = mach.zone.valid ? mach.zone.f705 : na
+float  oteEq            = mach.zone.valid ? mach.zone.eq50 : na
+float  oteInvalidation  = mach.zone.valid ? mach.zone.one00 : na
 bool   smt              = smtNow                              // SMT divergence on the last 1m of this bar
 int    rangeDir         = rDirNow                             // dealing range (PORT_MAP B1)
 float  rangeHigh        = rHiNow
 float  rangeLow         = rLoNow
 float  rangeEq          = rEqNow
 bool   rangeDecisive    = rDecNow
-string lastGateFailed   = m.lastGate
-string impulseVerdict   = m.verdict
+string lastGateFailed   = mach.lastGate
+string impulseVerdict   = mach.verdict
 int    sessionNow       = sessionWindow(time)
 bool   primeKillzoneNow = isPrimeKillzone(time)
