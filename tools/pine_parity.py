@@ -12,6 +12,9 @@ Inputs
                       older: Trade #, Type, Signal, Date/Time, Price USD, Contracts, Profit USD, ...
                       newer: Trade #, Type, Date/Time (or "Date and time"), Signal, Price USD,
                              Position size (qty), Net P&L USD, ...
+                      2026-11 (OA-2 real export): Trade number, Type, Date and time, Signal,
+                             Price USD, Size (qty), Size (value), Net PnL USD, Return %, Commission USD,
+                             Favorable/Adverse excursion ..., Duration (bars)
                     One trade = two rows ("Entry long|short" + "Exit long|short") sharing Trade #.
                     Date/Time is in the CHART timezone (owner: America/Chicago) -> --tv-tz.
                     Stop / T1 are not TradingView columns: they are read from optional
@@ -25,7 +28,8 @@ Tolerances (master prompt Appendix E; GOLDEN_SIGNALS.md §1)
   stop/T1   +-2 ticks — DECISIVE
   size      exact after caps (difference reported)
 Hard fails (exit 1): opposite-direction trade on a Java setup with no same-side match;
-  any TV entry at/after 16:30 ET; a decisive stop/T1 delta when both sides are known;
+  any TV entry in [16:30, 18:00) ET (I3 hard no-entry window; the CME day rolls at 18:00 ET, so an
+  overnight entry at e.g. 18:10 ET is a NEW trading day, not a late entry); a decisive stop/T1 delta when both sides are known;
   any TV trade whose size exceeds --cap (Agent 06.4 "ANY size above cap", default 5 micros =
   the strategy cap `max micros per trade`; --cap 0 disables); with --require-stop, any TV
   trade whose stop is unknown (no sl= in the Signal column and no stop column) — Agent 06.4
@@ -49,6 +53,7 @@ ENTRY_TOL_TICKS = 4
 LEVEL_TOL_TICKS = 2
 G1_T1_TOL_TICKS = 1
 NO_ENTRY_AFTER_ET = (16, 30)
+SESSION_ROLL_ET = (18, 0)   # CME MNQ day rolls 18:00 ET: the I3 hard window is [16:30, 18:00) ET (80_strategy hardNoEntry)
 DEFAULT_CAP_MICROS = 5   # Pine input "max micros per trade (strategy cap)" default (10_inputs.pine, I4)
 HOLD_BUCKETS = [(5, "<=5s"), (30, "<=30s"), (60, "<=1m"), (300, "<=5m"), (900, "<=15m"),
                 (3600, "<=60m"), (None, ">60m")]
@@ -175,13 +180,13 @@ def read_tv(path: str, tv_tz: ZoneInfo) -> list[TvTrade]:
         headers = list(rows[0].keys()) if rows else []
     if not rows:
         return []
-    h_num = _find(headers, "trade #", "trade", "trade no", "#")
+    h_num = _find(headers, "trade #", "trade number", "trade", "trade no", "#", prefix=True)
     h_type = _find(headers, "type")
     h_dt = _find(headers, "date/time", "date time", "date and time", "time", prefix=True)
     h_sig = _find(headers, "signal", "comment")
     h_px = _find(headers, "price usd", "price", prefix=True)
-    h_qty = _find(headers, "contracts", "position size qty", "quantity", "qty", "position size", prefix=True)
-    h_pnl = _find(headers, "net p&l usd", "profit usd", "net p&l", "profit", prefix=True)
+    h_qty = _find(headers, "contracts", "position size qty", "size qty", "quantity", "qty", "position size", prefix=True)
+    h_pnl = _find(headers, "net p&l usd", "net pnl usd", "profit usd", "net p&l", "net pnl", "profit", prefix=True)
     h_stop = _find(headers, "stop", "stop usd", "sl")
     h_t1 = _find(headers, "t1", "take profit", "tp")
     missing = [n for n, h in (("Trade #", h_num), ("Type", h_type), ("Date/Time", h_dt), ("Price", h_px)) if h is None]
@@ -285,8 +290,25 @@ def hold_times(tv: list[TvTrade]):
 
 
 def late_entries(tv: list[TvTrade]) -> list[TvTrade]:
-    h, m = NO_ENTRY_AFTER_ET
-    return [t for t in tv if (t.entry_ts.hour, t.entry_ts.minute) >= (h, m)]
+    """I3: an entry at/after 16:30 ET and before the 18:00 ET roll. Overnight entries (>= 18:00 ET) belong
+    to the next CME trading day and are legal (Java M3 blocks 15:45-18:00 ET only; Pine hardNoEntry [16:30,18:00))."""
+    return [t for t in tv if NO_ENTRY_AFTER_ET <= (t.entry_ts.hour, t.entry_ts.minute) < SESSION_ROLL_ET]
+
+
+def same_setup_out_of_window(unmatched_java: list[JavaSignal], unmatched_tv: list[TvTrade], tick: float, bar_min: int):
+    """Agent 06 evidence helper: an unmatched Java row whose stop AND T1 both reappear (+-LEVEL_TOL_TICKS) on an
+    unmatched same-side TV trade outside the +-1 bar window = the SAME setup taken at a different time (typically
+    a DATA / 5m-fallback timing difference, or a re-arm of the same band). Reported, never counted as a match."""
+    out = []
+    for j in unmatched_java:
+        for t in unmatched_tv:
+            if t.side != j.side or t.stop is None or t.t1 is None:
+                continue
+            ds, dt1 = _ticks(t.stop, j.stop, tick), _ticks(t.t1, j.t1, tick)
+            if abs(ds) <= LEVEL_TOL_TICKS and abs(dt1) <= LEVEL_TOL_TICKS:
+                off = (_bar_start(t.entry_ts, bar_min) - _bar_start(j.ts, bar_min)) / timedelta(minutes=bar_min)
+                out.append((j, t, int(off), ds, dt1))
+    return out
 
 
 def above_cap(tv: list[TvTrade], cap: Optional[int]) -> list[TvTrade]:
@@ -348,7 +370,7 @@ def build_report(java, tv, matches, unmatched_java, unmatched_tv, opposite, tick
     for j, t in opposite:
         hard.append(f"OPPOSITE: Java {j.side} {j.ts:%Y-%m-%d %H:%M} ET vs TV #{t.num} {t.side} {t.entry_ts:%Y-%m-%d %H:%M} ET")
     for t in late_entries(tv):
-        hard.append(f"LATE ENTRY: TV #{t.num} {t.side} at {t.entry_ts:%Y-%m-%d %H:%M} ET (>= 16:30 ET)")
+        hard.append(f"LATE ENTRY: TV #{t.num} {t.side} at {t.entry_ts:%Y-%m-%d %H:%M} ET (in [16:30, 18:00) ET)")
     for t in above_cap(tv, cap):
         hard.append(f"SIZE ABOVE CAP: TV #{t.num} {t.side} at {t.entry_ts:%Y-%m-%d %H:%M} ET size {t.size:g} > cap {cap} micros (I4)")
     if require_stop:
@@ -388,6 +410,9 @@ def build_report(java, tv, matches, unmatched_java, unmatched_tv, opposite, tick
               for j in unmatched_java] or ["- none"])
     L.append("\n## Unmatched — TradingView trades with no Java signal\n")
     L.extend([f"- #{t.num} {t.entry_ts:%Y-%m-%d %H:%M} ET {t.side} @ {t.entry:.2f}" for t in unmatched_tv] or ["- none"])
+    L.append("\n## Same setup, different time (unmatched Java row whose stop AND T1 reappear ±2t on an unmatched TV trade)\n")
+    L.extend([f"- Java {j.ts:%Y-%m-%d %H:%M} ET {j.side} ↔ TV #{t.num} {t.entry_ts:%Y-%m-%d %H:%M} ET ({off:+d} bars; stop {ds:+g}t, T1 {dt1:+g}t, TV entry {t.entry:.2f} vs Java {j.entry:.2f}) — NOT a match; evidence for the root cause"
+              for j, t, off, ds, dt1 in same_setup_out_of_window(unmatched_java, unmatched_tv, tick, bar_min)] or ["- none"])
     L.append("\n## Hold-time distribution (I6)\n")
     L.append("| bucket | trades |\n|---|---|")
     for _, label in HOLD_BUCKETS:

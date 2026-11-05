@@ -300,3 +300,29 @@ class StrategyContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RealTvSizingTest(unittest.TestCase):
+    """Agent 06 (OA-2, 2026-11-05): every size in the owner's real TV export is reproduced by
+    sizeContracts() with budget = min(riskPerTrade 250, softDailyLoss 600 + dayPnl, MLL room - buffer 200),
+    MLL room = (50,000 + cumPnl) - 48,000, CME day rolling 18:00 ET. Pins the funnel's 'SIZE 0' as the
+    designed account envelope (budget collapses to $24.50-$32.50 by 10-12 / 10-28), not a sizing BUG."""
+
+    def test_real_export_sizes_reproduce(self):
+        from datetime import timedelta
+        tv = pine_parity.read_tv(os.path.join(REPO, "parity", "tv_trades.csv"),
+                                 pine_parity.ZoneInfo("America/Chicago"))
+        self.assertEqual(len(tv), 22)
+        cum, day, dpnl, budgets = 0.0, None, 0.0, []
+        for t in sorted(tv, key=lambda x: x.entry_ts):
+            d = (t.entry_ts + timedelta(hours=6)).date()
+            if d != day:
+                day, dpnl = d, 0.0
+            ref = float(t.signal.split("ref=")[1])
+            budget = min(250.0, 600.0 + dpnl, (50000.0 + cum - 48000.0) - 200.0)
+            budgets.append(budget)
+            self.assertEqual(size_contracts(budget, ref, t.entry, t.stop, 0.25, 0.5, 5, 1), int(t.size), t.num)
+            cum += t.profit
+            dpnl += t.profit
+        self.assertAlmostEqual(cum, -1786.5)
+        self.assertLess(min(budgets), 25.0)   # #20: $24.50 budget -> only <= $24/micro setups size >= 1

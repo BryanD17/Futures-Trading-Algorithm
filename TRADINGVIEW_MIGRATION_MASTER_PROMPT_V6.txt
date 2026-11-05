@@ -202,11 +202,12 @@ PHASE 1 — OPUS BUILD  (sequential: 02 → 03 → 04; 05 parallel with 02–04)
        LIVE fails loud + api 410, Lucid profiles from YAML, EOD-trailing MLL + lock, pine_parity.py, .githooks
 
 PHASE 2 — FABLE VERIFY
-  [⛔] Agent 06 — Fable — Parity Verification (Java tape vs TradingView)  OWNER-ACTION OA-1, OA-2, OA-3
-       (prep done 2026-11-05: tools/run_parity.sh turnkey + PARITY_REPORT.md skeleton with the expected
-       classifications pre-filled (docs/v6/PARITY_EXPECTED.md); pine_parity.py now hard-fails on size above
-       cap (06.4) and, with --require-stop, on a stopless trade; tools/bars_drift.py = 06.1 data-drift check.
-       Resumes the moment parity/tv_trades.csv (+ tv_bars_*.csv) land: `tools/run_parity.sh --tv-tz <chart tz>`)
+  [🔄] Agent 06 — Fable — Parity Verification (Java tape vs TradingView)  OWNER-ACTION OA-3 (extended)
+       RUN 2026-11-05 on OA-2 (dist f78cfef464511f7c, TV Essential) — OPUS-VERIFIED (Fable re-check pending):
+       raw 1/8 = 12.5 %, adjusted (− OPEN-POSITION G1) 1/7, decidable (1m intrabars present) 1/2; 0 hard fails,
+       0 BUG, I6 clean, sizes 22/22 reproduced. Rows 1–5 DATA (no 1m before 09-25 12:35 ET), row 6 PORT_APPROX
+       unresolved. NOT ✅: target (b) unmet. Next: OA-3 extended (1m MNQ1!+MES1! 09-25 → 10-29) → rerun the Java
+       oracle on TV's own bars → diff vs TV #3–#22 (see PARITY_REPORT.md verdict). Premium NOT required.
   [⛔] Agent 07 — Fable — Relay + Demo Safety Drill  OWNER-ACTION OA-5 (needs OA-0/OA-1 + the Pine sha from 06)
        (prep done 2026-11-05: docs/v6/DRILL_SCRIPT.md D1–D8 click-by-click on a Tradovate practice account, then
        D1/D2/D4 on one Lucid eval @ 1 micro, PASS/FAIL per drill, D7 records the flatten_first-vs-sync ordering;
@@ -1033,7 +1034,19 @@ APPENDIX A — PER-AGENT VERIFICATION LOG  (append-only; never delete)
         DATA check, 7 ENTRY_MODE +40t, 8 G1 MATCH-or-OPEN-POSITION with the "thesis carried by trade 7, T1
         30558 must still print" rule) + the adjusted-denominator reading of the ≥ 90 % target (8 rows → one
         unexplained miss = 87.5 %) | python3 -m unittest discover -s tools/tests → 92 OK; lint 10/10; build --check
-        OK | match rate __ % | opposite disagreements __ | G1/G2/G3 __/__/__  (after OA-2)
+        OK | (run results below)
+  A-06  RUN 2026-11-05 — OPUS-VERIFIED (Fable re-check pending) | OA-2 tv_trades.csv sha256[:16] 0ea64c3dff50eaad
+        (22 trades 09-15 → 10-29, net −$1,786.50) vs java_signals 1926014584d89a54, dist f78cfef464511f7c, tz
+        America/Chicago | pine_parity accepts the real export headers (Trade number / Date and time / Size (qty) /
+        Net PnL USD, BOM) + test on the real rows; late-entry window = [16:30, 18:00) ET (overnight = next CME day);
+        "same setup, different time" evidence section | match rate raw 1/8 = 12.5 %, adjusted 1/7 = 14.3 %,
+        decidable 1/2 | rows: 1–4 DATA, 5 DATA (G2 same setup +5 bars, stop +1t T1 +0t size exact), 6 PORT_APPROX
+        (unresolved), 7 MATCH/ENTRY_MODE (−38t, stop/T1 +0t), 8 OPEN-POSITION (G1 thesis carried by TV #4 → T1
+        30558) | opposite 0 | hard fails 0 (tool + manual pass on all 22) | hold ≤5s/≤30s 0/0, min 5 min |
+        G1/G2/G3 OPEN-POSITION / DATA / PASS | funnel: SIZE 0 ×33 DESIGN (MLL-room budget $24.50–$32.50 late
+        + chased 5m-close fill on 17/22 trades widens stop distance), BRACKET wrong side ×18 DESIGN
+        (MARKET_ON_CONFIRM; all 8 oracle 5m closes inside (stop,T1) on the tape) → V7 BROKER_LIMIT, "released"
+        ×68 label nit (one-bar trades) | tests 96 OK (+RealTvSizingTest) | ledger 🔄: OA-3 extended next
   A-07  PREP 2026-11-05 (Fable; drills ⛔ OA-5): docs/v6/DRILL_SCRIPT.md — ground rules (practice account first,
         RTH weekday 09:30–15:30 ET / 08:30–14:30 CT, never roll week; curl POST of the exact payload_check --sample
         payloads as the test tool because a real fill alert can take days; secrets only in ~/drills/), prep P1–P9,
@@ -1270,9 +1283,9 @@ APPENDIX F — FINAL GREEN BOARD  (Agent 08 fills; mirrors Section 5)
   │ compile                  │ ⛔ │ OA-1 screenshot (zero errors) for dist BUILD_ID c9bdf95eeb3bb52f    │
   │ lint                     │ ✅ │ pine_lint 10/10 PASS on dist (A-04v); one strategy(), lookahead_off,  │
   │                          │    │ isconfirmed entries, stop on every entry, alert_message everywhere   │
-  │ parity                   │ ⛔ │ OA-2 + OA-3 → tools/run_parity.sh → PARITY_REPORT.md; tool hard fails│
+  │ parity                   │ 🔄 │ OA-2 run 2026-11-05: 0 hard fails, 1/2 decidable; OA-3 ext. next    │
   │                          │    │ (opposite / no stop / late / size > cap / levels) all wired (A-06)    │
-  │ hold-time                │ ⛔ │ same run: <=5s and <=30s buckets 0, ≤5 s profit share 0.0 % (A-06)   │
+  │ hold-time                │ ✅ │ OA-2 run: <=5s/<=30s buckets 0, ≤5 s profit share 0.0 % (A-06, Opus)  │
   │ demo drills              │ ⛔ │ OA-5 → DRILL_REPORT.md D1–D8 stamped by Fable (A-07)                 │
   │ Lucid eval drills        │ ⛔ │ OA-5 §10 → D1-L/D2-L/D4-L @ 1 micro (needs OA-4 reply or waiver)     │
   │ Topstep removed          │ ✅ │ A-05: runtime grep 0 refs, LIVE fails loud with the V6 message, 410  │

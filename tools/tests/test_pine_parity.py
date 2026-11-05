@@ -175,6 +175,48 @@ class ParityTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             pp.read_tv(bad, pp.ET)
 
+    def test_real_oa2_export_headers_parse(self):
+        """The owner's real 2026-11-05 List-of-Trades export (parity/tv_trades.csv): BOM + 'Trade number',
+        'Date and time', 'Size (qty)', 'Net PnL USD', Signal 'sl=..|tp=..|ref=..' on entries, 'SL'/'T1' on exits."""
+        real = (ROOT / "parity" / "tv_trades.csv").read_text(encoding="utf-8-sig").splitlines()
+        self.assertTrue(real[0].startswith("Trade number,Type,Date and time,Signal,Price USD,Size (qty)"), real[0])
+        tv_path = os.path.join(self.d, "tv_real_head.csv")
+        Path(tv_path).write_text("\ufeff" + "\n".join(real[:5]) + "\n", encoding="utf-8")   # header + trades 1-2
+        tv = pp.read_tv(tv_path, pp.ZoneInfo("America/Chicago"))
+        self.assertEqual([t.num for t in tv], ["1", "2"])
+        t1 = tv[0]
+        self.assertEqual(t1.side, "SELL")
+        self.assertEqual(t1.entry_ts.strftime("%Y-%m-%d %H:%M"), "2026-09-15 05:55")   # 04:55 CT -> ET
+        self.assertEqual(t1.exit_ts.strftime("%Y-%m-%d %H:%M"), "2026-09-15 06:30")
+        self.assertEqual((t1.entry, t1.stop, t1.t1, t1.size, t1.profit), (29339.5, 29370.5, 29317.75, 4, -252.0))
+        self.assertEqual(t1.exit_price, 29370.5)
+        self.assertEqual(tv[1].size, 5)
+        # the full real file loads, every trade carries a stop and a T1 (06.4 "no stop" check has teeth)
+        full = pp.read_tv(str(ROOT / "parity" / "tv_trades.csv"), pp.ZoneInfo("America/Chicago"))
+        self.assertEqual(len(full), 22)
+        self.assertEqual(pp.without_stop(full), [])
+        self.assertTrue(all(t.t1 is not None and t.exit_ts is not None for t in full))
+
+    def test_late_entry_window_ends_at_the_1800_et_roll(self):
+        """I3 hard window is [16:30, 18:00) ET. An overnight entry (18:10 ET = 17:10 CT, real TV trade #5) is the
+        next CME trading day and must NOT be a hard fail; 16:35 ET must."""
+        mk = lambda ts_ct: pp.TvTrade("x", "SELL", pp._parse_dt(ts_ct, pp.ZoneInfo("America/Chicago")).astimezone(pp.ET), 1.0, 1)
+        self.assertEqual(pp.late_entries([mk("2026-09-28 17:10"), mk("2026-09-29 18:50"), mk("2026-09-28 15:29")]), [])
+        late = pp.late_entries([mk("2026-09-28 15:30"), mk("2026-09-28 16:59"), mk("2026-09-28 17:00")])
+        self.assertEqual([t.entry_ts.strftime("%H:%M") for t in late], ["16:30", "17:59"])
+
+    def test_same_setup_out_of_window_is_evidence_not_a_match(self):
+        """G2 taken 4 bars late with the same stop/T1 (what the real OA-2 export shows on 2026-09-25): the tool
+        does NOT match it (App. E +-1 bar) but lists it under 'Same setup, different time'."""
+        tv = os.path.join(self.d, "tv_late_g2.csv")
+        write(tv, TV_NEW, [tv_row_new("3", "Exit short", "2026-09-25 11:00", "SL", "30890", "2", "-134"),
+                           tv_row_new("3", "Entry short", "2026-09-25 10:55", "sl=30890.00|tp=30805.25|ref=30847.75", "30857", "2", "-134")])
+        self.assertEqual(self.run_tool(tv), 0)
+        rep = Path(self.out).read_text()
+        self.assertIn("| match rate | 0/4 = 0.0 % |", rep)
+        self.assertIn("Java 2026-09-25 11:33 ET SELL ↔ TV #3 2026-09-25 11:55 ET (+5 bars; stop +1t, T1 +0t", rep)
+        self.assertIn("**G2**: FAIL (no TradingView trade matched)", rep)
+
     def test_real_oracle_file_loads(self):
         java = pp.read_java(str(ROOT / "parity" / "java_signals.csv"))
         self.assertEqual(len(java), 8)
