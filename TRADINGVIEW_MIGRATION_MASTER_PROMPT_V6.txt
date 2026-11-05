@@ -185,7 +185,9 @@ PHASE 1 — OPUS BUILD  (sequential: 02 → 03 → 04; 05 parallel with 02–04)
   [⬜] Agent 02 — Opus — Pine Core Library (ICT detectors)
   [⬜] Agent 03 — Opus — Pine Strategy, Sizing + AccountProfile Envelope
   [⬜] Agent 04 — Opus — Relay Payload Adapter + Order Lifecycle
-  [⬜] Agent 05 — Opus — Java Repurpose: Topstep Out, Lucid Profiles, Parity Harness
+  [🔄 READY-FOR-FABLE] Agent 05 — Opus — Java Repurpose: Topstep Out, Lucid Profiles, Parity Harness
+       (2026-11-05, branch feat/agent-05-v6-java-repurpose: TopstepX → trading-engine/legacy (not compiled),
+       LIVE fails loud + api 410, Lucid profiles from YAML, EOD-trailing MLL + lock, pine_parity.py, .githooks)
 
 PHASE 2 — FABLE VERIFY
   [⬜] Agent 06 — Fable — Parity Verification (Java tape vs TradingView)
@@ -742,7 +744,20 @@ APPENDIX A — PER-AGENT VERIFICATION LOG  (append-only; never delete)
   A-02  lint output: __ | build sha: __ | OA-1: __
   A-03  invariant → line-range table: __ | OA-2: __
   A-04  payload_check results: __ | lifecycle table rows: __
-  A-05  tests before/after: __ / __ | TopstepConnector runtime grep: __
+  A-05  tests before/after: trading-engine 1,038 (1 skipped) + api-backend 8 = 1,046 / trading-engine 1,015
+        (1 skipped) + api-backend 11 = 1,026, all green (`./gradlew clean build`, JDK 21) + 14 Python tool tests
+        (`python3 -m unittest discover -s tools/tests`) | removed 43 = TopstepX wire tests moved to
+        trading-engine/legacy (BarsBackoff 11, ContractBindingGuard 11, ContractRootMatch 11, CancelOrderTruth 6,
+        ConnectorFailLoud 4: HTTP/ProjectX protocol of a connector that no longer exists); connector-agnostic
+        logic ported first: Bracket*/AdoptedPositionRelease (all kept, now mock BracketBroker),
+        BrokerAgnosticContractTest 4 (snapshot views, not-working cancel, MockConnector cancel w/o id); added
+        LiveRemovedTest 4, LucidProfilesTest 12, ControlControllerLiveGoneTest 3 | TopstepConnector runtime grep:
+        `grep -rn "TopstepConnector\|TopstepCredentials" trading-engine/src/main api-backend/src dashboard-frontend/src`
+        → 0 matches (only hit in src/ is LiveRemovedTest's own guard string, which enforces it) | oracle
+        parity/java_signals.csv sha256 after = 1926014584d89a54c90d4df03a1f8eb186283687242fa77c5781388516bdbd7d
+        (IDENTICAL; GoldenSignalExport stays pinned to ScalpConfig.activeRiskLimits() + LiveRiskPath.topstep50kLive,
+        the Topstep-era effective config; Lucid rails would change the gate_proof "DLL room" text) | secret scan
+        --all: clean | ⛔ none
   A-06  match rate __ % | opposite disagreements __ | G1/G2/G3 __/__/__
   A-07  D1..D8: __ | Lucid eval D1/D2/D4: __
   A-08  cold-read issues found/fixed: __ / __ | tag: __

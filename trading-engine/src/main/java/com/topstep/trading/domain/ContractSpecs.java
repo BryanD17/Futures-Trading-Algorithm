@@ -4,7 +4,7 @@ package com.topstep.trading.domain;
  * AGENT-05 (V5 RC-17): tick SIZE per root symbol so dollar P&amp;L is computed
  * as {@code points / tickSize * tickValue} — never {@code points * tickValue}
  * (which under-reported MNQ P&amp;L 4x: $0.50/tick is $2.00/point).
- * Values match TradeableInstrument / PropFirmRiskEngine / TopstepConnector.
+ * Values match TradeableInstrument / PropFirmRiskEngine (and the legacy TopstepX connector).
  */
 public final class ContractSpecs {
 

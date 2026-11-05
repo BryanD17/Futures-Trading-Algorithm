@@ -140,13 +140,7 @@ export default function Controls() {
           >
             ▶️ Start SIM
           </button>
-          <button
-            onClick={() => handleStart('LIVE')}
-            disabled={loading}
-            className="btn-start-live"
-          >
-            🔴 Start LIVE
-          </button>
+          {/* V6 05.6: LIVE removed from the Java engine (the API answers 410). */}
         </div>
       )}
 

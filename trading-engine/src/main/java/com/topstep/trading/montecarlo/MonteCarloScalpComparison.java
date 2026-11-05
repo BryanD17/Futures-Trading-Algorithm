@@ -106,7 +106,7 @@ public final class MonteCarloScalpComparison {
         MonteCarloSimulator simulator = new MonteCarloSimulator(SEED);
         StrategyMetrics metrics = StrategyMetrics.fromParameters(
                 WIN_RATE, winR, lossR, 6.0);
-        AccountLifecycle template = AccountLifecycle.topstep50kEvaluation();
+        AccountLifecycle template = AccountLifecycle.lucidFlex50kEvaluation(); // V6 05.3 default
 
         ProfileResult r = new ProfileResult(name);
         for (int i = 0; i < ITERATIONS; i++) {

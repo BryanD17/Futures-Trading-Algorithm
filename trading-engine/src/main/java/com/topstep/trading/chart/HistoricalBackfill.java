@@ -25,7 +25,7 @@ import java.util.function.Consumer;
  *       visible on the broker chart does not exist in memory.</li>
  * </ul>
  *
- * <p>Usage from TopstepConnector.startMarketDataPolling(), before the initial
+ * <p>Usage from a live connector's market-data poller, before the initial
  * live fetch (see PATCHES.md for the exact insertion):
  *
  * <pre>

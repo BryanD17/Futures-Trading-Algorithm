@@ -103,55 +103,14 @@ public class TradingEngineMain {
     }
 
     /**
-     * Run LIVE mode using LiveEngineRunner.
-     * WARNING: This connects to real markets and uses real money!
+     * V6 Agent 05.1: LIVE mode is removed from the Java engine (R6). Fails
+     * loud with the V6 message and a non-zero exit; no credential is read and
+     * no connection is attempted.
      */
     private static void runLiveMode() {
-        System.out.println();
-        System.out.println("!".repeat(60));
-        System.out.println("! WARNING: STARTING LIVE TRADING MODE !");
-        System.out.println("! REAL MONEY IS AT RISK !");
-        System.out.println("!".repeat(60));
-        System.out.println();
-        System.out.println("Pre-flight checks:");
-
-        // Check environment variables
-        String[] requiredEnvVars = {
-            "TOPSTEP_API_URL",
-            "TOPSTEP_USERNAME",
-            "TOPSTEP_API_KEY",
-            "TOPSTEP_ACCOUNT_ID"
-        };
-
-        boolean allSet = true;
-        for (String envVar : requiredEnvVars) {
-            String value = System.getenv(envVar);
-            if (value == null || value.isEmpty()) {
-                System.out.println("  ❌ " + envVar + " - NOT SET");
-                allSet = false;
-            } else {
-                System.out.println("  ✓ " + envVar + " - Set");
-            }
-        }
-
-        if (!allSet) {
-            System.err.println();
-            System.err.println("❌ Missing required environment variables.");
-            System.err.println("Please set all Topstep credentials before starting LIVE mode.");
-            System.exit(1);
-        }
-
-        System.out.println();
-        System.out.println("Starting LIVE Mode...");
-        System.out.println("-".repeat(40));
-        System.out.println();
-
-        try {
-            LiveEngineRunner.run();
-        } catch (Exception e) {
-            System.err.println("LIVE mode failed with error: " + e.getMessage());
-            e.printStackTrace();
-            System.exit(1);
-        }
+        System.err.println();
+        System.err.println("❌ " + LiveTradingRemovedException.MESSAGE);
+        System.err.println("   The Java engine is a research / backtest lab and the parity oracle in V6.");
+        System.exit(2);
     }
 }

@@ -33,6 +33,9 @@ dependencies {
     // Utilities
     implementation 'org.apache.commons:commons-lang3:3.14.0'
 
+    // V6 Agent 05.2: config/lucid_profiles.yaml (Lucid account profiles) loader
+    implementation 'org.yaml:snakeyaml:2.2'
+
     // Testing
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testImplementation 'org.assertj:assertj-core:3.25.3'
@@ -45,6 +48,12 @@ application {
 }
 
 apply from: rootProject.file('gradle/engine-config.gradle')
+
+// V6 Agent 05.2: the ONE Lucid truth file (Agent 01, config/lucid_profiles.yaml)
+// ships on the classpath as /lucid_profiles.yaml — never a hand-typed copy.
+processResources {
+    from(rootProject.file('config/lucid_profiles.yaml'))
+}
 
 tasks.named('test') {
     useJUnitPlatform()

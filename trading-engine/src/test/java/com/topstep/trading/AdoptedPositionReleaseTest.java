@@ -1,10 +1,10 @@
 package com.topstep.trading;
 
 import com.topstep.trading.connector.OrderListener;
-import com.topstep.trading.connector.TopstepConnector;
-import com.topstep.trading.connector.TopstepConnector.BrokerOrder;
-import com.topstep.trading.connector.TopstepConnector.BrokerPosition;
-import com.topstep.trading.connector.TopstepConnector.BrokerSnapshot;
+import com.topstep.trading.connector.BracketBroker;
+import com.topstep.trading.connector.BracketBroker.BrokerOrder;
+import com.topstep.trading.connector.BracketBroker.BrokerPosition;
+import com.topstep.trading.connector.BracketBroker.BrokerSnapshot;
 import com.topstep.trading.domain.AccountState;
 import com.topstep.trading.domain.Candle;
 import com.topstep.trading.domain.Order;
@@ -81,7 +81,7 @@ class AdoptedPositionReleaseTest {
 
         String place(int type, String sym, OrderSide side, int qty, double px, OrderListener l) {
             String id = String.valueOf(nextId++);
-            boolean stop = type == TopstepConnector.ORDER_TYPE_STOP;
+            boolean stop = type == BracketBroker.ORDER_TYPE_STOP;
             open.put(id, new BrokerOrder(id, sym, CONTRACT, type, side, qty,
                     stop ? px : Double.NaN, stop ? Double.NaN : px));
             listeners.put(id, l);
@@ -89,7 +89,7 @@ class AdoptedPositionReleaseTest {
         }
 
         void cancel(String id) throws java.io.IOException {
-            if (open.remove(id) == null) throw new TopstepConnector.OrderNotWorkingException(id, 5, null);
+            if (open.remove(id) == null) throw new BracketBroker.OrderNotWorkingException(id, 5, null);
         }
 
         /** The account owner closes the position by hand: flat, book emptied. */
@@ -100,7 +100,7 @@ class AdoptedPositionReleaseTest {
     }
 
     FakeBroker broker;
-    TopstepConnector connector;
+    BracketBroker connector;
     BracketOrderManager manager;
     AccountState account;
     ExecutionEngine exec;
@@ -111,12 +111,12 @@ class AdoptedPositionReleaseTest {
     @BeforeEach
     void setUp() throws Exception {
         broker = new FakeBroker();
-        connector = mock(TopstepConnector.class);
+        connector = mock(BracketBroker.class);
         when(connector.submitStopOrder(anyString(), any(), anyInt(), anyDouble(), any())).thenAnswer(inv ->
-                broker.place(TopstepConnector.ORDER_TYPE_STOP, inv.getArgument(0), inv.getArgument(1),
+                broker.place(BracketBroker.ORDER_TYPE_STOP, inv.getArgument(0), inv.getArgument(1),
                         inv.getArgument(2), inv.getArgument(3), inv.getArgument(4)));
         when(connector.submitTakeProfitOrder(anyString(), any(), anyInt(), anyDouble(), any())).thenAnswer(inv ->
-                broker.place(TopstepConnector.ORDER_TYPE_LIMIT, inv.getArgument(0), inv.getArgument(1),
+                broker.place(BracketBroker.ORDER_TYPE_LIMIT, inv.getArgument(0), inv.getArgument(1),
                         inv.getArgument(2), inv.getArgument(3), inv.getArgument(4)));
         doAnswer(inv -> { broker.cancel(inv.getArgument(0)); return null; }).when(connector).cancelOrder(anyString());
         when(connector.fetchBrokerSnapshot()).thenAnswer(inv -> broker.snapshot());
@@ -147,9 +147,9 @@ class AdoptedPositionReleaseTest {
     private void ownersManualShort45() {
         broker.position = new BrokerPosition(SYM, CONTRACT, false, 45, ADOPT_ENTRY);
         broker.open.put("3584921116", new BrokerOrder("3584921116", SYM, CONTRACT,
-                TopstepConnector.ORDER_TYPE_LIMIT, OrderSide.BUY, 45, Double.NaN, 30671.25));
+                BracketBroker.ORDER_TYPE_LIMIT, OrderSide.BUY, 45, Double.NaN, 30671.25));
         broker.open.put("3584921305", new BrokerOrder("3584921305", SYM, CONTRACT,
-                TopstepConnector.ORDER_TYPE_STOP, OrderSide.BUY, 45, ADOPT_STOP, Double.NaN));
+                BracketBroker.ORDER_TYPE_STOP, OrderSide.BUY, 45, ADOPT_STOP, Double.NaN));
     }
 
     /** Two periodic passes = adoption (1st sighting is only a warning). */
@@ -415,7 +415,7 @@ class AdoptedPositionReleaseTest {
     void ownersFortyFiveLotObserveOnlyEndToEnd() throws Exception {
         broker.position = new BrokerPosition(SYM, CONTRACT, true, 45, 30761.0);
         broker.open.put("3588724603", new BrokerOrder("3588724603", SYM, CONTRACT,
-                TopstepConnector.ORDER_TYPE_LIMIT, OrderSide.SELL, 45, Double.NaN, 30778.5));
+                BracketBroker.ORDER_TYPE_LIMIT, OrderSide.SELL, 45, Double.NaN, 30778.5));
         manager.onLastPrice(SYM, 30761.25);
         String err = captureErr(this::reconcileTwice);
 

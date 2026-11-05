@@ -1,6 +1,7 @@
 package com.topstep.api.controller;
 
 import com.topstep.trading.EngineFacade;
+import com.topstep.trading.LiveTradingRemovedException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -11,12 +12,26 @@ import java.util.Map;
 /**
  * REST controller for engine control operations (start/pause/resume/stop).
  * SECURITY NOTE: In production, this should have proper authentication!
+ *
+ * <p>V6 Agent 05.6: the Java engine is a research / backtest lab. Every LIVE
+ * control ({@code start?mode=LIVE}, {@code killswitch}, {@code flatten}, all of
+ * which were LIVE-only) answers <b>410 Gone</b> with the V6 message
+ * ({@link LiveTradingRemovedException#MESSAGE}). SIM controls are unchanged.
  */
 @RestController
 @RequestMapping("/api/control")
 public class ControlController {
 
     private final EngineFacade engine = EngineFacade.getInstance();
+
+    /** 410 Gone body for every removed LIVE control. */
+    static ResponseEntity<Map<String, String>> liveGone() {
+        Map<String, String> response = new HashMap<>();
+        response.put("status", "GONE");
+        response.put("message", LiveTradingRemovedException.MESSAGE);
+        response.put("liveTrading", "TradingView");
+        return ResponseEntity.status(HttpStatus.GONE).body(response);
+    }
 
     /**
      * Start the engine in specified mode.
@@ -36,20 +51,17 @@ public class ControlController {
                 return ResponseEntity.ok(response);
 
             } else if ("LIVE".equalsIgnoreCase(mode)) {
-                // Extra warning for LIVE mode
-                response.put("warning", "LIVE mode uses real money. Ensure you have tested in SIM first.");
-
-                engine.startLive();
-                response.put("status", "STARTED");
-                response.put("mode", "LIVE");
-                response.put("message", "LIVE engine started successfully - REAL MONEY AT RISK");
-                return ResponseEntity.ok(response);
+                // V6 05.6: LIVE is gone from the Java engine (R6).
+                return liveGone();
 
             } else {
                 response.put("status", "ERROR");
-                response.put("message", "Unknown mode: " + mode + ". Supported: SIM, LIVE");
+                response.put("message", "Unknown mode: " + mode + ". Supported: SIM (LIVE runs on TradingView)");
                 return ResponseEntity.badRequest().body(response);
             }
+
+        } catch (LiveTradingRemovedException e) {
+            return liveGone();
 
         } catch (IllegalStateException e) {
             response.put("status", "ERROR");
@@ -136,57 +148,25 @@ public class ControlController {
     }
 
     /**
-     * Activate kill switch (LIVE mode only) - emergency stop all trading.
+     * Activate kill switch (LIVE mode only) — V6: 410 Gone.
      */
     @PostMapping("/killswitch")
     public ResponseEntity<Map<String, String>> activateKillSwitch(
             @RequestParam(defaultValue = "Manual kill switch activation") String reason) {
-        Map<String, String> response = new HashMap<>();
-
-        try {
-            engine.activateKillSwitch(reason);
-            response.put("status", "KILL_SWITCH_ACTIVE");
-            response.put("message", "Kill switch activated. All positions being flattened.");
-            response.put("reason", reason);
-            return ResponseEntity.ok(response);
-
-        } catch (IllegalStateException e) {
-            response.put("status", "ERROR");
-            response.put("message", e.getMessage());
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
-
-        } catch (Exception e) {
-            response.put("status", "ERROR");
-            response.put("message", "Failed to activate kill switch: " + e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
-        }
+        // V6 05.6: LIVE-only control; LIVE runs on TradingView (kill switch /
+        // flatten live in the relay + TradingView, RUNBOOK_TRADINGVIEW.md).
+        return liveGone();
     }
 
     /**
-     * Flatten all positions (LIVE mode only).
+     * Flatten all positions (LIVE mode only) — V6: 410 Gone.
      */
     @PostMapping("/flatten")
     public ResponseEntity<Map<String, String>> flattenPositions(
             @RequestParam(defaultValue = "Manual flatten request") String reason) {
-        Map<String, String> response = new HashMap<>();
-
-        try {
-            engine.flattenAllPositions(reason);
-            response.put("status", "FLATTENING");
-            response.put("message", "Flattening all positions");
-            response.put("reason", reason);
-            return ResponseEntity.ok(response);
-
-        } catch (IllegalStateException e) {
-            response.put("status", "ERROR");
-            response.put("message", e.getMessage());
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
-
-        } catch (Exception e) {
-            response.put("status", "ERROR");
-            response.put("message", "Failed to flatten positions: " + e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
-        }
+        // V6 05.6: LIVE-only control; LIVE runs on TradingView (kill switch /
+        // flatten live in the relay + TradingView, RUNBOOK_TRADINGVIEW.md).
+        return liveGone();
     }
 
     /**
@@ -200,6 +180,10 @@ public class ControlController {
         status.put("running", engine.isRunning());
         status.put("paused", engine.isPaused());
         status.put("killSwitchActive", engine.isKillSwitchActive());
+        // V6 05.6: the dashboard banner reads these.
+        status.put("researchMode", true);
+        status.put("liveTrading", "TradingView");
+        status.put("banner", "Research mode — live trading on TradingView");
 
         return ResponseEntity.ok(status);
     }

@@ -58,8 +58,8 @@ public class SimulationController {
 
         CompletableFuture<Map<String, Object>> future = CompletableFuture.supplyAsync(() -> {
             StrategyMetrics metrics = StrategyMetrics.fromParameters(winRate, avgWinR, avgLossR, tradesPerDay);
-            RiskProfile profile = RiskProfile.topstep50kEvaluation().withBaseRiskPct(baseRiskPct);
-            AccountLifecycle lifecycle = AccountLifecycle.topstep50kEvaluation();
+            RiskProfile profile = RiskProfile.lucidFlex50kEval().withBaseRiskPct(baseRiskPct);
+            AccountLifecycle lifecycle = AccountLifecycle.lucidFlex50kEvaluation();
             MonteCarloSimulator simulator = new MonteCarloSimulator();
 
             MonteCarloResult result = simulator.simulate(metrics, profile, lifecycle, iterations);
@@ -122,8 +122,8 @@ public class SimulationController {
         double tradesPerDay = getDouble(params, "tradesPerDay", 2.0);
 
         StrategyMetrics metrics = StrategyMetrics.fromParameters(winRate, avgWinR, avgLossR, tradesPerDay);
-        RiskProfile baseProfile = RiskProfile.topstep50kEvaluation();
-        AccountLifecycle lifecycle = AccountLifecycle.topstep50kEvaluation();
+        RiskProfile baseProfile = RiskProfile.lucidFlex50kEval();
+        AccountLifecycle lifecycle = AccountLifecycle.lucidFlex50kEvaluation();
 
         RiskOptimizer optimizer = new RiskOptimizer();
         OptimizationResult optResult = optimizer.optimizeRisk(metrics, baseProfile, lifecycle);

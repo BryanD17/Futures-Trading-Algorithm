@@ -14,6 +14,15 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
+.research-banner {
+  background: #78350f;
+  color: #fef3c7;
+  text-align: center;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  letter-spacing: 0.02em;
+}
+
 .header h1 {
   font-size: 1.8rem;
   font-weight: 700;

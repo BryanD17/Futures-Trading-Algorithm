@@ -123,7 +123,9 @@ public class SimEngineRunner {
      * unless -DscalpMode.enabled=true (then topstep50kScalp()).
      */
     public SimEngineRunner() {
-        this(50_000.0, com.topstep.trading.strategy.stdvote.ScalpConfig.activeRiskLimits());
+        // V6 05.3: SIM defaults to LUCID_FLEX_50K_EVAL account rails.
+        this(com.topstep.trading.config.LucidProfiles.flex50kEval().startingBalance(),
+             com.topstep.trading.strategy.stdvote.ScalpConfig.activeLucidRiskLimits());
     }
 
     /**

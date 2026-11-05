@@ -1,6 +1,8 @@
 package com.topstep.trading.risk;
 
+import com.topstep.trading.config.LucidProfiles;
 import com.topstep.trading.lifecycle.AccountPhase;
+import com.topstep.trading.lifecycle.LucidAccountProfile;
 
 /**
  * Phase-specific risk configuration that replaces static risk parameters.
@@ -34,6 +36,9 @@ public class RiskProfile {
     private final double partialExitRMultiple;   // R-multiple at which to take partial
     private final double partialExitPct;         // Percentage of position to close
 
+    // V6 Agent 05.2: the account plan this profile is calibrated to (null = legacy Topstep)
+    private final LucidAccountProfile account;
+
     private RiskProfile(Builder builder) {
         this.phase = builder.phase;
         this.baseRiskPct = builder.baseRiskPct;
@@ -53,14 +58,51 @@ public class RiskProfile {
         this.partialsEnabled = builder.partialsEnabled;
         this.partialExitRMultiple = builder.partialExitRMultiple;
         this.partialExitPct = builder.partialExitPct;
+        this.account = builder.account;
     }
 
     // ==================== Factory Methods ====================
 
     /**
+     * V6 Agent 05.2: the Lucid profile {@code id} from config/lucid_profiles.yaml.
+     * Account numbers (balance, MLL, target, size caps, soft daily loss) live in
+     * the YAML-backed {@link LucidAccountProfile}; this profile carries only the
+     * engine's sizing POLICY (per-trade budget %, quality gates, zone
+     * multipliers) — the same policy as the pre-V6 profile for that stage, so
+     * the per-trade budget stays 0.5 % of the starting balance ($250 at 50K).
+     * The self-imposed daily cap is 100 % of the lifecycle's daily limit,
+     * because that limit already IS the V6 soft daily loss
+     * (v6_soft_daily_loss_usd, conservative-unverified until OA-7).
+     */
+    @SuppressWarnings("deprecation")
+    public static RiskProfile lucid(String id) {
+        LucidAccountProfile p = LucidProfiles.get(id);
+        RiskProfile policy = p.isEval() ? topstep50kEvaluation() : topstep50kFunded();
+        return policy.toBuilder().maxDailyLossPct(1.0).account(p).build();
+    }
+
+    /** V6 default for backtests / Monte Carlo: LUCID_FLEX_50K_EVAL. */
+    public static RiskProfile lucidFlex50kEval() { return lucid(LucidProfiles.DEFAULT_EVAL); }
+
+    public static RiskProfile lucidFlex50kFunded() { return lucid(LucidProfiles.DEFAULT_FUNDED); }
+
+    public static RiskProfile lucidFlex25kEval() { return lucid("LUCID_FLEX_25K_EVAL"); }
+    public static RiskProfile lucidFlex25kFunded() { return lucid("LUCID_FLEX_25K_FUNDED"); }
+    public static RiskProfile lucidFlex100kEval() { return lucid("LUCID_FLEX_100K_EVAL"); }
+    public static RiskProfile lucidFlex100kFunded() { return lucid("LUCID_FLEX_100K_FUNDED"); }
+    public static RiskProfile lucidFlex150kEval() { return lucid("LUCID_FLEX_150K_EVAL"); }
+    public static RiskProfile lucidFlex150kFunded() { return lucid("LUCID_FLEX_150K_FUNDED"); }
+
+    /** The 50K Lucid profile for an account phase (EVALUATION -> eval, every funded phase -> funded). */
+    public static RiskProfile lucidForPhase(AccountPhase phase) {
+        return phase == AccountPhase.EVALUATION ? lucidFlex50kEval() : lucidFlex50kFunded();
+    }
+
+    /**
      * Evaluation phase profile for Topstep 50K.
      * More aggressive: lower quality gate, partials enabled, tighter targets.
      */
+    @Deprecated
     public static RiskProfile topstep50kEvaluation() {
         return builder()
             .phase(AccountPhase.EVALUATION)
@@ -88,6 +130,7 @@ public class RiskProfile {
      * Funded probation profile for Topstep 50K.
      * More conservative: higher quality gate, no partials, wider targets.
      */
+    @Deprecated
     public static RiskProfile topstep50kFunded() {
         return builder()
             .phase(AccountPhase.FUNDED_PROBATION)
@@ -115,6 +158,7 @@ public class RiskProfile {
      * Funded scaling profile for Topstep 50K.
      * Balanced: moderate risk, wider targets for higher EV per trade.
      */
+    @Deprecated
     public static RiskProfile topstep50kScaling() {
         return builder()
             .phase(AccountPhase.FUNDED_SCALING)
@@ -143,9 +187,14 @@ public class RiskProfile {
      * Used by the risk optimizer to sweep risk levels.
      */
     public RiskProfile withBaseRiskPct(double newBaseRiskPct) {
+        return toBuilder().baseRiskPct(newBaseRiskPct).build();
+    }
+
+    /** A builder pre-filled with every field of this profile. */
+    public Builder toBuilder() {
         return builder()
             .phase(this.phase)
-            .baseRiskPct(newBaseRiskPct)
+            .baseRiskPct(this.baseRiskPct)
             .maxDailyLossPct(this.maxDailyLossPct)
             .maxTradesPerDay(this.maxTradesPerDay)
             .maxConsecutiveLosses(this.maxConsecutiveLosses)
@@ -162,7 +211,7 @@ public class RiskProfile {
             .partialsEnabled(this.partialsEnabled)
             .partialExitRMultiple(this.partialExitRMultiple)
             .partialExitPct(this.partialExitPct)
-            .build();
+            .account(this.account);
     }
 
     // ==================== Getters ====================
@@ -185,10 +234,13 @@ public class RiskProfile {
     public boolean isPartialsEnabled() { return partialsEnabled; }
     public double getPartialExitRMultiple() { return partialExitRMultiple; }
     public double getPartialExitPct() { return partialExitPct; }
+    /** V6: the Lucid account plan (from config/lucid_profiles.yaml), or null for legacy profiles. */
+    public LucidAccountProfile getAccount() { return account; }
+    public String getAccountId() { return account != null ? account.id() : "TOPSTEP_50K_LEGACY"; }
 
     @Override
     public String toString() {
-        return String.format("RiskProfile{phase=%s, baseRisk=%.2f%%, maxDailyLoss=%.0f%%, quality>=%d, trades/day<=%d}",
+        return String.format("RiskProfile{account=" + getAccountId() + ", phase=%s, baseRisk=%.2f%%, maxDailyLoss=%.0f%%, quality>=%d, trades/day<=%d}",
             phase, baseRiskPct * 100, maxDailyLossPct * 100, minSetupQuality, maxTradesPerDay);
     }
 
@@ -215,6 +267,7 @@ public class RiskProfile {
         private boolean partialsEnabled = false;
         private double partialExitRMultiple = 1.0;
         private double partialExitPct = 0.50;
+        private LucidAccountProfile account;
 
         public Builder phase(AccountPhase phase) { this.phase = phase; return this; }
         public Builder baseRiskPct(double v) { this.baseRiskPct = v; return this; }
@@ -234,6 +287,7 @@ public class RiskProfile {
         public Builder partialsEnabled(boolean v) { this.partialsEnabled = v; return this; }
         public Builder partialExitRMultiple(double v) { this.partialExitRMultiple = v; return this; }
         public Builder partialExitPct(double v) { this.partialExitPct = v; return this; }
+        public Builder account(LucidAccountProfile v) { this.account = v; return this; }
 
         public RiskProfile build() { return new RiskProfile(this); }
     }

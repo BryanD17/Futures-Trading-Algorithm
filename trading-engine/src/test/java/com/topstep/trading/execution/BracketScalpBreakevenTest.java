@@ -1,6 +1,6 @@
 package com.topstep.trading.execution;
 
-import com.topstep.trading.connector.TopstepConnector;
+import com.topstep.trading.connector.BracketBroker;
 import com.topstep.trading.domain.OrderSide;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -28,12 +28,12 @@ class BracketScalpBreakevenTest {
     private static final String SYMBOL = "MNQ";
     private static final double TICK = 0.25;
 
-    private TopstepConnector connector;
+    private BracketBroker connector;
     private BracketOrderManager manager;
 
     @BeforeEach
     void setUp() throws Exception {
-        connector = mock(TopstepConnector.class);
+        connector = mock(BracketBroker.class);
         when(connector.submitStopOrder(anyString(), any(), anyInt(), anyDouble(), any()))
                 .thenReturn("SL-1", "SL-2");
         when(connector.submitTakeProfitOrder(anyString(), any(), anyInt(), anyDouble(), any()))
