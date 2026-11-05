@@ -69,8 +69,9 @@ public class EnhancedBacktestRunner {
 
         // Phase 3: Monte Carlo pass probability
         System.out.println("\n--- Phase 3: Monte Carlo Analysis ---");
-        RiskProfile evalProfile = RiskProfile.topstep50kEvaluation();
-        AccountLifecycle lifecycle = AccountLifecycle.topstep50kEvaluation();
+        // V6 05.3: Monte Carlo defaults to LUCID_FLEX_50K_EVAL (EOD trailing MLL + lock).
+        RiskProfile evalProfile = RiskProfile.lucidFlex50kEval();
+        AccountLifecycle lifecycle = AccountLifecycle.lucidFlex50kEvaluation();
         MonteCarloSimulator mcSimulator = new MonteCarloSimulator();
         MonteCarloResult mcResult = mcSimulator.simulate(metrics, evalProfile, lifecycle);
 

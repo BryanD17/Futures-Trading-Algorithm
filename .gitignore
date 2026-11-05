@@ -82,3 +82,6 @@ historical-data/
 config/local/
 .user-config
 /Futures-Trading-Algorithm/
+
+# Python
+__pycache__/

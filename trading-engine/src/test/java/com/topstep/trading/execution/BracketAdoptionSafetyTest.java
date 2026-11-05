@@ -1,8 +1,8 @@
 package com.topstep.trading.execution;
 
-import com.topstep.trading.connector.TopstepConnector;
-import com.topstep.trading.connector.TopstepConnector.BrokerOrder;
-import com.topstep.trading.connector.TopstepConnector.BrokerPosition;
+import com.topstep.trading.connector.BracketBroker;
+import com.topstep.trading.connector.BracketBroker.BrokerOrder;
+import com.topstep.trading.connector.BracketBroker.BrokerPosition;
 import com.topstep.trading.domain.Order;
 import com.topstep.trading.domain.OrderSide;
 import com.topstep.trading.domain.RiskLimits;
@@ -56,7 +56,7 @@ class BracketAdoptionSafetyTest {
     @BeforeEach
     void setUp() throws Exception {
         broker = new FakeBroker();
-        TopstepConnector connector = mock(TopstepConnector.class);
+        BracketBroker connector = mock(BracketBroker.class);
         when(connector.submitStopOrder(anyString(), any(), anyInt(), anyDouble(), any())).thenAnswer(inv ->
                 broker.placeStop(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2), inv.getArgument(3), inv.getArgument(4)));
         when(connector.submitTakeProfitOrder(anyString(), any(), anyInt(), anyDouble(), any())).thenAnswer(inv ->
@@ -115,7 +115,7 @@ class BracketAdoptionSafetyTest {
     /** An owner order put straight into the book (not through the engine). */
     private String ownerOrder(int type, OrderSide side, int qty, double px) {
         String id = String.valueOf(broker.nextId++);
-        boolean stop = type == TopstepConnector.ORDER_TYPE_STOP;
+        boolean stop = type == BracketBroker.ORDER_TYPE_STOP;
         broker.open.put(id, new BrokerOrder(id, SYM, CON, type, side, qty, stop ? px : Double.NaN, stop ? Double.NaN : px));
         return id;
     }
@@ -236,7 +236,7 @@ class BracketAdoptionSafetyTest {
     void ownersFortyFiveLotIsObserveOnly() {
         broker.visibilityLagMs = 100;
         broker.position = new BrokerPosition(SYM, CON, true, 45, OWNER_ENTRY);
-        String ownerTarget = ownerOrder(TopstepConnector.ORDER_TYPE_LIMIT, OrderSide.SELL, 45, 30778.5);
+        String ownerTarget = ownerOrder(BracketBroker.ORDER_TYPE_LIMIT, OrderSide.SELL, 45, 30778.5);
         manager.onLastPrice(SYM, 30761.25);
         manager.reconcileWithBroker();
         String err = captureErr(manager::reconcileWithBroker);
@@ -267,8 +267,8 @@ class BracketAdoptionSafetyTest {
     @DisplayName("observe-only keeps the owner's stops untouched (even two) and flips/resizes are re-registered observe-only")
     void observeOnlyNeverCancelsAndStaysObserveOnly() {
         broker.position = new BrokerPosition(SYM, CON, true, 45, OWNER_ENTRY);
-        String s1 = ownerOrder(TopstepConnector.ORDER_TYPE_STOP, OrderSide.SELL, 45, 30740.0);
-        String s2 = ownerOrder(TopstepConnector.ORDER_TYPE_STOP, OrderSide.SELL, 45, 30735.0);
+        String s1 = ownerOrder(BracketBroker.ORDER_TYPE_STOP, OrderSide.SELL, 45, 30740.0);
+        String s2 = ownerOrder(BracketBroker.ORDER_TYPE_STOP, OrderSide.SELL, 45, 30735.0);
         manager.reconcileOnStartup();
         assertThat(manager.getBracket(SYM).observeOnly).isTrue();
         assertThat(manager.getBracket(SYM).stopPrice).as("owner's stop reported").isEqualTo(30740.0);
@@ -295,7 +295,7 @@ class BracketAdoptionSafetyTest {
         broker.position = new BrokerPosition(SYM, CON, true, 45, OWNER_ENTRY);
         manager.reconcileOnStartup();
         broker.position = null;
-        String leftover = ownerOrder(TopstepConnector.ORDER_TYPE_LIMIT, OrderSide.SELL, 45, 30778.5);
+        String leftover = ownerOrder(BracketBroker.ORDER_TYPE_LIMIT, OrderSide.SELL, 45, 30778.5);
         manager.reconcileWithBroker();
         assertThat(manager.hasBracket(SYM)).isTrue();
         manager.reconcileWithBroker();

@@ -108,7 +108,7 @@ public class LifecycleController {
         // Run forward-looking mini MC
         StrategyMetrics defaultMetrics = StrategyMetrics.fromParameters(
             0.45, 3.0, -1.0, 2.0); // Default assumptions
-        RiskProfile profile = RiskProfile.topstep50kEvaluation();
+        RiskProfile profile = RiskProfile.lucidFlex50kEval();
         MonteCarloSimulator simulator = new MonteCarloSimulator();
 
         MonteCarloResult result = simulator.simulateForward(
@@ -145,7 +145,7 @@ public class LifecycleController {
         // Run MC for fan chart
         StrategyMetrics defaultMetrics = StrategyMetrics.fromParameters(
             0.45, 3.0, -1.0, 2.0);
-        RiskProfile profile = RiskProfile.topstep50kEvaluation();
+        RiskProfile profile = RiskProfile.lucidFlex50kEval();
         MonteCarloSimulator simulator = new MonteCarloSimulator();
         MonteCarloResult result = simulator.simulate(defaultMetrics, profile, lifecycle, 2000);
 

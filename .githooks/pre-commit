@@ -1,0 +1,8 @@
+#!/bin/sh
+# V6 Agent 05.5 (R5 / I9): refuse commits that add key-shaped strings, webhook
+# URLs with tokens, or "key=" / secret / password / token / account-id
+# assignments with non-placeholder values.
+# Enable once per clone:   git config core.hooksPath .githooks
+# Bypass (never for real secrets): git commit --no-verify
+repo_root=$(git rev-parse --show-toplevel) || exit 1
+exec python3 "$repo_root/.githooks/secret_scan.py" --staged

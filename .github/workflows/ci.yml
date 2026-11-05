@@ -1,0 +1,42 @@
+# V6 Agent 05.5: CI — secret scan (R5) + Python tool tests + both Java modules.
+name: ci
+
+on:
+  push:
+    branches: [Main]
+  pull_request:
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Secret scan (every tracked file)
+        run: python3 .githooks/secret_scan.py --all
+
+  python-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests (pine_parity, secret_scan)
+        run: python3 -m unittest discover -s tools/tests -v
+
+  java:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Build + test both modules
+        run: ./gradlew clean build --no-daemon
+      - name: Golden oracle is byte-identical
+        run: |
+          echo "1926014584d89a54c90d4df03a1f8eb186283687242fa77c5781388516bdbd7d  parity/java_signals.csv" | sha256sum -c -

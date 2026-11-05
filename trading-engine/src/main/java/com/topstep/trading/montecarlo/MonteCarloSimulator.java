@@ -1,6 +1,9 @@
 package com.topstep.trading.montecarlo;
 
+import com.topstep.trading.config.LucidProfiles;
 import com.topstep.trading.lifecycle.AccountLifecycle;
+import com.topstep.trading.lifecycle.LucidAccountProfile;
+import com.topstep.trading.lifecycle.TrailingDrawdown;
 import com.topstep.trading.lifecycle.RiskZone;
 import com.topstep.trading.risk.RiskProfile;
 
@@ -163,6 +166,12 @@ public class MonteCarloSimulator {
         List<Double> equityCurve = new ArrayList<>();
         equityCurve.add(equity);
 
+        // V6 05.3: MLL floor model (Lucid EOD trailing + lock when the template
+        // carries a Lucid profile; the pre-V6 HWM − MLL math otherwise).
+        TrailingDrawdown dd = TrailingDrawdown.forLifecycle(templateLifecycle);
+        LucidAccountProfile lucid = templateLifecycle.getLucidProfile();
+        List<Double> closedDayPnls = new ArrayList<>();
+
         int maxTradesPerDay = profile.getMaxTradesPerDay();
         double baseRiskDollars = startingBalance * profile.getBaseRiskPct();
 
@@ -190,7 +199,7 @@ public class MonteCarloSimulator {
 
                 // Determine risk zone
                 double targetCompletion = Math.max(0, (equity - startingBalance)) / profitTarget;
-                double drawdownUsage = Math.max(0, (highWaterMark - equity)) / maxLossLimit;
+                double drawdownUsage = dd.usagePct(equity);
                 RiskZone zone = determineZone(targetCompletion, drawdownUsage);
 
                 // Apply zone multiplier to risk
@@ -198,7 +207,7 @@ public class MonteCarloSimulator {
                 double adjustedRisk = baseRiskDollars * zoneMultiplier;
 
                 // Apply hard floors
-                double riskBudgetRemaining = maxLossLimit - (highWaterMark - equity);
+                double riskBudgetRemaining = dd.room(equity);
                 adjustedRisk = Math.min(adjustedRisk, riskBudgetRemaining * profile.getMaxRiskBudgetPct());
                 double dailyRoom = dailyLossLimit + dailyPnl;
                 adjustedRisk = Math.min(adjustedRisk, dailyRoom * profile.getMaxDailyLimitPct());
@@ -236,9 +245,9 @@ public class MonteCarloSimulator {
                     consecutiveLosses = 0;
                 }
 
-                // Check MLL breach (from HWM)
+                // Check MLL breach (legacy: from HWM; Lucid: touch of the EOD-trailing / locked floor)
                 double currentDrawdown = highWaterMark - equity;
-                if (currentDrawdown >= maxLossLimit) {
+                if (dd.breached(equity)) {
                     equityCurve.add(equity);
                     return new PathResult(PathResult.Outcome.BLOWN, equityCurve, equity,
                         maxDrawdown, currentDrawdown, totalTrades, day + 1,
@@ -254,7 +263,7 @@ public class MonteCarloSimulator {
 
                 // Check profit target
                 double totalPnl = equity - startingBalance;
-                if (totalPnl >= profitTarget) {
+                if (totalPnl >= profitTarget && lucidPassRulesMet(lucid, day + 1, closedDayPnls, dailyPnl, totalPnl)) {
                     equityCurve.add(equity);
                     return new PathResult(PathResult.Outcome.PASSED, equityCurve, equity,
                         maxDrawdown, currentDrawdown, totalTrades, day + 1,
@@ -262,10 +271,12 @@ public class MonteCarloSimulator {
                 }
             }
 
-            // End of day: update HWM
+            // End of day: update HWM (+ the Lucid EOD trail / lock)
             if (equity > highWaterMark) {
                 highWaterMark = equity;
             }
+            dd.onEndOfDay(equity);
+            if (lucid != null) closedDayPnls.add(dailyPnl);
             double drawdown = highWaterMark - equity;
             if (drawdown > maxDrawdown) {
                 maxDrawdown = drawdown;
@@ -313,6 +324,7 @@ public class MonteCarloSimulator {
         double highWaterMark = startingBalance;
         double totalWithdrawn = 0;
         int consecutiveLosses = 0;
+        TrailingDrawdown dd = TrailingDrawdown.forLifecycle(template);
 
         double baseRiskDollars = startingBalance * profile.getBaseRiskPct();
 
@@ -327,7 +339,7 @@ public class MonteCarloSimulator {
                 if (dailyPnl <= -selfImposedLimit) break;
 
                 double adjustedRisk = baseRiskDollars;
-                double riskBudgetRemaining = maxLossLimit - (highWaterMark - equity);
+                double riskBudgetRemaining = dd.room(equity);
                 adjustedRisk = Math.min(adjustedRisk, riskBudgetRemaining * profile.getMaxRiskBudgetPct());
 
                 if (adjustedRisk < 25.0) break;
@@ -342,22 +354,23 @@ public class MonteCarloSimulator {
                 else consecutiveLosses = 0;
 
                 // MLL breach = funded account blown
-                double currentDrawdown = highWaterMark - equity;
-                if (currentDrawdown >= maxLossLimit) {
+                if (dd.breached(equity)) {
                     return totalWithdrawn;
                 }
             }
 
-            // End of day HWM update
+            // End of day HWM update (+ the Lucid EOD trail / lock)
             if (equity > highWaterMark) {
                 highWaterMark = equity;
             }
+            dd.onEndOfDay(equity);
 
             // Simulate periodic withdrawals (every 2 weeks when profitable)
             if (day % 10 == 0 && equity > startingBalance + 500) {
                 double withdrawable = (equity - startingBalance) * 0.5; // Take half of profits
                 totalWithdrawn += withdrawable;
                 equity -= withdrawable;
+                dd.onPayoutRequest(); // Lucid: a payout request locks the MLL (LUCID_RULES §8)
             }
 
             consecutiveLosses = 0;
@@ -375,12 +388,37 @@ public class MonteCarloSimulator {
     private double calculateExpectedPayout(double passRate, StrategyMetrics metrics,
                                             RiskProfile evalProfile, AccountLifecycle template) {
         // Run funded phase simulation (fewer iterations for speed)
-        RiskProfile fundedProfile = RiskProfile.topstep50kFunded();
-        double avgFundedProfit = simulateFundedPhaseAvgProfit(metrics, fundedProfile, template, 1000);
+        RiskProfile fundedProfile;
+        AccountLifecycle fundedTemplate;
+        LucidAccountProfile lucid = template.getLucidProfile();
+        if (lucid != null) {
+            // V6 05.3: the funded twin of the eval profile (same size), from the YAML.
+            String fundedId = lucid.id().replace("_EVAL", "_FUNDED");
+            fundedProfile = RiskProfile.lucid(fundedId);
+            fundedTemplate = AccountLifecycle.lucid(LucidProfiles.get(fundedId));
+        } else {
+            fundedProfile = legacyFundedProfile();
+            fundedTemplate = template;
+        }
+        double avgFundedProfit = simulateFundedPhaseAvgProfit(metrics, fundedProfile, fundedTemplate, 1000);
 
         double expectedPayout = passRate * avgFundedProfit * template.getProfitSplit()
                                 - template.getChallengeFee();
         return expectedPayout;
+    }
+
+    @SuppressWarnings("deprecation")
+    private static RiskProfile legacyFundedProfile() {
+        return RiskProfile.topstep50kFunded();
+    }
+
+    /** Lucid eval pass rules (min days + consistency incl. today's open P&L); true for legacy. */
+    private static boolean lucidPassRulesMet(LucidAccountProfile lucid, int tradingDays, List<Double> closedDays,
+                                             double todayPnl, double totalPnl) {
+        if (lucid == null) return true;
+        List<Double> days = new ArrayList<>(closedDays);
+        days.add(todayPnl);
+        return AccountLifecycle.lucidPassRulesMet(lucid, tradingDays, days, totalPnl);
     }
 
     // ==================== Trade Outcome Generation ====================
@@ -484,6 +522,8 @@ public class MonteCarloSimulator {
             double equity = currentEquity;
             double hwm = highWaterMark;
             double maxDD = 0;
+            TrailingDrawdown mll = TrailingDrawdown.forLifecycle(template);
+            mll.onEndOfDay(highWaterMark); // resume from the recorded EOD high (locks if already above the trail)
             int trades = 0;
             List<Double> curve = new ArrayList<>();
             curve.add(equity);
@@ -494,7 +534,7 @@ public class MonteCarloSimulator {
                 double dailyPnl = 0;
                 for (int t = 0; t < profile.getMaxTradesPerDay(); t++) {
                     double riskDollars = startingBalance * profile.getBaseRiskPct();
-                    double riskBudget = maxLossLimit - (hwm - equity);
+                    double riskBudget = mll.room(equity);
                     riskDollars = Math.min(riskDollars, riskBudget * profile.getMaxRiskBudgetPct());
                     if (riskDollars < 25) break;
 
@@ -503,7 +543,7 @@ public class MonteCarloSimulator {
                     dailyPnl += riskDollars * outcomeR;
                     trades++;
 
-                    if (hwm - equity >= maxLossLimit) {
+                    if (mll.breached(equity)) {
                         blown++;
                         resolved = true;
                         break;
@@ -519,6 +559,7 @@ public class MonteCarloSimulator {
                 if (resolved) break;
 
                 if (equity > hwm) hwm = equity;
+                mll.onEndOfDay(equity);
                 double dd = hwm - equity;
                 if (dd > maxDD) maxDD = dd;
                 curve.add(equity);

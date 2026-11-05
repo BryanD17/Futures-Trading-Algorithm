@@ -29,6 +29,9 @@ public class AccountLifecycle {
     private final int maxContracts;
     private final double startingBalance;
     private final double profitSplit;
+    /** V6 Agent 05.3: non-null = Lucid rules (EOD trailing MLL + lock, consistency, min days). */
+    private final LucidAccountProfile lucidProfile;
+    private final TrailingDrawdown lucidDrawdown;
 
     // State tracking
     private volatile AccountPhase currentPhase;
@@ -59,6 +62,8 @@ public class AccountLifecycle {
         this.maxContracts = builder.maxContracts;
         this.startingBalance = builder.startingBalance;
         this.profitSplit = builder.profitSplit;
+        this.lucidProfile = builder.lucidProfile;
+        this.lucidDrawdown = lucidProfile != null ? TrailingDrawdown.lucid(lucidProfile) : null;
 
         this.currentPhase = AccountPhase.EVALUATION;
         this.currentEquity = startingBalance;
@@ -91,6 +96,7 @@ public class AccountLifecycle {
      * Dollars remaining before MLL breach (from high water mark).
      */
     public double distanceToBlowup() {
+        if (lucidDrawdown != null) return Math.max(0, lucidDrawdown.room(currentEquity));
         double currentDrawdown = currentHighWaterMark - currentEquity;
         return Math.max(0, maxLossLimit - currentDrawdown);
     }
@@ -109,6 +115,7 @@ public class AccountLifecycle {
      * Higher = more danger.
      */
     public double drawdownUsagePct() {
+        if (lucidDrawdown != null) return Math.min(1.0, lucidDrawdown.usagePct(currentEquity));
         double currentDrawdown = currentHighWaterMark - currentEquity;
         if (maxLossLimit <= 0) return 0.0;
         return Math.min(1.0, Math.max(0.0, currentDrawdown / maxLossLimit));
@@ -169,6 +176,10 @@ public class AccountLifecycle {
         if (currentEquity > currentHighWaterMark) {
             currentHighWaterMark = currentEquity;
         }
+        // V6 05.3: Lucid EOD trailing MLL re-bases (and may lock) at session end.
+        if (lucidDrawdown != null) {
+            lucidDrawdown.onEndOfDay(currentEquity);
+        }
 
         // Track cruise control days
         if (getCurrentRiskZone() == RiskZone.CRUISE) {
@@ -218,9 +229,17 @@ public class AccountLifecycle {
     private PhaseTransitionEvent shouldTransitionPhase() {
         if (currentPhase.isTerminal()) return null;
 
+        // V6 05.3: Lucid — the balance touching the EOD-trailing / locked floor.
+        if (lucidDrawdown != null && lucidDrawdown.breached(currentEquity)) {
+            return performTransition(AccountPhase.BLOWN,
+                "Lucid MLL breached: balance $" + String.format("%.2f", currentEquity) +
+                " <= MLL floor $" + String.format("%.2f", lucidDrawdown.floor()) +
+                (lucidDrawdown.isLocked() ? " (locked)" : " (EOD trailing)"));
+        }
+
         // Check MLL breach -> BLOWN (from any active phase)
         double currentDrawdown = currentHighWaterMark - currentEquity;
-        if (currentDrawdown >= maxLossLimit) {
+        if (lucidDrawdown == null && currentDrawdown >= maxLossLimit) {
             return performTransition(AccountPhase.BLOWN,
                 "Max Loss Limit breached: drawdown $" + String.format("%.2f", currentDrawdown) +
                 " >= MLL $" + String.format("%.2f", maxLossLimit));
@@ -231,7 +250,7 @@ public class AccountLifecycle {
             case EVALUATION:
                 // EVALUATION -> FUNDED_PROBATION when profit target hit
                 double totalPnl = currentEquity - startingBalance;
-                if (totalPnl >= profitTarget) {
+                if (totalPnl >= profitTarget && lucidPassRulesMet(totalPnl)) {
                     return performTransition(AccountPhase.FUNDED_PROBATION,
                         "Profit target reached: $" + String.format("%.2f", totalPnl) +
                         " >= $" + String.format("%.2f", profitTarget));
@@ -253,6 +272,45 @@ public class AccountLifecycle {
 
         return null;
     }
+
+    /**
+     * V6 05.3: LucidFlex eval pass needs, besides the target, the minimum
+     * trading days and the consistency cap (LUCID_RULES §6/§9: largest single
+     * day profit / account profit ≤ consistency %). Always true for non-Lucid.
+     */
+    private boolean lucidPassRulesMet(double totalPnl) {
+        if (lucidProfile == null) return true;
+        return lucidPassRulesMet(lucidProfile, tradingDaysElapsed, dailyPnlHistory, totalPnl);
+    }
+
+    /** Shared with the Monte Carlo paths: min days + consistency for a Lucid eval. */
+    public static boolean lucidPassRulesMet(LucidAccountProfile p, int tradingDays, List<Double> dayPnls,
+                                            double totalPnl) {
+        if (tradingDays < p.minTradingDays()) return false;
+        if (p.consistencyMaxPct() > 0 && totalPnl > 0) {
+            double largest = 0;
+            for (Double d : dayPnls) if (d != null && d > largest) largest = d;
+            if (largest / totalPnl > p.consistencyMaxPct() / 100.0) return false;
+        }
+        return true;
+    }
+
+    /** V6 05.3: a payout request locks the Lucid MLL at the Locked MLL Balance (LUCID_RULES §8). */
+    public void onPayoutRequest() {
+        if (lucidDrawdown != null) lucidDrawdown.onPayoutRequest();
+    }
+
+    /** The Lucid MLL floor (balance that breaches), NaN for non-Lucid lifecycles. */
+    public double getMllFloor() {
+        return lucidDrawdown != null ? lucidDrawdown.floor() : Double.NaN;
+    }
+
+    public boolean isMllLocked() {
+        return lucidDrawdown != null && lucidDrawdown.isLocked();
+    }
+
+    /** The Lucid profile this lifecycle models, or null (legacy). */
+    public LucidAccountProfile getLucidProfile() { return lucidProfile; }
 
     /**
      * Force a phase transition (for external triggers like payout milestones).
@@ -384,8 +442,40 @@ public class AccountLifecycle {
     // ==================== Factories ====================
 
     /**
-     * Create lifecycle for Topstep 50K evaluation account.
+     * V6 Agent 05.2/05.3: a lifecycle for a Lucid profile from
+     * config/lucid_profiles.yaml (no hand-typed numbers). The daily loss limit
+     * is the V6 soft daily loss (Lucid's DLL amount is unpublished, OA-7);
+     * maxContracts is the profile's max size in micros; challengeFee is 0
+     * because the purchase price is not published (lucid_profiles.yaml).
      */
+    public static AccountLifecycle lucid(LucidAccountProfile p) {
+        return builder()
+            .challengeFee(0.0)
+            .profitTarget(p.profitTarget())
+            .maxLossLimit(p.maxLossLimit())
+            .dailyLossLimit(p.softDailyLoss())
+            .maxContracts(p.maxContractsMicros())
+            .startingBalance(p.startingBalance())
+            .profitSplit(p.profitSplitTrader())
+            .lucidProfile(p)
+            .build();
+    }
+
+    /** The V6 default: LUCID_FLEX_50K_EVAL. */
+    public static AccountLifecycle lucidFlex50kEvaluation() {
+        return lucid(com.topstep.trading.config.LucidProfiles.flex50kEval());
+    }
+
+    public static AccountLifecycle lucidFlex50kFunded() {
+        return lucid(com.topstep.trading.config.LucidProfiles.flex50kFunded());
+    }
+
+    /**
+     * Create lifecycle for Topstep 50K evaluation account.
+     * @deprecated V6: Topstep is out; kept for the parity oracle's pinned
+     *     LiveRiskPath and legacy tests. Use {@link #lucidFlex50kEvaluation()}.
+     */
+    @Deprecated
     public static AccountLifecycle topstep50kEvaluation() {
         return builder()
             .challengeFee(49.0)
@@ -448,6 +538,7 @@ public class AccountLifecycle {
         private int maxContracts = 5;
         private double startingBalance = 50000.0;
         private double profitSplit = 0.90;
+        private LucidAccountProfile lucidProfile;
 
         public Builder challengeFee(double challengeFee) { this.challengeFee = challengeFee; return this; }
         public Builder profitTarget(double profitTarget) { this.profitTarget = profitTarget; return this; }
@@ -456,6 +547,7 @@ public class AccountLifecycle {
         public Builder maxContracts(int maxContracts) { this.maxContracts = maxContracts; return this; }
         public Builder startingBalance(double startingBalance) { this.startingBalance = startingBalance; return this; }
         public Builder profitSplit(double profitSplit) { this.profitSplit = profitSplit; return this; }
+        public Builder lucidProfile(LucidAccountProfile p) { this.lucidProfile = p; return this; }
 
         public AccountLifecycle build() {
             return new AccountLifecycle(this);

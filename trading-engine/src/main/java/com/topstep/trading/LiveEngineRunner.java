@@ -2,7 +2,7 @@ package com.topstep.trading;
 
 // LIVE Trading Engine - Clean Version (no duplicates)
 import com.topstep.trading.connector.TradingConnector;
-import com.topstep.trading.connector.TopstepConnector;
+import com.topstep.trading.connector.BracketBroker;
 import com.topstep.trading.domain.*;
 import com.topstep.trading.engine.MultiInstrumentEngine;
 import com.topstep.trading.event.EventBus;
@@ -183,7 +183,6 @@ public class LiveEngineRunner {
     // EXPRESS Funded Account flag - these accounts start at $0 balance (not $50K)
     // Balance represents P&L accumulated since account creation
     private final boolean isExpressAccount;
-    private final com.topstep.trading.connector.TopstepCredentials credentials;
 
     // === Convex Payoff Optimization: Lifecycle-aware dynamic risk sizing ===
     private final AccountLifecycle lifecycle;
@@ -210,15 +209,10 @@ public class LiveEngineRunner {
      * Create a new LIVE engine with custom configuration.
      */
     public LiveEngineRunner(double startingBalance, RiskLimits riskLimits) {
-        // Resolve credentials once (system properties / ~/.topstep file / env)
-        // so the EXPRESS check and the connector agree on the account.
-        com.topstep.trading.connector.TopstepCredentials creds =
-            com.topstep.trading.connector.TopstepCredentials.load();
-        this.credentials = creds;
-
-        // Check if this is an Express Funded Account (balance starts at $0)
-        String accountId = creds.accountId;
-        this.isExpressAccount = accountId != null && accountId.toUpperCase().contains("EXPRESS");
+        // V6 Agent 05.1 (R6): the Topstep connector is gone; LIVE fails loud
+        // before any credential is read or any connection is attempted.
+        LiveTradingRemovedException.fail();
+        this.isExpressAccount = false;
 
         // For Express accounts, override starting balance to $0
         // Express accounts track P&L from zero, not from a funded amount
@@ -250,8 +244,8 @@ public class LiveEngineRunner {
         this.executionEngine.setEventBus(eventBus);
 
         // Initialize bracket order manager for OCO SL/TP management
-        if (this.connector instanceof TopstepConnector) {
-            this.bracketManager = new BracketOrderManager((TopstepConnector) this.connector);
+        if (this.connector instanceof BracketBroker) {
+            this.bracketManager = new BracketOrderManager((BracketBroker) this.connector);
             this.bracketManager.setEventBus(eventBus); // AGENT-05: protective failures -> telemetry
             // AGENT-05.13: the bracket funnel lives in LiveBracketListener (unit tested).
             this.bracketManager.setListener(new LiveBracketListener(accountState, executionEngine, eventBus,
@@ -499,11 +493,11 @@ public class LiveEngineRunner {
     }
 
     /**
-     * Create the Topstep connector from environment variables.
+     * V6 Agent 05.1: there is no live connector (the TopstepX connector moved to
+     * trading-engine/legacy, not compiled). Fails loud.
      */
     private TradingConnector createConnector() {
-        return new TopstepConnector(credentials.apiUrl, credentials.username,
-            credentials.apiKey, credentials.accountId);
+        throw new LiveTradingRemovedException();
     }
 
     /**
@@ -1160,7 +1154,7 @@ public class LiveEngineRunner {
 
             // CRITICAL: Submit stop loss and take profit orders to the exchange
             // This provides protection even if the bot crashes
-            if (signal != null && connector instanceof TopstepConnector) {
+            if (signal != null && connector instanceof BracketBroker) {
                 submitProtectiveOrders(signal, fillQty, effectiveFill, orderId);
             }
         }

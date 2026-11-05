@@ -37,11 +37,12 @@ public class BacktestExample {
         // Step 1: Set up Topstep 50K account
         // CRITICAL FIX: Topstep 50K funded account has $50,000 starting balance
         // (The "Express" $0 start only applies to combine evaluation phase)
-        double startingBalance = 50_000.0;  // Topstep 50K funded account
+        // V6 05.3: backtests default to LUCID_FLEX_50K_EVAL (config/lucid_profiles.yaml).
+        double startingBalance = com.topstep.trading.config.LucidProfiles.flex50kEval().startingBalance();
         AccountState accountState = new AccountState(startingBalance);
         // Profile selection via ScalpConfig: legacy topstep50k() unless
         // -DscalpMode.enabled=true (then topstep50kScalp()).
-        RiskLimits riskLimits = com.topstep.trading.strategy.stdvote.ScalpConfig.activeRiskLimits();
+        RiskLimits riskLimits = com.topstep.trading.strategy.stdvote.ScalpConfig.activeLucidRiskLimits();
 
         System.out.println("\nAccount Configuration:");
         System.out.println("  Starting Balance: $" + startingBalance);

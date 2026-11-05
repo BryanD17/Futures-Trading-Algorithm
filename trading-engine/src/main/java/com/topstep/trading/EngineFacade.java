@@ -249,6 +249,8 @@ public class EngineFacade {
      * WARNING: This connects to real markets and uses real money!
      */
     public synchronized void startLive() {
+        // V6 Agent 05.1 (R6): no Java code path places a live order.
+        LiveTradingRemovedException.fail();
         if (currentMode == Mode.LIVE && liveRunner != null && liveRunner.isRunning()) {
             throw new IllegalStateException("LIVE mode already running");
         }
@@ -468,9 +470,8 @@ public class EngineFacade {
      */
     public RiskLimits getRiskLimits() {
         if (riskLimits == null) {
-            // Return default Topstep 50K limits if not initialized.
-            // ScalpConfig selects scalp vs legacy profile.
-            return com.topstep.trading.strategy.stdvote.ScalpConfig.activeRiskLimits();
+            // V6 05.2: default = engine policy limits on LUCID_FLEX_50K_EVAL rails.
+            return com.topstep.trading.strategy.stdvote.ScalpConfig.activeLucidRiskLimits();
         }
         return riskLimits;
     }
@@ -752,11 +753,7 @@ public class EngineFacade {
      * Get the risk profile for a given account phase.
      */
     private RiskProfile getProfileForPhase(AccountPhase phase) {
-        switch (phase) {
-            case EVALUATION:        return RiskProfile.topstep50kEvaluation();
-            case FUNDED_PROBATION:  return RiskProfile.topstep50kFunded();
-            case FUNDED_SCALING:    return RiskProfile.topstep50kScaling();
-            default:                return RiskProfile.topstep50kEvaluation();
-        }
+        // V6 05.2: Lucid profiles from config/lucid_profiles.yaml (LUCID_FLEX_50K_*).
+        return RiskProfile.lucidForPhase(phase == null ? AccountPhase.EVALUATION : phase);
     }
 }

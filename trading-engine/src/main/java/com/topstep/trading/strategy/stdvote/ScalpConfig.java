@@ -159,6 +159,16 @@ public final class ScalpConfig {
         return isEnabled() ? RiskLimits.topstep50kScalp() : RiskLimits.topstep50k();
     }
 
+    /**
+     * V6 Agent 05.2/05.3: the engine policy limits ({@link #activeRiskLimits()})
+     * re-railed to LUCID_FLEX_50K_EVAL (config/lucid_profiles.yaml). The SIM /
+     * backtest default. The parity oracle (GoldenSignalExport) stays pinned to
+     * {@link #activeRiskLimits()} so parity/java_signals.csv is byte-identical.
+     */
+    public static RiskLimits activeLucidRiskLimits() {
+        return activeRiskLimits().withLucidAccount(com.topstep.trading.config.LucidProfiles.flex50kEval());
+    }
+
     /** Build the target calculator from the current property values. */
     public static ScalpTargetCalculator targetCalculator() {
         return new ScalpTargetCalculator(minTargetClearanceTicks(), candidateWindowR());

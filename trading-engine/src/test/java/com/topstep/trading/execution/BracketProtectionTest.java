@@ -1,7 +1,7 @@
 package com.topstep.trading.execution;
 
 import com.topstep.trading.connector.OrderListener;
-import com.topstep.trading.connector.TopstepConnector;
+import com.topstep.trading.connector.BracketBroker;
 import com.topstep.trading.domain.Order;
 import com.topstep.trading.domain.OrderSide;
 import com.topstep.trading.domain.OrderStatus;
@@ -30,13 +30,13 @@ import static org.mockito.Mockito.*;
  */
 class BracketProtectionTest {
 
-    private TopstepConnector connector;
+    private BracketBroker connector;
     private BracketOrderManager manager;
     private final AtomicReference<Double> protectiveExit = new AtomicReference<>();
 
     @BeforeEach
     void setUp() {
-        connector = mock(TopstepConnector.class);
+        connector = mock(BracketBroker.class);
         manager = new BracketOrderManager(connector);
         manager.setRetryBackoffMs(0);
         manager.setListener(new BracketOrderManager.BracketListener() {

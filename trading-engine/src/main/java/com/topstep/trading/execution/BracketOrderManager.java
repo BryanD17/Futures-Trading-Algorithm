@@ -1,9 +1,9 @@
 package com.topstep.trading.execution;
 
-import com.topstep.trading.connector.TopstepConnector;
-import com.topstep.trading.connector.TopstepConnector.BrokerOrder;
-import com.topstep.trading.connector.TopstepConnector.BrokerPosition;
-import com.topstep.trading.connector.TopstepConnector.BrokerSnapshot;
+import com.topstep.trading.connector.BracketBroker;
+import com.topstep.trading.connector.BracketBroker.BrokerOrder;
+import com.topstep.trading.connector.BracketBroker.BrokerPosition;
+import com.topstep.trading.connector.BracketBroker.BrokerSnapshot;
 import com.topstep.trading.domain.ContractSpecs;
 import com.topstep.trading.domain.OrderSide;
 import com.topstep.trading.domain.OrderStatus;
@@ -245,7 +245,7 @@ public class BracketOrderManager {
     // Track TP order ID to level mapping
     private final Map<String, TakeProfitLevel> tpOrderIdToLevel = new ConcurrentHashMap<>();
 
-    private final TopstepConnector connector;
+    private final BracketBroker connector;
     private BracketListener listener;
 
     // Breakeven buffer (in ticks or minimum move)
@@ -524,10 +524,10 @@ public class BracketOrderManager {
         if (orderId == null) return CancelResult.NOT_WORKING;
         try {
             connector.cancelOrder(orderId);
-            System.out.println("[BRACKET] Order " + orderId + " cancelled (TopstepX acknowledged): " + reason);
+            System.out.println("[BRACKET] Order " + orderId + " cancelled (broker acknowledged): " + reason);
             return CancelResult.CANCELLED;
-        } catch (TopstepConnector.OrderNotWorkingException gone) {
-            System.out.println("[BRACKET] Order " + orderId + " was NOT open at TopstepX (code " + gone.getCode()
+        } catch (BracketBroker.OrderNotWorkingException gone) {
+            System.out.println("[BRACKET] Order " + orderId + " was NOT open at the broker (code " + gone.getCode()
                     + ") — already cancelled or filled; nothing left to cancel (" + reason + ")");
             return CancelResult.NOT_WORKING;
         } catch (Exception e) {
@@ -1020,7 +1020,7 @@ public class BracketOrderManager {
         }
     }
 
-    public BracketOrderManager(TopstepConnector connector) {
+    public BracketOrderManager(BracketBroker connector) {
         this.connector = connector;
     }
 

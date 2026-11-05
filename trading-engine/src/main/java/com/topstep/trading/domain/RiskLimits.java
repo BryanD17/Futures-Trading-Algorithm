@@ -109,6 +109,27 @@ public final class RiskLimits {
      * - Max Loss Limit: $2,000
      * - Profit Target: $3,000 (to pass evaluation)
      */
+    /**
+     * V6 Agent 05.2: these engine limits re-railed to a Lucid account profile
+     * (config/lucid_profiles.yaml): MLL / trailing drawdown, profit target and
+     * the daily loss (= the V6 soft daily loss; Lucid's DLL amount is
+     * unpublished, OA-7) come from the profile; the size caps become
+     * min(this policy cap, the profile's scaling cap at $0 profit) — invariant
+     * I4. Per-trade budget, RR band, frequency gates and flatten time stay the
+     * engine policy (flattenBy 15:10 CT is earlier than V6 I3's 15:40 CT).
+     */
+    public RiskLimits withLucidAccount(com.topstep.trading.lifecycle.LucidAccountProfile p) {
+        int cap = p.scalingCapMicrosAt(0.0);
+        return toBuilder()
+                .maxDailyLoss(p.softDailyLoss())
+                .maxLossLimit(p.maxLossLimit())
+                .profitTarget(p.profitTarget())
+                .trailingDrawdown(p.maxLossLimit())
+                .maxContracts(Math.min(maxContracts, cap))
+                .maxTotalContracts(Math.min(maxTotalContracts, cap))
+                .build();
+    }
+
     public static RiskLimits topstep50k() {
         return builder()
                 .maxDailyLoss(1000.0)          // DLL: $1,000

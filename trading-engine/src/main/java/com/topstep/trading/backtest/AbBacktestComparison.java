@@ -196,8 +196,9 @@ public final class AbBacktestComparison {
                 + (ScalpConfig.isEnabled() ? "topstep50kScalp" : "topstep50k") + ")");
         System.out.println("-".repeat(78));
 
-        AccountState account = new AccountState(50_000.0);
-        RiskLimits limits = ScalpConfig.activeRiskLimits();
+        // V6 05.3: backtests default to LUCID_FLEX_50K_EVAL rails.
+        AccountState account = new AccountState(com.topstep.trading.config.LucidProfiles.flex50kEval().startingBalance());
+        RiskLimits limits = ScalpConfig.activeLucidRiskLimits();
         SynchronousEventBus bus = new SynchronousEventBus(); // same-candle dispatch
         ExecutionEngine exec = new ExecutionEngine(account);
         exec.setEventBus(bus); // PositionClosedEvent funnel (scalp re-arm)

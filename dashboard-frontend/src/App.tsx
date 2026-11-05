@@ -47,6 +47,11 @@ function App() {
         )}
       </header>
 
+      {/* V6 Agent 05.6: the Java engine is a research / backtest lab. */}
+      <div className="research-banner" role="status">
+        Research mode — live trading on TradingView
+      </div>
+
       <nav className="tabs">
         <button
           className={activeTab === 'overview' ? 'active' : ''}

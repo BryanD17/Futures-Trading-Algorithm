@@ -185,7 +185,9 @@ PHASE 1 — OPUS BUILD  (sequential: 02 → 03 → 04; 05 parallel with 02–04)
   [⬜] Agent 02 — Opus — Pine Core Library (ICT detectors)
   [⬜] Agent 03 — Opus — Pine Strategy, Sizing + AccountProfile Envelope
   [⬜] Agent 04 — Opus — Relay Payload Adapter + Order Lifecycle
-  [⬜] Agent 05 — Opus — Java Repurpose: Topstep Out, Lucid Profiles, Parity Harness
+  [✅] Agent 05 — Opus — Java Repurpose: Topstep Out, Lucid Profiles, Parity Harness
+       COMPLETE (Fable-verified 2026-11-05, PR #179): TopstepX → trading-engine/legacy (not compiled),
+       LIVE fails loud + api 410, Lucid profiles from YAML, EOD-trailing MLL + lock, pine_parity.py, .githooks
 
 PHASE 2 — FABLE VERIFY
   [⬜] Agent 06 — Fable — Parity Verification (Java tape vs TradingView)
@@ -742,7 +744,41 @@ APPENDIX A — PER-AGENT VERIFICATION LOG  (append-only; never delete)
   A-02  lint output: __ | build sha: __ | OA-1: __
   A-03  invariant → line-range table: __ | OA-2: __
   A-04  payload_check results: __ | lifecycle table rows: __
-  A-05  tests before/after: __ / __ | TopstepConnector runtime grep: __
+  A-05  tests before/after: trading-engine 1,038 (1 skipped) + api-backend 8 = 1,046 / trading-engine 1,015
+        (1 skipped) + api-backend 11 = 1,026, all green (`./gradlew clean build`, JDK 21) + 14 Python tool tests
+        (`python3 -m unittest discover -s tools/tests`) | removed 43 = TopstepX wire tests moved to
+        trading-engine/legacy (BarsBackoff 11, ContractBindingGuard 11, ContractRootMatch 11, CancelOrderTruth 6,
+        ConnectorFailLoud 4: HTTP/ProjectX protocol of a connector that no longer exists); connector-agnostic
+        logic ported first: Bracket*/AdoptedPositionRelease (all kept, now mock BracketBroker),
+        BrokerAgnosticContractTest 4 (snapshot views, not-working cancel, MockConnector cancel w/o id); added
+        LiveRemovedTest 4, LucidProfilesTest 12, ControlControllerLiveGoneTest 3 | TopstepConnector runtime grep:
+        `grep -rn "TopstepConnector\|TopstepCredentials" trading-engine/src/main api-backend/src dashboard-frontend/src`
+        → 0 matches (only hit in src/ is LiveRemovedTest's own guard string, which enforces it) | oracle
+        parity/java_signals.csv sha256 after = 1926014584d89a54c90d4df03a1f8eb186283687242fa77c5781388516bdbd7d
+        (IDENTICAL; GoldenSignalExport stays pinned to ScalpConfig.activeRiskLimits() + LiveRiskPath.topstep50kLive,
+        the Topstep-era effective config; Lucid rails would change the gate_proof "DLL room" text) | secret scan
+        --all: clean | ⛔ none
+        FABLE-VERIFIED 2026-11-05 (independent re-run on the PR head): `./gradlew :trading-engine:clean
+        :trading-engine:build` + `:api-backend:clean :api-backend:build` on JDK 21 → BUILD SUCCESSFUL; JUnit XML
+        count 1,015 (1 skipped) + 11, 0 failures; 1,038 − 43 moved + 20 new = 1,015 reconciles | all 43 moved tests
+        read: every one constructs TopstepConnector / FakeTopstepX / ProjectX JSON EXCEPT two connector-agnostic
+        cases (OrderListener lambda defaults, default TradingConnector.submitEntryOrder) → Fable ported both into
+        BrokerAgnosticContractTest (now 6); final count after Fable's 3 added tests: 1,018 (1 skipped) + 11 = 1,029,
+        0 failures | runtime grep trading-engine/src/main + api-backend/src +
+        dashboard-frontend/src for TopstepConnector|TopstepCredentials|FakeTopstepX → 0 | LIVE: LiveEngineRunner
+        ctor, EngineFacade.startLive, CLI LIVE (exit 2) all throw/print the exact message "Topstep removed in V6 —
+        live trading runs on TradingView (see RUNBOOK_TRADINGVIEW.md)" | start?mode=LIVE, killswitch, flatten → 410
+        (MockMvc) | AP-5: no new plan literal in Java main (the 2000/3000/50000 hits are the pre-existing
+        @Deprecated topstep50k* builders, unchanged in the diff); Lucid numbers only via snakeyaml SafeConstructor
+        over config/lucid_profiles.yaml | TrailingDrawdown vs LUCID_RULES §8: EOD-only re-base, lock on close
+        STRICTLY > 52,100, floor 50,100 forever, payout locks, touch = breach — Fable added
+        LucidProfilesTest.lucidLifecycleLockedTouchIsBreach (equal-to-trail no lock; 50,100.25 survives;
+        50,100.00 BLOWN) | oracle sha256 after full test run = 1926014584d89a54c90d4df03a1f8eb186283687242fa77c5781388516bdbd7d
+        | 14 Python tool tests OK; pine_parity logic = Appendix E (±1×5m same side, entry ±4t else ENTRY_MODE,
+        stop/T1 ±2t decisive, G1 T1 ±1t, ≥16:30 ET entry = hard fail, ≤5 s profit share) | pre-commit tested with
+        a scratch commit holding a fake AKIA key + key=<token>: blocked (exit 1, both rules fired), probe discarded;
+        secret_scan.py --all over the tree: clean; no secret in the diff | hygiene: removed the committed
+        .githooks/__pycache__/*.pyc | notes for 06: size-above-cap and TV header names stay Agent 06 checks.
   A-06  match rate __ % | opposite disagreements __ | G1/G2/G3 __/__/__
   A-07  D1..D8: __ | Lucid eval D1/D2/D4: __
   A-08  cold-read issues found/fixed: __ / __ | tag: __

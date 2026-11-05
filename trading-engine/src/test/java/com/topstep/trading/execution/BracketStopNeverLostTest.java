@@ -1,10 +1,10 @@
 package com.topstep.trading.execution;
 
 import com.topstep.trading.connector.OrderListener;
-import com.topstep.trading.connector.TopstepConnector;
-import com.topstep.trading.connector.TopstepConnector.BrokerOrder;
-import com.topstep.trading.connector.TopstepConnector.BrokerPosition;
-import com.topstep.trading.connector.TopstepConnector.BrokerSnapshot;
+import com.topstep.trading.connector.BracketBroker;
+import com.topstep.trading.connector.BracketBroker.BrokerOrder;
+import com.topstep.trading.connector.BracketBroker.BrokerPosition;
+import com.topstep.trading.connector.BracketBroker.BrokerSnapshot;
 import com.topstep.trading.domain.Order;
 import com.topstep.trading.domain.OrderSide;
 import com.topstep.trading.domain.OrderStatus;
@@ -94,7 +94,7 @@ class BracketStopNeverLostTest {
                 throw new IOException("Stop order rejected: only one stop allowed");
             }
             String id = String.valueOf(nextId++);
-            open.put(id, new BrokerOrder(id, sym, "CON.F.US.MNQ.Z26", TopstepConnector.ORDER_TYPE_STOP, side, qty, px, Double.NaN));
+            open.put(id, new BrokerOrder(id, sym, "CON.F.US.MNQ.Z26", BracketBroker.ORDER_TYPE_STOP, side, qty, px, Double.NaN));
             placedAt.put(id, now);
             listeners.put(id, l);
             ops.add("PLACE STOP " + id + " " + side + " " + qty + "@" + px);
@@ -103,7 +103,7 @@ class BracketStopNeverLostTest {
 
         String placeLimit(String sym, OrderSide side, int qty, double px, OrderListener l) {
             String id = String.valueOf(nextId++);
-            open.put(id, new BrokerOrder(id, sym, "CON.F.US.MNQ.Z26", TopstepConnector.ORDER_TYPE_LIMIT, side, qty, Double.NaN, px));
+            open.put(id, new BrokerOrder(id, sym, "CON.F.US.MNQ.Z26", BracketBroker.ORDER_TYPE_LIMIT, side, qty, Double.NaN, px));
             placedAt.put(id, now);
             listeners.put(id, l);
             ops.add("PLACE LIMIT " + id + " " + side + " " + qty + "@" + px);
@@ -113,7 +113,7 @@ class BracketStopNeverLostTest {
         void cancel(String id) throws IOException {
             if (open.remove(id) == null) {
                 ops.add("CANCEL-REJECT(5) " + id);
-                throw new TopstepConnector.OrderNotWorkingException(id, 5, null);
+                throw new BracketBroker.OrderNotWorkingException(id, 5, null);
             }
             ops.add("CANCEL " + id);
         }
@@ -146,7 +146,7 @@ class BracketStopNeverLostTest {
     }
 
     FakeBroker broker;
-    TopstepConnector connector;
+    BracketBroker connector;
     BracketOrderManager manager;
     Position enginePosition;
     final List<GateDecisionEvent> events = new CopyOnWriteArrayList<>();
@@ -157,7 +157,7 @@ class BracketStopNeverLostTest {
     @BeforeEach
     void setUp() throws Exception {
         broker = new FakeBroker();
-        connector = mock(TopstepConnector.class);
+        connector = mock(BracketBroker.class);
         when(connector.submitStopOrder(anyString(), any(), anyInt(), anyDouble(), any())).thenAnswer(inv ->
                 broker.placeStop(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2), inv.getArgument(3), inv.getArgument(4)));
         when(connector.submitTakeProfitOrder(anyString(), any(), anyInt(), anyDouble(), any())).thenAnswer(inv ->

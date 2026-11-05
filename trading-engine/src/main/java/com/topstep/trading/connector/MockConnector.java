@@ -211,6 +211,11 @@ public class MockConnector implements TradingConnector {
 
     @Override
     public void cancelOrder(String orderId) {
+        // V6 05.1 (ported from the legacy ConnectorFailLoudTest): a cancel
+        // without an id is a caller bug on every connector -> fail loud.
+        if (orderId == null || orderId.isBlank()) {
+            throw new IllegalArgumentException("cancelOrder requires an order id");
+        }
         logger.info("Mock order canceled: {}", orderId);
         OrderListener listener = orderListeners.remove(orderId);
         if (listener != null) {
